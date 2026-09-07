@@ -1,2 +1,213 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>PDF-читалка</title></head><body></body></html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF-читалка</title>
+  <link rel="icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="vendor/pdf_viewer.css">
+  <link rel="stylesheet" href="styles/viewer.css">
+</head>
+<body>
+  <div id="app" data-ui-theme="dark">
+    <header id="toolbar">
+      <button id="btnSidebar" class="icon" title="Боковая панель (F4)" aria-label="Боковая панель">☰</button>
+      <button id="btnOpen" title="Открыть файл (Ctrl+O)">Открыть</button>
+
+      <span class="divider"></span>
+
+      <div class="pager">
+        <button id="btnPrevPage" class="icon" title="Предыдущая страница">‹</button>
+        <input id="pageNumber" type="number" min="1" value="1" aria-label="Номер страницы">
+        <span id="pageCount">/ 0</span>
+        <button id="btnNextPage" class="icon" title="Следующая страница">›</button>
+      </div>
+
+      <span class="divider"></span>
+
+      <div class="zoom">
+        <button id="btnZoomOut" class="icon" title="Мельче (Ctrl+-)">−</button>
+        <select id="zoomSelect" aria-label="Масштаб">
+          <option value="auto">Авто</option>
+          <option value="page-width">По ширине</option>
+          <option value="page-fit">Страница целиком</option>
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1">100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200%</option>
+          <option value="3">300%</option>
+        </select>
+        <button id="btnZoomIn" class="icon" title="Крупнее (Ctrl++)">+</button>
+      </div>
+
+      <span class="divider"></span>
+
+      <button id="btnAutoScroll" title="Автопрокрутка (A)">Автоскролл</button>
+      <button id="btnSpeak" title="Озвучка (S)">Озвучка</button>
+
+      <div class="spacer"></div>
+      <div id="docTitle" title=""></div>
+      <div class="spacer"></div>
+
+      <button id="btnFind" class="icon" title="Поиск (Ctrl+F)">🔍</button>
+      <button id="btnBookmark" class="icon" title="Добавить закладку (B)">🔖</button>
+      <button id="btnAppearance" class="icon" title="Вид и обрезка полей (V)">◐</button>
+      <button id="btnSettings" class="icon" title="Настройки">⚙</button>
+      <button id="btnHelp" class="icon" title="Горячие клавиши (F1)">?</button>
+    </header>
+
+    <div id="findBar" class="bar" hidden>
+      <input id="findInput" type="search" placeholder="Найти в документе" aria-label="Найти в документе">
+      <button id="findPrev" class="icon" title="Предыдущее (Shift+Enter)">‹</button>
+      <button id="findNext" class="icon" title="Следующее (Enter)">›</button>
+      <label><input id="findHighlightAll" type="checkbox" checked> подсветить все</label>
+      <label><input id="findMatchCase" type="checkbox"> регистр</label>
+      <label><input id="findWholeWords" type="checkbox"> целые слова</label>
+      <span id="findStatus" class="muted"></span>
+      <div class="spacer"></div>
+      <button id="findClose" class="icon" title="Закрыть (Esc)">✕</button>
+    </div>
+
+    <div id="body">
+      <aside id="sidebar" hidden>
+        <nav class="tabs" role="tablist">
+          <button data-tab="outline" class="active" role="tab">Оглавление</button>
+          <button data-tab="thumbs" role="tab">Миниатюры</button>
+          <button data-tab="bookmarks" role="tab">Закладки</button>
+          <button data-tab="recent" role="tab">Недавние</button>
+        </nav>
+        <div class="panels">
+          <div id="outlinePanel" data-panel="outline" class="panel active"></div>
+          <div id="thumbsPanel" data-panel="thumbs" class="panel"></div>
+          <div id="bookmarksPanel" data-panel="bookmarks" class="panel"></div>
+          <div id="recentPanel" data-panel="recent" class="panel"></div>
+        </div>
+      </aside>
+
+      <div id="viewerContainer" tabindex="0" role="main">
+        <div id="viewer" class="pdfViewer"></div>
+      </div>
+    </div>
+
+    <div id="ttsBar" class="bar" hidden>
+      <button id="ttsPlay" class="icon" title="Пуск/пауза (S)">▶</button>
+      <button id="ttsPrev" class="icon" title="Предыдущее предложение (,)">⏮</button>
+      <button id="ttsNext" class="icon" title="Следующее предложение (.)">⏭</button>
+      <button id="ttsStop" class="icon" title="Стоп (Shift+S)">■</button>
+      <label class="field">Голос
+        <select id="ttsVoice" aria-label="Голос"></select>
+      </label>
+      <label class="field">Скорость <span id="ttsRateValue" class="value">1.0×</span>
+        <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1">
+      </label>
+      <label class="field">Тон <span id="ttsPitchValue" class="value">1.0</span>
+        <input id="ttsPitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
+      </label>
+      <span id="ttsStatus" class="muted"></span>
+      <div class="spacer"></div>
+      <button id="ttsClose" class="icon" title="Скрыть панель">✕</button>
+    </div>
+
+    <div id="autoscrollBar" class="bar" hidden>
+      <button id="asToggle" class="icon" title="Пуск/стоп (A)">▶</button>
+      <label class="field" id="asSpeedField">Скорость <span id="asSpeedValue" class="value">40 px/с</span>
+        <input id="asSpeed" type="range" min="5" max="400" step="5" value="40">
+      </label>
+      <label class="field" id="asStepField" hidden>Шаг <span id="asStepValue" class="value">90% экрана</span>
+        <input id="asStep" type="range" min="10" max="100" step="5" value="90">
+      </label>
+      <label class="field" id="asIntervalField" hidden>Пауза <span id="asIntervalValue" class="value">20 с</span>
+        <input id="asInterval" type="range" min="2" max="120" step="1" value="20">
+      </label>
+      <label class="field">Режим
+        <select id="asMode" aria-label="Режим автопрокрутки">
+          <option value="continuous">плавный</option>
+          <option value="step">шагами</option>
+        </select>
+      </label>
+      <div class="spacer"></div>
+      <button id="asClose" class="icon" title="Скрыть панель">✕</button>
+    </div>
+
+    <div id="appearancePanel" class="popover" hidden>
+      <h3>Вид</h3>
+      <label class="row">Режим страницы
+        <select id="pageTheme">
+          <option value="normal">как есть</option>
+          <option value="invert">инверсия</option>
+          <option value="sepia">сепия</option>
+          <option value="dim">приглушить</option>
+        </select>
+      </label>
+      <label class="row">Яркость <span id="brightnessValue" class="value">100%</span>
+        <input id="brightness" type="range" min="40" max="130" step="1" value="100">
+      </label>
+      <label class="row">Контраст <span id="contrastValue" class="value">100%</span>
+        <input id="contrast" type="range" min="60" max="180" step="1" value="100">
+      </label>
+      <label class="row">Тема интерфейса
+        <select id="uiTheme">
+          <option value="dark">тёмная</option>
+          <option value="light">светлая</option>
+        </select>
+      </label>
+      <h3>Поля страницы</h3>
+      <label class="row checkbox"><input id="cropEnabled" type="checkbox"> обрезать поля</label>
+      <button id="cropAuto" class="wide">Определить автоматически</button>
+      <label class="row">Слева <span id="cropLeftValue" class="value">0%</span>
+        <input id="cropLeft" type="range" min="0" max="30" step="0.5" value="0">
+      </label>
+      <label class="row">Справа <span id="cropRightValue" class="value">0%</span>
+        <input id="cropRight" type="range" min="0" max="30" step="0.5" value="0">
+      </label>
+      <label class="row">Сверху <span id="cropTopValue" class="value">0%</span>
+        <input id="cropTop" type="range" min="0" max="30" step="0.5" value="0">
+      </label>
+      <label class="row">Снизу <span id="cropBottomValue" class="value">0%</span>
+        <input id="cropBottom" type="range" min="0" max="30" step="0.5" value="0">
+      </label>
+      <button id="cropReset" class="wide">Сбросить поля</button>
+    </div>
+
+    <div id="hud" hidden></div>
+
+    <div id="welcome">
+      <div class="welcome-card">
+        <h1>PDF-читалка</h1>
+        <p>Перетащите PDF в окно или откройте файл.</p>
+        <div class="welcome-actions">
+          <button id="welcomeOpen">Открыть файл</button>
+          <button id="welcomeHelp" class="ghost">Горячие клавиши</button>
+        </div>
+        <ul id="welcomeRecent" class="recent-list"></ul>
+      </div>
+    </div>
+
+    <div id="dropOverlay" hidden><span>Отпустите файл, чтобы открыть</span></div>
+
+    <dialog id="settingsDialog">
+      <form method="dialog" id="settingsForm">
+        <h2>Настройки</h2>
+        <div class="settings-grid" id="settingsGrid"></div>
+        <menu>
+          <button value="close">Закрыть</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="helpDialog">
+      <form method="dialog">
+        <h2>Горячие клавиши</h2>
+        <div id="helpContent" class="help-grid"></div>
+        <menu><button value="close">Закрыть</button></menu>
+      </form>
+    </dialog>
+
+    <input id="filePicker" type="file" accept="application/pdf,.pdf" hidden multiple>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

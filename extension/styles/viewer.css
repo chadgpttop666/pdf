@@ -1,0 +1,414 @@
+/* Оформление читалки. Всё, что относится к самим страницам PDF, приходит из
+   vendor/pdf_viewer.css — здесь только оболочка и точечные переопределения. */
+
+:root {
+  color-scheme: dark;
+  --bg: #14161a;
+  --bg-raised: #1c1f26;
+  --bg-sunken: #0e1013;
+  --border: #2b3038;
+  --fg: #e7eaf0;
+  --fg-muted: #98a1b0;
+  --accent: #38bdf8;
+  --accent-fg: #04121c;
+  --danger: #f87171;
+  --shadow: 0 10px 30px rgb(0 0 0 / 45%);
+  --toolbar-h: 44px;
+  --radius: 8px;
+  --page-gap: 14px;
+}
+
+#app[data-ui-theme='light'] {
+  color-scheme: light;
+  --bg: #f2f4f7;
+  --bg-raised: #ffffff;
+  --bg-sunken: #e3e6eb;
+  --border: #d2d7de;
+  --fg: #1a1d23;
+  --fg-muted: #5d6673;
+  --accent: #0b74c4;
+  --accent-fg: #ffffff;
+  --shadow: 0 10px 24px rgb(15 23 42 / 18%);
+}
+
+* { box-sizing: border-box; }
+
+/* Панели раскладываются флексом, поэтому атрибут hidden надо усилить. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font: 13px/1.4 system-ui, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ── Панели и кнопки ─────────────────────────────────────────────── */
+
+button, select, input[type='search'], input[type='number'], input[type='text'] {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 9px;
+}
+
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:active { transform: translateY(1px); }
+button.icon { padding: 4px 8px; min-width: 30px; text-align: center; }
+button.active, button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+button.ghost { background: transparent; }
+button.wide { width: 100%; margin: 4px 0; }
+button:disabled { opacity: .45; cursor: default; }
+
+input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align: middle; }
+.muted { color: var(--fg-muted); }
+.value { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.spacer { flex: 1; }
+.divider { width: 1px; align-self: stretch; background: var(--border); margin: 6px 2px; }
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--toolbar-h);
+  padding: 0 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+#app.chrome-hidden #toolbar,
+#app.chrome-hidden .bar { display: none; }
+
+.pager { display: flex; align-items: center; gap: 4px; }
+#pageNumber { width: 58px; text-align: right; }
+#pageCount { color: var(--fg-muted); white-space: nowrap; }
+.zoom { display: flex; align-items: center; gap: 4px; }
+
+#docTitle {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+#ttsBar, #autoscrollBar { border-bottom: none; border-top: 1px solid var(--border); }
+
+.bar .field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.bar label { display: flex; align-items: center; gap: 4px; }
+
+/* ── Основная область ────────────────────────────────────────────── */
+
+#body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#sidebar {
+  width: 260px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+#sidebar[hidden] { display: none; }
+
+#sidebar .tabs { display: flex; border-bottom: 1px solid var(--border); }
+#sidebar .tabs button {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 4px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+#sidebar .tabs button.active { color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+#sidebar .panels { flex: 1; min-height: 0; position: relative; }
+#sidebar .panel { display: none; height: 100%; overflow: auto; padding: 8px; }
+#sidebar .panel.active { display: block; }
+
+#viewerContainer {
+  position: absolute;
+  inset: 0;
+  left: var(--sidebar-offset, 0);
+  overflow: auto;
+  outline: none;
+  background: var(--bg-sunken);
+}
+
+/* Контейнер должен быть absolute (требование PDFViewer), поэтому позицию
+   боковой панели компенсируем отступом слева. */
+#body { isolation: isolate; }
+
+#viewer {
+  --page-margin: 0 auto var(--page-gap);
+  --page-border: 0;
+}
+
+.pdfViewer .page {
+  box-shadow: 0 1px 6px rgb(0 0 0 / 35%);
+  background-color: #fff;
+}
+
+/* Цветовые режимы страницы: фильтр вешаем на слой со страницами, чтобы
+   интерфейс оставался в своих цветах. */
+#viewer { filter: var(--page-filter, none); }
+
+/* ── Обрезка полей ───────────────────────────────────────────────── */
+
+#app.crop-on .pdfViewer .page {
+  clip-path: inset(var(--crop-t, 0px) var(--crop-r, 0px) var(--crop-b, 0px) var(--crop-l, 0px));
+  margin-top: calc(-1 * var(--crop-t, 0px));
+  margin-bottom: calc(var(--page-gap) - var(--crop-b, 0px));
+  margin-left: calc(-1 * var(--crop-l, 0px));
+  margin-right: calc(-1 * var(--crop-r, 0px));
+}
+
+/* ── Подсветка озвучки ───────────────────────────────────────────── */
+
+.tts-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.tts-sentence-box {
+  position: absolute;
+  background: rgb(56 189 248 / 22%);
+  border-radius: 3px;
+  transition: opacity .15s ease;
+}
+
+.tts-word-box {
+  position: absolute;
+  background: rgb(250 204 21 / 35%);
+  border-radius: 2px;
+}
+
+#app.speaking .textLayer { z-index: 2; }
+
+/* ── HUD, всплывающие панели, приветствие ────────────────────────── */
+
+#hud {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  padding: 8px 12px;
+  background: rgb(0 0 0 / 72%);
+  color: #fff;
+  border-radius: var(--radius);
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 40;
+  box-shadow: var(--shadow);
+}
+
+.popover {
+  position: absolute;
+  top: calc(var(--toolbar-h) + 6px);
+  right: 10px;
+  width: 280px;
+  padding: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 45;
+  max-height: calc(100vh - var(--toolbar-h) - 20px);
+  overflow: auto;
+}
+
+.popover h3 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; color: var(--fg-muted); }
+.popover h3:first-child { margin-top: 0; }
+.popover .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.popover .row input[type='range'] { width: 120px; }
+.popover .row.checkbox { justify-content: flex-start; gap: 6px; }
+
+#welcome {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg-sunken);
+  z-index: 30;
+}
+
+#app.has-document #welcome { display: none; }
+
+.welcome-card {
+  width: min(520px, 90vw);
+  padding: 28px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.welcome-card h1 { margin: 0 0 6px; font-size: 22px; }
+.welcome-card p { margin: 0 0 16px; color: var(--fg-muted); }
+.welcome-actions { display: flex; gap: 8px; justify-content: center; }
+.welcome-actions button { padding: 8px 16px; }
+
+.recent-list { list-style: none; margin: 18px 0 0; padding: 0; text-align: left; }
+.recent-list li { border-top: 1px solid var(--border); }
+.recent-list button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.recent-list button:hover { background: var(--bg-sunken); }
+.recent-list .meta { color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+
+#dropOverlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(4 18 28 / 78%);
+  color: #fff;
+  font-size: 20px;
+  border: 3px dashed var(--accent);
+  z-index: 60;
+}
+
+/* ── Боковые панели: оглавление, миниатюры, закладки ─────────────── */
+
+.outline-tree, .bookmark-list { list-style: none; margin: 0; padding: 0; }
+.outline-tree ul { list-style: none; margin: 0; padding-left: 12px; }
+.outline-tree button, .bookmark-list button.jump {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--fg);
+}
+.outline-tree button:hover, .bookmark-list button.jump:hover { background: var(--bg-raised); }
+.outline-tree .toggle {
+  display: inline-block;
+  width: 16px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.outline-tree li.collapsed > ul { display: none; }
+
+.bookmark-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 2px 0;
+}
+.bookmark-list .note { color: var(--fg-muted); font-size: 12px; display: block; }
+
+.thumb-grid { display: grid; gap: 10px; }
+.thumb {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  padding: 4px;
+  cursor: pointer;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.thumb.current { border-color: var(--accent); }
+.thumb canvas { width: 100%; height: auto; display: block; background: #fff; }
+.thumb .placeholder { width: 100%; aspect-ratio: 1 / 1.414; background: var(--bg-sunken); }
+
+.panel-empty { color: var(--fg-muted); padding: 12px 6px; }
+
+/* ── Диалоги ─────────────────────────────────────────────────────── */
+
+dialog {
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+  max-width: min(680px, 92vw);
+  max-height: 86vh;
+}
+
+dialog::backdrop { background: rgb(0 0 0 / 55%); }
+dialog h2 { margin: 0 0 14px; font-size: 18px; }
+dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0 0; padding: 0; }
+
+.settings-grid { display: grid; gap: 10px; }
+.settings-grid .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-grid .setting .label { display: flex; flex-direction: column; }
+.settings-grid .setting .hint { color: var(--fg-muted); font-size: 12px; }
+.settings-grid .group-title { margin-top: 8px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; font-size: 11px; }
+
+.help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: baseline; }
+.help-grid kbd {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.help-grid .section { grid-column: 1 / -1; margin-top: 10px; font-weight: 600; color: var(--fg-muted); }
+
+@media (max-width: 720px) {
+  #sidebar { position: absolute; z-index: 35; height: 100%; box-shadow: var(--shadow); }
+  #docTitle { display: none; }
+}

@@ -1,7 +1,9 @@
 // Копирует нужные куски pdfjs-dist в extension/vendor/, чтобы расширение
 // устанавливалось из репозитория без npm install.
 //
-// Берём неминифицированные сборки: их читает и человек, и рецензент AMO.
+// Берём неминифицированные legacy-сборки: обычные требуют совсем свежих API
+// (например Map.prototype.getOrInsertComputed), а legacy работает и в Firefox
+// постарше, и в Chromium — на нём гоняются смоук-тесты.
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,9 +16,9 @@ const dst = join(root, 'extension', 'vendor');
 // Файлы, из которых надо срезать ссылку на sourcemap: карт мы не копируем,
 // иначе devtools ругается на 404 при каждом открытии вьюера.
 const scripts = [
-  ['build/pdf.mjs', 'pdf.mjs'],
-  ['build/pdf.worker.mjs', 'pdf.worker.mjs'],
-  ['web/pdf_viewer.mjs', 'pdf_viewer.mjs'],
+  ['legacy/build/pdf.mjs', 'pdf.mjs'],
+  ['legacy/build/pdf.worker.mjs', 'pdf.worker.mjs'],
+  ['legacy/web/pdf_viewer.mjs', 'pdf_viewer.mjs'],
 ];
 
 // Каталоги ресурсов, без которых часть документов рендерится неправильно:
@@ -38,8 +40,8 @@ async function main() {
     await writeFile(join(dst, to), code.replace(/^\/\/# sourceMappingURL=.*$/m, ''));
   }
 
-  await cp(join(src, 'web', 'pdf_viewer.css'), join(dst, 'pdf_viewer.css'));
-  await cp(join(src, 'web', 'images'), join(dst, 'images'), { recursive: true });
+  await cp(join(src, 'legacy', 'web', 'pdf_viewer.css'), join(dst, 'pdf_viewer.css'));
+  await cp(join(src, 'legacy', 'web', 'images'), join(dst, 'images'), { recursive: true });
   for (const dir of assets) {
     await cp(join(src, dir), join(dst, dir), { recursive: true });
   }
