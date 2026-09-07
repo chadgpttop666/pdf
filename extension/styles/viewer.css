@@ -194,11 +194,19 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
   background-color: #fff;
 }
 
-/* Цветовые режимы страницы: фильтр вешаем на слой со страницами, чтобы
-   интерфейс оставался в своих цветах. */
-#viewer { filter: var(--page-filter, none); }
+/* Цветовые режимы страницы. Фильтр вешаем на каждую страницу, а не на весь
+   слой: небольшие независимые слои браузер растрирует заметно дешевле. */
+.pdfViewer .page { filter: var(--page-filter, none); }
 
 /* ── Обрезка полей ───────────────────────────────────────────────── */
+
+/* Отрицательные поля ломают центрирование через margin:auto, поэтому в режиме
+   обрезки страницы центрует флекс — он считает ширину уже с их учётом. */
+#app.crop-on #viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
 #app.crop-on .pdfViewer .page {
   clip-path: inset(var(--crop-t, 0px) var(--crop-r, 0px) var(--crop-b, 0px) var(--crop-l, 0px));

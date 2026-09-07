@@ -9,6 +9,7 @@ import { createViewer } from './viewer-setup.js';
 import { createScroller } from './scroll-engine.js';
 import { createScreenNav } from './screen-nav.js';
 import { createAutoScroll } from './autoscroll.js';
+import { createAppearance } from './appearance.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
@@ -29,7 +30,9 @@ export const app = {
   scroller: null,
   screenNav: null,
   autoScroll: null,
+  appearance: null,
   help: null,
+  zoomIntent: 'page-width',
   wakeLock: null,
 };
 
@@ -39,6 +42,7 @@ function applyUiTheme() {
 
 function setZoom(value, { announce = false } = {}) {
   if (!value) return;
+  app.zoomIntent = value;
   app.pdfViewer.currentScaleValue = value;
   if (announce) app.hud.show(`Масштаб ${Math.round(app.pdfViewer.currentScale * 100)}%`);
 }
@@ -171,6 +175,7 @@ async function main() {
   app.screenNav = createScreenNav(app);
   app.autoScroll = createAutoScroll(app);
   app.help = createHelp();
+  app.appearance = createAppearance(app);
 
   app.toggleChrome = () => {
     const hidden = appEl.classList.toggle('chrome-hidden');
