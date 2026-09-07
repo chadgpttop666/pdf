@@ -175,7 +175,9 @@ export function createAppearance(app) {
       app.hud.show(crop.enabled ? 'Поля обрезаны' : 'Поля показаны полностью');
     },
     /** Восстановление состояния документа: поля и флаг обрезки. */
-    restore({ cropBox, cropEnabled } = {}) {
+    restore(state) {
+      // Состояния может не быть вовсе — документ открыт впервые.
+      const { cropBox, cropEnabled } = state || {};
       if (cropBox) crop.setBox(cropBox, { apply: false });
       crop.setEnabled(Boolean(cropEnabled));
       applyCropAwareZoom();

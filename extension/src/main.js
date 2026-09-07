@@ -15,6 +15,9 @@ import { createFind } from './find-ui.js';
 import { createOutline } from './outline.js';
 import { createThumbnails } from './thumbnails.js';
 import { createSidebar } from './ui/sidebar.js';
+import { createReadingState } from './reading-state.js';
+import { createBookmarks } from './bookmarks.js';
+import { createRecent } from './ui/recent.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
@@ -41,6 +44,9 @@ export const app = {
   outline: null,
   thumbnails: null,
   sidebar: null,
+  readingState: null,
+  bookmarks: null,
+  recent: null,
   help: null,
   zoomIntent: 'page-width',
   wakeLock: null,
@@ -87,6 +93,14 @@ export function openFile(file) {
 
 export function openUrl(url, options) {
   return openSource(() => app.loader.openUrl(url, options), url);
+}
+
+/** Открытие документа из локальной библиотеки: ключ уже известен. */
+export function openBytesFromLibrary(bytes, record) {
+  return openSource(
+    () => app.loader.openBytes(bytes, { name: record.name, size: record.size, id: record.id }),
+    record.name
+  );
 }
 
 function wireFileInputs() {
@@ -152,6 +166,7 @@ async function main() {
   app.setZoom = setZoom;
   app.openFile = openFile;
   app.openUrl = openUrl;
+  app.openBytesFromLibrary = openBytesFromLibrary;
   app.toolbar = createToolbar(app);
   app.wakeLock = createWakeLock();
   app.scroller = createScroller(app.container);
@@ -168,6 +183,10 @@ async function main() {
   app.sidebar.onTabChange((tab) => {
     if (tab === 'thumbs') app.thumbnails.refresh();
   });
+  app.readingState = createReadingState(app);
+  app.bookmarks = createBookmarks(app);
+  app.recent = createRecent(app);
+  await app.recent.render();
 
   app.toggleChrome = () => {
     const hidden = appEl.classList.toggle('chrome-hidden');
@@ -197,10 +216,6 @@ async function main() {
   bindKeyboard(app);
   on($('btnHelp'), 'click', () => app.help.toggle());
   on($('welcomeHelp'), 'click', () => app.help.open());
-
-  app.eventBus.on('pagesinit', () => {
-    if (!app.restoredZoom) setZoom(getSetting('defaultZoom'));
-  });
 
   onSettingsChanged((_all, changed) => {
     if ('uiTheme' in changed) applyUiTheme();

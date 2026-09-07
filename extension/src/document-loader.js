@@ -35,8 +35,9 @@ export class DocumentLoader {
     return this.#open({ data: new Uint8Array(buffer), ...documentResources }, source);
   }
 
-  async openBytes(bytes, { name = 'документ.pdf', size } = {}) {
-    const source = { kind: 'bytes', name, size: size ?? bytes.byteLength };
+  async openBytes(bytes, { name = 'документ.pdf', size, id } = {}) {
+    // id приходит из библиотеки: пересчитывать ключ по тем же байтам незачем.
+    const source = { kind: 'bytes', name, size: size ?? bytes.byteLength, id };
     return this.#open({ data: bytes, ...documentResources }, source);
   }
 
