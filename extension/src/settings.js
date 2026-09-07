@@ -177,6 +177,13 @@ export const SETTINGS_SCHEMA = [
   },
   { group: 'Прочее' },
   {
+    key: 'interceptPdfLinks',
+    type: 'bool',
+    def: true,
+    label: 'Открывать PDF-ссылки в этой читалке',
+    hint: 'Иначе останется встроенный просмотр Firefox',
+  },
+  {
     key: 'rememberPosition',
     type: 'bool',
     def: true,

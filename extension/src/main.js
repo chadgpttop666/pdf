@@ -92,6 +92,14 @@ export function openFile(file) {
 }
 
 export function openUrl(url, options) {
+  // Расширения Firefox не имеют доступа к file:// — честно скажем об этом
+  // вместо невнятной ошибки загрузки.
+  if (/^file:/i.test(url) && extensionApi) {
+    app.hud.show('Локальный файл нельзя открыть по ссылке — перетащите его в окно или нажмите «Открыть»', {
+      duration: 8000,
+    });
+    return Promise.resolve();
+  }
   return openSource(() => app.loader.openUrl(url, options), url);
 }
 

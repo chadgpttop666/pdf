@@ -25,12 +25,29 @@
   },
   "permissions": [
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "webRequest",
+    "webRequestBlocking",
+    "contextMenus",
+    "tabs"
   ],
   "background": {
     "scripts": [
       "background.js"
     ],
     "type": "module"
-  }
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "viewer.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }
