@@ -46,6 +46,7 @@ html, body {
 }
 
 #app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -403,7 +404,9 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
 .settings-grid { display: grid; gap: 10px; }
 .settings-grid .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .settings-grid .setting .label { display: flex; flex-direction: column; }
-.settings-grid .setting .hint { color: var(--fg-muted); font-size: 12px; }
+.settings-grid .setting .hint { color: var(--fg-muted); font-size: 12px; max-width: 46ch; }
+.settings-grid .range-control { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.settings-grid input[type='text'] { min-width: 220px; }
 .settings-grid .group-title { margin-top: 8px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; font-size: 11px; }
 
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: baseline; }

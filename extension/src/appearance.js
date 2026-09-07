@@ -77,7 +77,13 @@ export function createAppearance(app) {
     if (value && autoDetect && getSetting('cropAuto') && !hasManualBox()) {
       await crop.autoDetect();
     }
-    applyCropAwareZoom();
+    if (value) {
+      applyCropAwareZoom();
+    } else {
+      // Без обрезки прежний масштаб становится слишком крупным: возвращаем
+      // тот, который выбирал пользователь.
+      app.setZoom(app.zoomIntent);
+    }
     syncPanel();
   }
 

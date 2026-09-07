@@ -89,6 +89,18 @@
       <div id="viewerContainer" tabindex="0" role="main">
         <div id="viewer" class="pdfViewer"></div>
       </div>
+
+      <div id="welcome">
+        <div class="welcome-card">
+          <h1>PDF-читалка</h1>
+          <p>Перетащите PDF в окно или откройте файл.</p>
+          <div class="welcome-actions">
+            <button id="welcomeOpen">Открыть файл</button>
+            <button id="welcomeHelp" class="ghost">Горячие клавиши</button>
+          </div>
+          <ul id="welcomeRecent" class="recent-list"></ul>
+        </div>
+      </div>
     </div>
 
     <div id="ttsBar" class="bar" hidden>
@@ -172,18 +184,6 @@
     </div>
 
     <div id="hud" hidden></div>
-
-    <div id="welcome">
-      <div class="welcome-card">
-        <h1>PDF-читалка</h1>
-        <p>Перетащите PDF в окно или откройте файл.</p>
-        <div class="welcome-actions">
-          <button id="welcomeOpen">Открыть файл</button>
-          <button id="welcomeHelp" class="ghost">Горячие клавиши</button>
-        </div>
-        <ul id="welcomeRecent" class="recent-list"></ul>
-      </div>
-    </div>
 
     <div id="dropOverlay" hidden><span>Отпустите файл, чтобы открыть</span></div>
 

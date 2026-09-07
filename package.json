@@ -11,7 +11,7 @@
     "start": "web-ext run --source-dir extension",
     "lint": "web-ext lint --source-dir extension --self-hosted",
     "build": "web-ext build --source-dir extension --artifacts-dir dist --overwrite-dest",
-    "test": "node --test tests/unit",
+    "test": "node --test tests/unit/*.test.js",
     "test:e2e": "node tests/e2e/smoke.mjs"
   },
   "devDependencies": {

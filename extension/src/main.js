@@ -18,6 +18,7 @@ import { createSidebar } from './ui/sidebar.js';
 import { createReadingState } from './reading-state.js';
 import { createBookmarks } from './bookmarks.js';
 import { createRecent } from './ui/recent.js';
+import { createSettingsDialog } from './ui/settings-dialog.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
@@ -194,6 +195,7 @@ async function main() {
   app.readingState = createReadingState(app);
   app.bookmarks = createBookmarks(app);
   app.recent = createRecent(app);
+  app.settingsDialog = createSettingsDialog(app);
   await app.recent.render();
 
   app.toggleChrome = () => {
@@ -212,6 +214,10 @@ async function main() {
   app.escape = () => {
     if (app.help.isOpen) {
       app.help.close();
+      return;
+    }
+    if (app.settingsDialog?.isOpen) {
+      app.settingsDialog.close();
       return;
     }
     app.autoScroll.stop();
