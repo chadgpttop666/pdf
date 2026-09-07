@@ -33,6 +33,9 @@ const CODE_LABELS = {
   Minus: '−',
   Digit0: '0',
   Slash: '/',
+  NumpadAdd: 'Num +',
+  NumpadSubtract: 'Num −',
+  Numpad0: 'Num 0',
 };
 
 export function displayCombo(combo) {
@@ -72,14 +75,14 @@ export const BINDINGS = [
   { combos: ['KeyC'], label: 'Обрезка полей', run: (app) => app.appearance?.toggleCrop() },
   { combos: ['KeyV'], label: 'Панель вида', run: (app) => app.appearance?.togglePanel() },
   { combos: ['KeyF'], label: 'Скрыть панели', run: (app) => app.toggleChrome() },
-  { combos: ['Ctrl+Equal'], label: 'Крупнее', run: (app) => app.toolbar.zoomBy(1), preventDefault: true },
-  { combos: ['Ctrl+Minus'], label: 'Мельче', run: (app) => app.toolbar.zoomBy(-1), preventDefault: true },
-  { combos: ['Ctrl+Digit0'], label: 'Масштаб по ширине', run: (app) => app.setZoom('page-width'), preventDefault: true },
+  { combos: ['Ctrl+Equal', 'Ctrl+NumpadAdd'], label: 'Крупнее', run: (app) => app.toolbar.zoomBy(1) },
+  { combos: ['Ctrl+Minus', 'Ctrl+NumpadSubtract'], label: 'Мельче', run: (app) => app.toolbar.zoomBy(-1) },
+  { combos: ['Ctrl+Digit0', 'Ctrl+Numpad0'], label: 'Масштаб по ширине', run: (app) => app.setZoom('page-width') },
 
   { section: 'Навигация и файлы' },
   { combos: ['F4'], label: 'Боковая панель', run: (app) => app.toggleSidebar() },
-  { combos: ['Ctrl+KeyO'], label: 'Открыть файл', run: () => document.getElementById('filePicker').click(), preventDefault: true },
-  { combos: ['Ctrl+KeyF', 'Slash'], label: 'Поиск по документу', run: (app) => app.find?.open(), preventDefault: true },
+  { combos: ['Ctrl+KeyO'], label: 'Открыть файл', run: () => document.getElementById('filePicker').click() },
+  { combos: ['Ctrl+KeyF', 'Slash'], label: 'Поиск по документу', run: (app) => app.find?.open() },
   { combos: ['F3'], label: 'Следующее совпадение', run: (app) => app.find?.again(1) },
   { combos: ['Shift+F3'], label: 'Предыдущее совпадение', run: (app) => app.find?.again(-1) },
   { combos: ['KeyB'], label: 'Закладка на этом месте', run: (app) => app.bookmarks?.addHere() },
