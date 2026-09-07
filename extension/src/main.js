@@ -2,11 +2,16 @@
 // между собой независимые модули (прокрутка, озвучка, библиотека и прочее).
 
 import { $, formatBytes, on } from './dom.js';
-import { extensionApi } from './platform.js';
+import { createWakeLock, extensionApi } from './platform.js';
 import { getSettings, get as getSetting, loadSettings, onSettingsChanged, updateSettings } from './settings.js';
 import { DocumentLoader } from './document-loader.js';
 import { createViewer } from './viewer-setup.js';
+import { createScroller } from './scroll-engine.js';
+import { createScreenNav } from './screen-nav.js';
+import { createAutoScroll } from './autoscroll.js';
+import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
+import { createHelp } from './ui/help.js';
 import { createToolbar } from './ui/toolbar.js';
 
 const appEl = $('app');
@@ -21,6 +26,11 @@ export const app = {
   loader: null,
   hud: null,
   toolbar: null,
+  scroller: null,
+  screenNav: null,
+  autoScroll: null,
+  help: null,
+  wakeLock: null,
 };
 
 function applyUiTheme() {
@@ -156,6 +166,40 @@ async function main() {
   app.openFile = openFile;
   app.openUrl = openUrl;
   app.toolbar = createToolbar(app);
+  app.wakeLock = createWakeLock();
+  app.scroller = createScroller(app.container);
+  app.screenNav = createScreenNav(app);
+  app.autoScroll = createAutoScroll(app);
+  app.help = createHelp();
+
+  app.toggleChrome = () => {
+    const hidden = appEl.classList.toggle('chrome-hidden');
+    app.hud.show(hidden ? 'Панели скрыты — F вернёт их' : 'Панели показаны');
+    app.pdfViewer.update();
+  };
+
+  app.toggleAutoScrollMode = async () => {
+    const next = getSetting('autoScrollMode') === 'step' ? 'continuous' : 'step';
+    await updateSettings({ autoScrollMode: next });
+    app.autoScroll.showPanel();
+    app.hud.show(next === 'step' ? 'Автоскролл: шагами' : 'Автоскролл: плавный');
+  };
+
+  app.escape = () => {
+    if (app.help.isOpen) {
+      app.help.close();
+      return;
+    }
+    app.autoScroll.stop();
+    app.tts?.stop();
+    app.find?.close();
+    app.appearance?.closePanel();
+    $('viewerContainer').focus();
+  };
+
+  bindKeyboard(app);
+  on($('btnHelp'), 'click', () => app.help.toggle());
+  on($('welcomeHelp'), 'click', () => app.help.open());
 
   app.eventBus.on('pagesinit', () => {
     if (!app.restoredZoom) setZoom(getSetting('defaultZoom'));
