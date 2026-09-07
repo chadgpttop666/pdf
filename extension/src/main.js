@@ -10,6 +10,7 @@ import { createScroller } from './scroll-engine.js';
 import { createScreenNav } from './screen-nav.js';
 import { createAutoScroll } from './autoscroll.js';
 import { createAppearance } from './appearance.js';
+import { createTts } from './tts/controller.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
@@ -31,6 +32,7 @@ export const app = {
   screenNav: null,
   autoScroll: null,
   appearance: null,
+  tts: null,
   help: null,
   zoomIntent: 'page-width',
   wakeLock: null,
@@ -176,6 +178,7 @@ async function main() {
   app.autoScroll = createAutoScroll(app);
   app.help = createHelp();
   app.appearance = createAppearance(app);
+  app.tts = createTts(app);
 
   app.toggleChrome = () => {
     const hidden = appEl.classList.toggle('chrome-hidden');
