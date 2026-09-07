@@ -11,6 +11,10 @@ import { createScreenNav } from './screen-nav.js';
 import { createAutoScroll } from './autoscroll.js';
 import { createAppearance } from './appearance.js';
 import { createTts } from './tts/controller.js';
+import { createFind } from './find-ui.js';
+import { createOutline } from './outline.js';
+import { createThumbnails } from './thumbnails.js';
+import { createSidebar } from './ui/sidebar.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
@@ -33,6 +37,10 @@ export const app = {
   autoScroll: null,
   appearance: null,
   tts: null,
+  find: null,
+  outline: null,
+  thumbnails: null,
+  sidebar: null,
   help: null,
   zoomIntent: 'page-width',
   wakeLock: null,
@@ -127,33 +135,6 @@ function wireProgress() {
   });
 }
 
-function wireSidebarToggle() {
-  const sidebar = $('sidebar');
-  const body = $('body');
-
-  function apply(open) {
-    sidebar.hidden = !open;
-    body.style.setProperty('--sidebar-offset', open ? `${sidebar.offsetWidth || 260}px` : '0px');
-    $('btnSidebar').setAttribute('aria-pressed', String(open));
-    // Ширина области изменилась — масштабы вида «по ширине» надо пересчитать.
-    if (app.pdfViewer?.pdfDocument) app.pdfViewer.update();
-  }
-
-  on($('btnSidebar'), 'click', () => {
-    const open = sidebar.hidden;
-    updateSettings({ sidebarOpen: open });
-    apply(open);
-  });
-
-  app.toggleSidebar = (open) => {
-    const next = open ?? sidebar.hidden;
-    updateSettings({ sidebarOpen: next });
-    apply(next);
-  };
-
-  apply(getSetting('sidebarOpen'));
-}
-
 function documentUrlFromQuery() {
   const params = new URLSearchParams(location.search);
   const file = params.get('file');
@@ -179,6 +160,14 @@ async function main() {
   app.help = createHelp();
   app.appearance = createAppearance(app);
   app.tts = createTts(app);
+  app.find = createFind(app);
+  app.outline = createOutline(app);
+  app.thumbnails = createThumbnails(app);
+  app.sidebar = createSidebar(app);
+  app.toggleSidebar = (open) => app.sidebar.toggle(open);
+  app.sidebar.onTabChange((tab) => {
+    if (tab === 'thumbs') app.thumbnails.refresh();
+  });
 
   app.toggleChrome = () => {
     const hidden = appEl.classList.toggle('chrome-hidden');
@@ -220,7 +209,6 @@ async function main() {
   wireFileInputs();
   wireDragAndDrop();
   wireProgress();
-  wireSidebarToggle();
 
   const initial = documentUrlFromQuery();
   if (initial) await openUrl(initial);
