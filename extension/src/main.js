@@ -10,6 +10,7 @@ import { createScroller } from './scroll-engine.js';
 import { createScreenNav } from './screen-nav.js';
 import { createAutoScroll } from './autoscroll.js';
 import { createAppearance } from './appearance.js';
+import { createViewLock } from './view-lock.js';
 import { createTts } from './tts/controller.js';
 import { createFind } from './find-ui.js';
 import { createOutline } from './outline.js';
@@ -23,6 +24,7 @@ import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
 import { createToolbar } from './ui/toolbar.js';
+import { hydrateIcons, setIcon } from './ui/icons.js';
 
 const appEl = $('app');
 
@@ -40,6 +42,7 @@ export const app = {
   screenNav: null,
   autoScroll: null,
   appearance: null,
+  viewLock: null,
   tts: null,
   find: null,
   outline: null,
@@ -57,11 +60,20 @@ function applyUiTheme() {
   appEl.dataset.uiTheme = getSetting('uiTheme');
 }
 
-function setZoom(value, { announce = false } = {}) {
-  if (!value) return;
+/**
+ * Единая точка смены масштаба. При закреплённом виде масштаб не меняется:
+ * пользователю объясняем почему, остальные вызовы просто молча отклоняются.
+ */
+function setZoom(value, { announce = false, force = false, fromUser = false } = {}) {
+  if (!value) return false;
+  if (app.viewLock?.locked && !force) {
+    if (fromUser) app.hud.show('Масштаб закреплён — L, чтобы открепить');
+    return false;
+  }
   app.zoomIntent = value;
   app.pdfViewer.currentScaleValue = value;
   if (announce) app.hud.show(`Масштаб ${Math.round(app.pdfViewer.currentScale * 100)}%`);
+  return true;
 }
 
 /** Разрешаем открывать только то, что действительно похоже на адрес файла. */
@@ -158,6 +170,43 @@ function wireProgress() {
   });
 }
 
+/**
+ * Режимы «по ширине» и «страница целиком» pdf.js считает один раз — при
+ * изменении области (боковая панель, панели снизу, размер окна) их надо
+ * применить заново, иначе страница вылезает за край.
+ */
+function wireAutoFit() {
+  let timer = 0;
+  const observer = new ResizeObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (!app.pdfViewer.pdfDocument || app.viewLock?.locked) return;
+      if (['page-width', 'page-fit', 'auto'].includes(app.zoomIntent)) {
+        app.pdfViewer.currentScaleValue = app.zoomIntent;
+      }
+    }, 80);
+  });
+  observer.observe(app.container);
+}
+
+/**
+ * Кнопки «−» и «+» у ползунков: сдвигают значение на шаг ползунка и
+ * рассылают те же события, что и перетаскивание, — модули их уже слушают.
+ */
+function wireSteppers() {
+  for (const button of document.querySelectorAll('[data-step-for]')) {
+    on(button, 'click', () => {
+      const input = $(button.dataset.stepFor);
+      const step = Number(input.step) || 1;
+      const next = Number(input.value) + Number(button.dataset.dir) * step;
+      const clamped = Math.min(Number(input.max), Math.max(Number(input.min), next));
+      input.value = String(Number(clamped.toFixed(4)));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+}
+
 function documentUrlFromQuery() {
   const params = new URLSearchParams(location.search);
   const file = params.get('file');
@@ -167,6 +216,8 @@ function documentUrlFromQuery() {
 async function main() {
   await loadSettings();
   applyUiTheme();
+  hydrateIcons();
+  app.icons = { setIcon };
 
   const core = createViewer({ container: $('viewerContainer'), viewerEl: $('viewer') });
   Object.assign(app, core);
@@ -183,6 +234,7 @@ async function main() {
   app.autoScroll = createAutoScroll(app);
   app.help = createHelp();
   app.appearance = createAppearance(app);
+  app.viewLock = createViewLock(app);
   app.tts = createTts(app);
   app.find = createFind(app);
   app.outline = createOutline(app);
@@ -224,6 +276,7 @@ async function main() {
     app.tts?.stop();
     app.find?.close();
     app.appearance?.closePanel();
+    app.bookmarks?.closePopover();
     $('viewerContainer').focus();
   };
 
@@ -238,6 +291,8 @@ async function main() {
   wireFileInputs();
   wireDragAndDrop();
   wireProgress();
+  wireSteppers();
+  wireAutoFit();
 
   const initial = documentUrlFromQuery();
   if (initial) await openUrl(initial);

@@ -36,25 +36,58 @@ describe('buildPageText', () => {
     assert.equal(text, 'Строка один. Строка два.\nНовый абзац.');
   });
 
-  it('ведёт карту символов на элементы текстового слоя', () => {
+  it('ведёт карту символов на спаны текстового слоя', () => {
     const { text, entries } = buildPageText([item('Раз', { y: 700 }), item('два', { y: 684 })]);
     assert.deepEqual(entries, [
-      { divIndex: 0, start: 0, end: 3 },
-      { divIndex: 1, start: 4, end: 7 },
+      { spanIndex: 0, start: 0, end: 3 },
+      { spanIndex: 1, start: 4, end: 7 },
     ]);
     assert.equal(text.slice(entries[1].start, entries[1].end), 'два');
   });
 
-  it('нумерует элементы подряд, включая пустые: иначе подсветка съедет', () => {
+  it('не считает пустые куски: pdf.js не вставляет для них спаны, иначе подсветка съезжает', () => {
+    // Так выглядит книжная вёрстка: после каждой строки идёт пустой кусок.
     const { entries } = buildPageText([
-      item('Текст', { y: 700 }),
+      item('Первая строка', { y: 700, hasEOL: false }),
       item('', { y: 700 }),
-      item('дальше', { y: 684 }),
+      item('вторая строка', { y: 684, hasEOL: false }),
+      item('', { y: 684 }),
+      item('третья.', { y: 668 }),
     ]);
     assert.deepEqual(
-      entries.map((entry) => entry.divIndex),
-      [0, 2]
+      entries.map((entry) => entry.spanIndex),
+      [0, 1, 2]
     );
+  });
+
+  it('видит конец абзаца по короткой строке перед новой фразой', () => {
+    const lines = [
+      item('Длинная строка абзаца, растянутая по всей ширине', { y: 700, width: 400 }),
+      item('и ещё одна такая же длинная строка текста, до края', { y: 684, width: 400 }),
+      item('короткий хвост.', { y: 668, width: 120 }),
+      item('Новый абзац начинается здесь и тоже идёт до края', { y: 652, width: 400 }),
+    ];
+    const { text } = buildPageText(lines);
+    assert.match(text, /хвост\.\nНовый/);
+    assert.match(text, /абзаца, растянутая по всей ширине и ещё/);
+  });
+
+  it('видит новый абзац по красной строке', () => {
+    const { text } = buildPageText([
+      item('Строка до самого края страницы, конец фразы.', { x: 72, y: 700, width: 400 }),
+      item('Текст продолжается в той же манере, ровно.', { x: 72, y: 684, width: 400 }),
+      item('С отступом начинается новый абзац.', { x: 108, y: 668, width: 364 }),
+    ]);
+    assert.match(text, /ровно\.\nС отступом/);
+  });
+
+  it('отделяет разделитель «* * *» от следующего абзаца', () => {
+    const { text } = buildPageText([
+      item('* * *', { x: 280, y: 720, width: 30 }),
+      item('Эта книга написана для тех, кто читает с экрана', { y: 700, width: 400 }),
+      item('подолгу и устаёт не от смысла, а от механики.', { y: 684, width: 400 }),
+    ]);
+    assert.ok(text.startsWith('* * *\nЭта книга'), JSON.stringify(text));
   });
 
   it('ставит пробел между кусками одной строки, разделёнными на письме', () => {
@@ -79,6 +112,18 @@ describe('segmentSentences', () => {
     const text = 'Первое предложение. Второе предложение! Третье?';
     const parts = segmentSentences(text, 'ru').map((range) => text.slice(range.start, range.end));
     assert.deepEqual(parts, ['Первое предложение.', 'Второе предложение!', 'Третье?']);
+  });
+
+  it('не рвёт фразу на сокращениях и инициалах', () => {
+    const text = 'Он учился у проф. Франца Оппенхаймера. Читал А. С. Пушкина. Т. е. всё ясно.';
+    const parts = segmentSentences(text, 'ru').map((range) => text.slice(range.start, range.end));
+    assert.deepEqual(parts, ['Он учился у проф. Франца Оппенхаймера.', 'Читал А. С. Пушкина.', 'Т. е. всё ясно.']);
+  });
+
+  it('считает «и т. д.» перед заглавной концом фразы', () => {
+    const text = 'Яблоки, груши и т. д. Потом пришла зима.';
+    const parts = segmentSentences(text, 'ru').map((range) => text.slice(range.start, range.end));
+    assert.deepEqual(parts, ['Яблоки, груши и т. д.', 'Потом пришла зима.']);
   });
 
   it('не отрывает номер главы от заголовка', () => {

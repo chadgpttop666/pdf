@@ -1,11 +1,19 @@
 // Закладки на конкретное место в документе, с подписью из текста рядом
-// и произвольной заметкой. Хранятся вместе с записью документа.
+// и заметкой. Хранятся вместе с записью документа, видны в панели у кнопки
+// тулбара и флажками прямо на полях страниц.
 
-import { $, clear, el, formatDate, on } from './dom.js';
+import { $, clear, el, formatDate } from './dom.js';
+import { icon } from './ui/icons.js';
+import { createPopover } from './ui/popover.js';
 import { firstVisibleSpanIndex, pageOffsetRatio } from './visible-text.js';
 
+const EMPTY_HINT = 'Закладок пока нет. Нажмите «Добавить здесь» или клавишу B — флажок появится на полях страницы.';
+
 export function createBookmarks(app) {
-  const panel = $('bookmarksPanel');
+  const sidebarPanel = $('bookmarksPanel');
+  const popoverList = $('bookmarksList');
+  const popover = createPopover($('bookmarksPopover'), $('btnBookmark'), { onOpen: () => render() });
+  let focusNoteOf = null; // свежая закладка: сразу предлагаем подписать
 
   function items() {
     return app.readingState.record?.bookmarks || [];
@@ -17,12 +25,12 @@ export function createBookmarks(app) {
     if (!index) return `Страница ${pageNumber}`;
     const page = await index.page(pageNumber).catch(() => null);
     if (!page?.text) return `Страница ${pageNumber}`;
-    const offset = await index.offsetForDiv(pageNumber, firstVisibleSpanIndex(app, pageNumber));
+    const offset = await index.offsetForSpan(pageNumber, firstVisibleSpanIndex(app, pageNumber));
     const fragment = page.text.slice(offset, offset + 90).replace(/\s+/g, ' ').trim();
     return fragment || `Страница ${pageNumber}`;
   }
 
-  async function addHere() {
+  async function addHere({ openPanel = false } = {}) {
     if (!app.readingState.record) {
       app.hud.show('Закладки доступны после открытия документа');
       return null;
@@ -36,9 +44,12 @@ export function createBookmarks(app) {
       note: '',
       createdAt: Date.now(),
     };
+    focusNoteOf = openPanel ? bookmark.id : null;
     await app.readingState.patch({ bookmarks: [...items(), bookmark].sort(byPosition) });
-    app.hud.show(`Закладка на странице ${pageNumber}`);
-    render();
+    // Открытая панель уже перерисована патчем; повторное открытие перерисовало
+    // бы её ещё раз и сбило фокус с поля заметки.
+    if (openPanel && !popover.isOpen) popover.open();
+    else if (!openPanel) app.hud.show(`Закладка на странице ${pageNumber} — список по кнопке закладок`, { duration: 2200 });
     return bookmark;
   }
 
@@ -47,6 +58,7 @@ export function createBookmarks(app) {
   }
 
   function goTo(bookmark) {
+    popover.close();
     app.pdfViewer.scrollPageIntoView({ pageNumber: bookmark.pageNumber });
     requestAnimationFrame(() => {
       const div = app.pdfViewer.getPageView(bookmark.pageNumber - 1)?.div;
@@ -56,20 +68,22 @@ export function createBookmarks(app) {
 
   async function remove(id) {
     await app.readingState.patch({ bookmarks: items().filter((bookmark) => bookmark.id !== id) });
-    render();
   }
 
+  /** Заметку сохраняем без перерисовки списка, чтобы не сбить фокус и щелчок. */
   async function setNote(id, note) {
-    await app.readingState.patch({
-      bookmarks: items().map((bookmark) => (bookmark.id === id ? { ...bookmark, note } : bookmark)),
-    });
+    await app.readingState.patch(
+      { bookmarks: items().map((bookmark) => (bookmark.id === id ? { ...bookmark, note } : bookmark)) },
+      { silent: true }
+    );
+    renderMarkers();
   }
 
-  function render() {
-    clear(panel);
+  function renderList(container) {
+    clear(container);
     const list = items();
     if (!list.length) {
-      panel.append(el('p', { class: 'panel-empty' }, 'Закладок пока нет. Клавиша B — поставить закладку на текущем месте.'));
+      container.append(el('p', { class: 'panel-empty' }, EMPTY_HINT));
       return;
     }
 
@@ -77,31 +91,85 @@ export function createBookmarks(app) {
     for (const bookmark of list) {
       const note = el('input', {
         type: 'text',
-        value: bookmark.note,
-        placeholder: 'заметка',
-        class: 'note-input',
-        onchange: (event) => setNote(bookmark.id, event.target.value),
+        class: 'bookmark-note',
+        placeholder: 'Добавить заметку…',
+        'aria-label': 'Заметка к закладке',
+        onchange: (event) => setNote(bookmark.id, event.target.value.trim()),
       });
+      note.value = bookmark.note || '';
 
-      ul.append(
-        el('li', {}, [
-          el('div', { style: 'flex:1;min-width:0' }, [
-            el('button', { class: 'jump', title: `Страница ${bookmark.pageNumber}`, onclick: () => goTo(bookmark) }, [
-              el('span', {}, `${bookmark.pageNumber}. ${bookmark.label}`),
-              el('span', { class: 'note' }, formatDate(bookmark.createdAt)),
-            ]),
-            note,
-          ]),
-          el('button', { class: 'icon', title: 'Удалить закладку', onclick: () => remove(bookmark.id) }, '✕'),
-        ])
-      );
+      const remover = el('button', {
+        class: 'icon bookmark-delete',
+        title: 'Удалить закладку',
+        'aria-label': 'Удалить закладку',
+        onclick: () => remove(bookmark.id),
+      });
+      remover.append(icon('trash'));
+
+      const jump = el('button', { class: 'bookmark-jump', title: 'Перейти к закладке', onclick: () => goTo(bookmark) }, [
+        el('span', { class: 'bookmark-page' }, `с. ${bookmark.pageNumber}`),
+        el('span', { class: 'bookmark-label' }, bookmark.label),
+        el('span', { class: 'bookmark-date' }, formatDate(bookmark.createdAt)),
+      ]);
+
+      ul.append(el('li', { class: 'bookmark-item', dataset: { id: bookmark.id } }, [jump, remover, note]));
     }
-    panel.append(ul);
+    container.append(ul);
+
+    if (focusNoteOf) {
+      const fresh = container.querySelector(`[data-id="${focusNoteOf}"] .bookmark-note`);
+      if (fresh && !container.closest('[hidden]')) {
+        fresh.focus();
+        focusNoteOf = null;
+      }
+    }
   }
 
-  on($('btnBookmark'), 'click', () => addHere());
+  /** Флажки закладок на полях страниц. pdf.js стирает их при перерисовке. */
+  function renderMarkersOn(pageNumber) {
+    const div = app.pdfViewer.getPageView(pageNumber - 1)?.div;
+    if (!div) return;
+    for (const marker of div.querySelectorAll('.bookmark-marker')) marker.remove();
+    for (const bookmark of items()) {
+      if (bookmark.pageNumber !== pageNumber) continue;
+      const marker = el('button', {
+        class: 'bookmark-marker',
+        title: bookmark.note ? `${bookmark.note}\n${bookmark.label}` : bookmark.label,
+        'aria-label': 'Закладка',
+        'data-keeps-popover': '',
+        onclick: (event) => {
+          event.stopPropagation();
+          popover.open();
+        },
+      });
+      marker.style.top = `${Math.min(0.97, Math.max(0, bookmark.offsetRatio)) * 100}%`;
+      marker.append(icon('bookmarkFilled'));
+      div.append(marker);
+    }
+  }
+
+  function renderMarkers() {
+    const total = app.pdfViewer.pagesCount || 0;
+    for (let pageNumber = 1; pageNumber <= total; pageNumber += 1) renderMarkersOn(pageNumber);
+  }
+
+  function render() {
+    renderList(popoverList);
+    renderList(sidebarPanel);
+    renderMarkers();
+  }
+
+  $('bmAdd').addEventListener('click', () => addHere({ openPanel: true }));
   app.readingState.onChange(() => render());
+  app.eventBus.on('pagerendered', ({ pageNumber }) => renderMarkersOn(pageNumber));
   render();
 
-  return { addHere, remove, render, goTo };
+  return {
+    addHere,
+    remove,
+    render,
+    goTo,
+    openPopover: () => popover.open(),
+    closePopover: () => popover.close(),
+  };
 }

@@ -8,6 +8,7 @@ import { TextIndex, cleanForSpeech } from '../text-index.js';
 import { createHighlighter } from './highlighter.js';
 import { createHttpProvider } from './http-provider.js';
 import { createWebSpeechProvider } from './web-speech.js';
+import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -21,6 +22,23 @@ export function createTts(app) {
   let generation = 0;
   let position = { pageNumber: 1, sentenceIndex: 0 };
   let voicesLoaded = false;
+  let cursorShown = false; // место старта выбрано щелчком, но чтение ещё не началось
+
+  const PICK_HINT = 'Щёлкните по тексту — начну читать с этого места';
+
+  /** Пока панель озвучки открыта, щелчок по тексту выбирает место старта. */
+  function showBar(visible) {
+    bar.hidden = !visible;
+    app.el.classList.toggle('tts-picking', visible);
+    if (visible && state === 'idle' && !cursorShown) setStatus(PICK_HINT);
+    if (!visible && state === 'idle') clearCursor();
+  }
+
+  function clearCursor() {
+    if (!cursorShown) return;
+    cursorShown = false;
+    highlighter.clear();
+  }
 
   function currentProvider() {
     const kind = getSetting('ttsProvider');
@@ -44,7 +62,7 @@ export function createTts(app) {
 
   function syncUi() {
     const playing = state === 'speaking';
-    $('ttsPlay').textContent = playing ? '❚❚' : '▶';
+    app.icons.setIcon($('ttsPlay'), playing ? 'pause' : 'play');
     $('btnSpeak').classList.toggle('active', playing || state === 'paused');
     $('btnSpeak').setAttribute('aria-pressed', String(playing));
     $('ttsRate').value = String(getSetting('ttsRate'));
@@ -169,7 +187,8 @@ export function createTts(app) {
         const sentence = page.sentences[position.sentenceIndex];
         const raw = page.text.slice(sentence.start, sentence.end);
         const { text, map } = cleanForSpeech(raw);
-        if (!text.trim()) {
+        // «* * *» и прочие разделители читать вслух незачем.
+        if (!/[\p{L}\p{N}]/u.test(text)) {
           position.sentenceIndex += 1;
           continue;
         }
@@ -203,34 +222,53 @@ export function createTts(app) {
 
   function finish(message) {
     state = 'idle';
+    cursorShown = false;
     generation += 1;
     provider?.cancel();
     highlighter.clear();
     if (!app.autoScroll?.running) app.wakeLock?.release();
     syncUi();
-    setStatus(message || '');
+    // После остановки панель снова подсказывает, как выбрать место.
+    setStatus(message || (bar.hidden ? '' : PICK_HINT));
     if (message) app.hud.show(message);
   }
 
   /** Начальная позиция чтения — первое предложение, видимое на экране. */
   async function positionFromViewport() {
     const pageNumber = app.pdfViewer.currentPageNumber || 1;
-    const pageView = app.pdfViewer.getPageView(pageNumber - 1);
-    const spans = highlighter.textSpans(pageView);
-    const containerRect = app.container.getBoundingClientRect();
+    const offset = await index.offsetForSpan(pageNumber, firstVisibleSpanIndex(app, pageNumber));
+    return { pageNumber, sentenceIndex: await index.sentenceIndexAt(pageNumber, offset) };
+  }
 
-    let divIndex = 0;
-    for (let i = 0; i < spans.length; i += 1) {
-      const rect = spans[i].getBoundingClientRect();
-      if (rect.height && rect.bottom > containerRect.top + 4) {
-        divIndex = i;
-        break;
-      }
-    }
+  /** Если в тексте что-то выделено, читать начинаем с начала выделения. */
+  async function positionFromSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0); // начало диапазона всегда раньше конца
+    const span = textSpanOf(range.startContainer);
+    const pageNumber = Number(span?.closest('.page')?.dataset.pageNumber);
+    if (!span || !pageNumber) return null;
+    const spanIndex = textSpansOfPage(app, pageNumber).indexOf(span);
+    if (spanIndex < 0) return null;
+    const inSpan =
+      range.startContainer.nodeType === Node.TEXT_NODE ? offsetInSpan(span, range.startContainer, range.startOffset) : 0;
+    const offset = await index.offsetForSpan(pageNumber, spanIndex, inSpan);
+    selection.removeAllRanges();
+    return { pageNumber, sentenceIndex: await index.sentenceIndexAt(pageNumber, offset) };
+  }
 
-    const offset = await index.offsetForDiv(pageNumber, divIndex);
-    const sentenceIndex = await index.sentenceIndexAt(pageNumber, offset);
-    return { pageNumber, sentenceIndex };
+  /** Показать, откуда начнётся чтение, не запуская его. */
+  async function showCursor(target) {
+    position = target;
+    cursorShown = true;
+    const page = await index.page(target.pageNumber);
+    const sentence = page?.sentences[target.sentenceIndex];
+    if (!sentence) return;
+    highlighter.clear();
+    highlightSentence(page, sentence);
+    const preview = cleanForSpeech(page.text.slice(sentence.start, sentence.end)).text;
+    const short = preview.length > 50 ? `${preview.slice(0, 50)}…` : preview;
+    setStatus(`Начну с «${short}» — нажмите ▶ или S`);
   }
 
   async function start(from) {
@@ -238,10 +276,21 @@ export function createTts(app) {
       app.hud.show('Сначала откройте документ');
       return;
     }
-    bar.hidden = false;
+    showBar(true);
     if (!voicesLoaded) await fillVoices();
-    position = from || (await positionFromViewport());
+    const picked = cursorShown ? position : null;
+    position = from || (await positionFromSelection()) || picked || (await positionFromViewport());
+    cursorShown = false;
     await loop();
+  }
+
+  /** Перескок во время чтения или паузы: прерываем фразу и читаем с новой позиции. */
+  function restartAt(target) {
+    position = target;
+    // После паузы синтез остаётся «на паузе» и новую фразу не начнёт, пока не продолжить.
+    if (state === 'paused') provider.resume();
+    provider.cancel();
+    loop();
   }
 
   function pause() {
@@ -264,22 +313,18 @@ export function createTts(app) {
       start();
       return;
     }
-    position = { ...position, sentenceIndex: position.sentenceIndex + delta };
-    provider.cancel();
-    loop();
+    restartAt({ ...position, sentenceIndex: position.sentenceIndex + delta });
   }
 
   on($('btnSpeak'), 'click', () => {
-    bar.hidden = false;
-    toggle();
+    if (bar.hidden) showBar(true);
+    else toggle();
   });
   on($('ttsPlay'), 'click', () => toggle());
   on($('ttsStop'), 'click', () => finish());
   on($('ttsNext'), 'click', () => jump(1));
   on($('ttsPrev'), 'click', () => jump(-1));
-  on($('ttsClose'), 'click', () => {
-    bar.hidden = true;
-  });
+  on($('ttsClose'), 'click', () => showBar(false));
   on($('ttsVoice'), 'change', async () => {
     await updateSettings({ ttsVoiceUri: $('ttsVoice').value });
     if (state !== 'idle') jump(0);
@@ -296,27 +341,24 @@ export function createTts(app) {
     syncUi();
   });
 
-  // Alt+клик по тексту — читать с этого места.
+  // Щелчок по тексту при открытой панели озвучки выбирает, откуда читать;
+  // во время чтения — сразу перескакивает туда. Alt+щелчок работает всегда.
   on(app.container, 'click', async (event) => {
-    if (!event.altKey || !index) return;
-    const span = event.target.closest('.textLayer span');
-    if (!span) return;
-    const pageDiv = span.closest('.page');
-    const pageNumber = Number(pageDiv?.dataset.pageNumber);
-    if (!pageNumber) return;
+    if (!index || (bar.hidden && !event.altKey)) return;
+    if (event.button !== 0 || window.getSelection()?.toString()) return; // текст выделяют, а не выбирают место
+    if (event.target.closest('a, button, input, select, .annotationLayer section')) return;
 
-    const spans = highlighter.textSpans(app.pdfViewer.getPageView(pageNumber - 1));
-    const divIndex = spans.indexOf(span);
-    if (divIndex < 0) return;
+    const point = textPointAt(app, event.clientX, event.clientY, event.target);
+    if (!point) return;
+    const offset = await index.offsetForSpan(point.pageNumber, point.spanIndex, point.offsetInSpan);
+    const target = {
+      pageNumber: point.pageNumber,
+      sentenceIndex: await index.sentenceIndexAt(point.pageNumber, offset),
+    };
 
-    const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY);
-    const offsetInDiv = caret?.offsetNode?.parentElement === span ? caret.offset : 0;
-    const offset = await index.offsetForDiv(pageNumber, divIndex, offsetInDiv);
-    const sentenceIndex = await index.sentenceIndexAt(pageNumber, offset);
-
-    bar.hidden = false;
-    provider.cancel();
-    await start({ pageNumber, sentenceIndex });
+    if (state !== 'idle') restartAt(target);
+    else if (event.altKey) await start(target);
+    else await showCursor(target);
   });
 
   app.eventBus.on('documentopened', ({ pdfDocument }) => {
@@ -328,7 +370,7 @@ export function createTts(app) {
 
   // Перерисовка страницы стирает наш слой подсветки — восстанавливаем.
   app.eventBus.on('pagerendered', ({ pageNumber }) => {
-    if (state === 'idle' || pageNumber !== position.pageNumber) return;
+    if ((state === 'idle' && !cursorShown) || pageNumber !== position.pageNumber) return;
     index?.page(pageNumber).then((page) => {
       const sentence = page?.sentences[position.sentenceIndex];
       if (sentence) highlightSentence(page, sentence);
@@ -384,5 +426,11 @@ export function createTts(app) {
     get textIndex() {
       return index;
     },
+    /** Открыта панель озвучки — щелчок по тексту выбирает место старта. */
+    get pickMode() {
+      return !bar.hidden;
+    },
+    showBar,
+    lastHighlight: (kind) => highlighter.lastText(kind),
   };
 }

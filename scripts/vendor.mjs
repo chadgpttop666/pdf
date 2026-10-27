@@ -26,6 +26,19 @@ const scripts = [
 // wasm — декодеры JPEG2000/JBIG2, iccs — цветовые профили.
 const assets = ['cmaps', 'standard_fonts', 'wasm', 'iccs'];
 
+/**
+ * Линтер AMO не разбирает регулярные выражения с флагом v (ES2024) и из-за
+ * одного такого литерала в pdf.js отказывает в подписи. Firefox флаг
+ * понимает, поэтому превращаем литерал в вызов конструктора с тем же
+ * исходником: поведение то же, а парсеру линтера разбирать нечего.
+ */
+function rewriteUnicodeSetsRegexes(code) {
+  return code.replace(/= \/((?:[^/\\\n]|\\.)+)\/([dgimsuy]*v[dgimsuy]*);/g, (_, source, flags) => {
+    if (source.includes('`') || source.includes('${')) throw new Error('Регулярное выражение не переносится в String.raw');
+    return `= new RegExp(String.raw\`${source}\`, "${flags}");`;
+  });
+}
+
 async function main() {
   if (!existsSync(src)) {
     console.error('Нет node_modules/pdfjs-dist — сначала выполните npm install');
@@ -37,7 +50,8 @@ async function main() {
 
   for (const [from, to] of scripts) {
     const code = await readFile(join(src, from), 'utf8');
-    await writeFile(join(dst, to), code.replace(/^\/\/# sourceMappingURL=.*$/m, ''));
+    const cleaned = rewriteUnicodeSetsRegexes(code.replace(/^\/\/# sourceMappingURL=.*$/m, ''));
+    await writeFile(join(dst, to), cleaned);
   }
 
   await cp(join(src, 'legacy', 'web', 'pdf_viewer.css'), join(dst, 'pdf_viewer.css'));

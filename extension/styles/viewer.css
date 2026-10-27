@@ -65,10 +65,21 @@ button, select, input[type='search'], input[type='number'], input[type='text'] {
   padding: 4px 9px;
 }
 
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+}
 button:hover { border-color: var(--accent); }
 button:active { transform: translateY(1px); }
-button.icon { padding: 4px 8px; min-width: 30px; text-align: center; }
+button.icon { padding: 0; width: 32px; min-width: 32px; }
+.icon-svg { flex: none; display: block; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.stepper { width: 26px; min-width: 26px; min-height: 26px; height: 26px; border-radius: 50%; }
+button.stepper .icon-svg { width: 14px; height: 14px; }
 button.active, button[aria-pressed='true'] {
   background: var(--accent);
   color: var(--accent-fg);
@@ -101,7 +112,14 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 #app.chrome-hidden .bar { display: none; }
 
 .pager { display: flex; align-items: center; gap: 4px; }
-#pageNumber { width: 58px; text-align: right; }
+#pageNumber { width: 58px; text-align: right; appearance: textfield; -moz-appearance: textfield; }
+#pageNumber::-webkit-inner-spin-button,
+#pageNumber::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Закреплённый вид двигается только по вертикали: горизонтальную прокрутку
+   убираем совсем, положение держит view-lock.js. */
+#app.view-locked #viewerContainer { overflow-x: hidden; }
+#app.view-locked #zoomSelect { opacity: .6; }
 #pageCount { color: var(--fg-muted); white-space: nowrap; }
 .zoom { display: flex; align-items: center; gap: 4px; }
 
@@ -222,27 +240,40 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 
 /* ── Подсветка озвучки ───────────────────────────────────────────── */
 
+/* Слой подсветки умножается на страницу, как маркер на бумаге: фон под
+   строкой окрашивается, а буквы остаются такими же чёткими и тёмными. */
 .tts-highlight-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 1;
+  mix-blend-mode: multiply;
 }
 
 .tts-sentence-box {
   position: absolute;
-  background: rgb(56 189 248 / 22%);
-  border-radius: 3px;
-  transition: opacity .15s ease;
+  background: #cbe7ff;
+  border-radius: 4px;
 }
 
 .tts-word-box {
   position: absolute;
-  background: rgb(250 204 21 / 35%);
-  border-radius: 2px;
+  background: #ffd84a;
+  border-radius: 3px;
+}
+
+/* Инверсия страницы перекрасила бы и подсветку; обратный фильтр на слое
+   возвращает ей обычные цвета. */
+#app[data-page-theme='invert'] .tts-highlight-layer,
+#app[data-page-theme='invert'] .bookmark-marker {
+  filter: invert(1) hue-rotate(180deg);
 }
 
 #app.speaking .textLayer { z-index: 2; }
+
+/* Пока открыта панель озвучки, щелчок по тексту выбирает место старта. */
+#app.tts-picking .textLayer,
+#app.tts-picking .textLayer span { cursor: pointer; }
 
 /* ── HUD, всплывающие панели, приветствие ────────────────────────── */
 
@@ -336,36 +367,123 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 
 /* ── Боковые панели: оглавление, миниатюры, закладки ─────────────── */
 
-.outline-tree, .bookmark-list { list-style: none; margin: 0; padding: 0; }
-.outline-tree ul { list-style: none; margin: 0; padding-left: 12px; }
-.outline-tree button, .bookmark-list button.jump {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  padding: 4px 6px;
-  border-radius: 4px;
-  color: var(--fg);
-}
-.outline-tree button:hover, .bookmark-list button.jump:hover { background: var(--bg-raised); }
-.outline-tree .toggle {
-  display: inline-block;
-  width: 16px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.outline-tree li.collapsed > ul { display: none; }
-
-.bookmark-list li {
+/* Оглавление: стрелка, название и номер страницы в одной строке; вложенность
+   отступом, а не новыми строками. */
+.outline-tree { list-style: none; margin: 0; padding: 0; }
+.outline-row {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  padding: 2px 0;
+  gap: 2px;
+  padding-left: calc(var(--depth, 0) * 14px);
+  border-radius: 6px;
 }
-.bookmark-list .note { color: var(--fg-muted); font-size: 12px; display: block; }
+.outline-row:hover { background: var(--bg-raised); }
+.outline-row.current { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.outline-row.current .outline-title { color: var(--fg); font-weight: 600; }
+li.has-current > .outline-row .outline-title { color: var(--fg); }
+.outline-toggle, .outline-toggle-spacer { flex: none; width: 22px; min-width: 22px; min-height: 26px; }
+.outline-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--fg-muted);
+}
+.outline-toggle .icon-svg { width: 14px; height: 14px; transition: transform .15s ease; }
+li.collapsed > .outline-row .outline-toggle .icon-svg { transform: rotate(-90deg); }
+li.collapsed > .outline-tree { display: none; }
+.outline-title {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 4px 4px;
+  min-height: 26px;
+  color: var(--fg-muted);
+  line-height: 1.3;
+}
+.outline-title:hover { color: var(--fg); }
+.outline-page {
+  flex: none;
+  padding: 5px 6px 0 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Закладки — в панели у кнопки тулбара и во вкладке боковой панели. */
+.bookmark-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.bookmark-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bookmark-jump {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  justify-content: stretch;
+  align-items: start;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 2px;
+}
+.bookmark-page {
+  grid-row: span 2;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bookmark-label {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+.bookmark-date { color: var(--fg-muted); font-size: 11px; }
+.bookmark-delete { width: 28px; min-width: 28px; min-height: 28px; border-color: transparent; background: transparent; color: var(--fg-muted); }
+.bookmark-delete:hover { color: var(--danger); border-color: transparent; }
+.bookmark-note {
+  grid-column: 1 / -1;
+  width: 100%;
+  font-size: 12px;
+  background: var(--bg-raised);
+}
+
+/* Флажок закладки на полях страницы. */
+.bookmark-marker {
+  position: absolute;
+  left: calc(var(--crop-l, 0px) + 4px);
+  z-index: 5;
+  width: 22px;
+  min-width: 22px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #e11d48;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 35%));
+}
+.bookmark-marker .icon-svg { width: 22px; height: 26px; }
+.bookmark-marker:hover { color: #be123c; }
+
+#bookmarksPopover { width: 340px; }
+.popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.popover-head h3 { margin: 0; }
+.popover-hint { margin: 8px 0 10px; color: var(--fg-muted); font-size: 12px; line-height: 1.45; }
 
 .thumb-grid { display: grid; gap: 10px; }
 .thumb {

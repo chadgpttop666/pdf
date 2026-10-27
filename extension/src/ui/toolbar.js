@@ -43,7 +43,7 @@ export function createToolbar(app) {
         ? ZOOM_STEPS.find((step) => step > scale + 0.001)
         : [...ZOOM_STEPS].reverse().find((step) => step < scale - 0.001);
     if (!next) return;
-    app.setZoom(String(next));
+    app.setZoom(String(next), { fromUser: true, announce: true });
   }
 
   on(pageInput, 'change', () => {
@@ -54,7 +54,7 @@ export function createToolbar(app) {
   on($('btnNextPage'), 'click', () => app.pdfViewer.nextPage());
   on($('btnZoomIn'), 'click', () => zoomBy(1));
   on($('btnZoomOut'), 'click', () => zoomBy(-1));
-  on(zoomSelect, 'change', () => app.setZoom(zoomSelect.value));
+  on(zoomSelect, 'change', () => app.setZoom(zoomSelect.value, { fromUser: true }));
 
   app.eventBus.on('pagesinit', () => {
     setPageCount(app.pdfViewer.pagesCount);

@@ -4,6 +4,7 @@
 
 import { $, clear, el, formatBytes, formatDate } from '../dom.js';
 import * as library from '../library.js';
+import { icon } from './icons.js';
 
 export function createRecent(app) {
   const panelList = $('recentPanel');
@@ -40,7 +41,9 @@ export function createRecent(app) {
 
     const children = [button];
     if (withDelete) {
-      children.push(el('button', { class: 'icon', title: 'Убрать из списка', onclick: () => forget(record) }, '✕'));
+      const remover = el('button', { class: 'icon', title: 'Убрать из списка', onclick: () => forget(record) });
+      remover.append(icon('close'));
+      children.push(remover);
     }
     return el('li', {}, children);
   }

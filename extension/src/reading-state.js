@@ -56,6 +56,8 @@ export function createReadingState(app) {
       pageNumber,
       offsetRatio,
       zoom: app.zoomIntent,
+      left: Math.round(app.container.scrollLeft),
+      viewLock: app.viewLock?.state ?? null,
       cropEnabled: app.appearance?.crop.enabled ?? false,
       cropBox: app.appearance?.crop.box,
       tts: app.tts?.position,
@@ -92,12 +94,14 @@ export function createReadingState(app) {
   function restore(state) {
     restoring = true;
     try {
-      app.setZoom(state?.zoom || getSetting('defaultZoom'));
+      app.setZoom(state?.zoom || getSetting('defaultZoom'), { force: true });
       app.appearance?.restore(state);
+      app.viewLock?.restore(state?.viewLock);
 
       if (!state?.pageNumber || !getSetting('rememberPosition')) return;
 
       const expected = scrollToSaved(state);
+      if (Number.isFinite(state.left) && !state.viewLock) app.container.scrollLeft = state.left;
       if (state.tts?.pageNumber) app.tts?.setPosition(state.tts);
 
       // Масштаб применяется асинхронно и может сдвинуть вид — сверяемся.
@@ -162,6 +166,7 @@ export function createReadingState(app) {
 
   app.eventBus.on('pagechanging', scheduleSave);
   app.eventBus.on('scalechanging', scheduleSave);
+  app.viewLock?.onChange(() => scheduleSave());
   app.container.addEventListener('scroll', scheduleSave, { passive: true });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') save();
@@ -178,11 +183,11 @@ export function createReadingState(app) {
       return record?.id || null;
     },
     /** Изменение полей записи мимо состояния чтения — например, закладок. */
-    async patch(patch) {
+    async patch(patch, { silent = false } = {}) {
       if (!record) return null;
       record = { ...record, ...patch };
       await library.putDocument(record);
-      notify();
+      if (!silent) notify();
       return record;
     },
     onChange(listener) {

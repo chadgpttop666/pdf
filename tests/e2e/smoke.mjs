@@ -157,10 +157,12 @@ try {
   await page.evaluate(() => window.pdfReaderApp.sidebar.open('outline'));
   await page.waitForTimeout(400);
   const outlineTitles = await page.evaluate(() =>
-    [...document.querySelectorAll('#outlinePanel .outline-tree > li > button')].map((button) => button.textContent)
+    [...document.querySelectorAll('#outlinePanel > .outline-tree > li > .outline-row .outline-title')].map(
+      (button) => button.textContent
+    )
   );
   check('оглавление прочитано', outlineTitles.length === 4, outlineTitles.join(' | '));
-  await page.click('#outlinePanel .outline-tree > li:nth-child(3) > button');
+  await page.click('#outlinePanel > .outline-tree > li:nth-child(3) > .outline-row .outline-title');
   await page.waitForTimeout(700);
   const chapterPage = await page.evaluate(() => window.pdfReaderApp.pdfViewer.currentPageNumber);
   check('переход по оглавлению работает', chapterPage === 5, `страница ${chapterPage}`);
@@ -221,6 +223,170 @@ try {
 
   const recent = await page.evaluate(() => document.querySelectorAll('#welcomeRecent li').length);
   check('документ попал в недавние', recent >= 1, `записей: ${recent}`);
+
+  // ── Книжная вёрстка на русском: здесь всплывало то, чего не видно на простом PDF ──
+  await page.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForTimeout(1500);
+
+  // Оглавление: цепочки одинаковых заголовков схлопнуты, у пунктов номера страниц
+  await page.evaluate(() => window.pdfReaderApp.sidebar.open('outline'));
+  await page.waitForTimeout(900);
+  const ruOutline = await page.evaluate(() =>
+    [...document.querySelectorAll('#outlinePanel > .outline-tree > li')].map((li) => ({
+      title: li.querySelector(':scope > .outline-row .outline-title').textContent,
+      page: li.querySelector(':scope > .outline-row .outline-page').textContent,
+      children: [...li.querySelectorAll(':scope > .outline-tree > li > .outline-row .outline-title')].map(
+        (button) => button.textContent
+      ),
+    }))
+  );
+  check(
+    'оглавление без повторяющихся уровней',
+    ruOutline.length === 4 && ruOutline.every((entry) => entry.children.length && entry.children.every((t) => t === '* * *')),
+    ruOutline.map((entry) => `${entry.title} [${entry.children.length}]`).join(' | ')
+  );
+  check('у пунктов оглавления есть номера страниц', ruOutline.every((entry) => /^\d+$/.test(entry.page)), ruOutline.map((entry) => entry.page).join(', '));
+
+  const overflow = await page.evaluate(() => {
+    const container = window.pdfReaderApp.container;
+    return container.scrollWidth - container.clientWidth;
+  });
+  check('«по ширине» пересчитывается при открытой боковой панели', overflow <= 2, `лишняя ширина ${overflow}px`);
+  await page.evaluate(() => window.pdfReaderApp.sidebar.toggle(false));
+  await page.waitForTimeout(500);
+
+  // Подсветка совпадает с тем, что читается, на каждой строке
+  await page.evaluate(() => {
+    window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: 0 });
+  });
+  // Первое предложение ждёт, пока страница 2 отрисуется.
+  await page.waitForFunction(() => window.pdfReaderApp.tts.lastHighlight('sentence'), null, { timeout: 5000 });
+  const squash = (text) => text.replace(/[\s­-]/g, '');
+  let exact = 0;
+  let total = 0;
+  let firstMismatch = '';
+  for (let step = 0; step < 10; step += 1) {
+    await page.waitForTimeout(300);
+    const sample = await page.evaluate(async () => {
+      const reader = window.pdfReaderApp.tts;
+      const { pageNumber, sentenceIndex } = reader.position;
+      const textPage = await reader.textIndex.page(pageNumber);
+      const sentence = textPage.sentences[sentenceIndex];
+      return { expected: textPage.text.slice(sentence.start, sentence.end), got: reader.lastHighlight('sentence') };
+    });
+    total += 1;
+    if (squash(sample.expected) === squash(sample.got)) exact += 1;
+    else firstMismatch ||= `ждали «${sample.expected.slice(0, 40)}», подсвечено «${sample.got.slice(0, 40)}»`;
+    await page.evaluate(() => window.pdfReaderApp.tts.next());
+  }
+  check('подсвечено ровно читаемое предложение', exact === total, `${exact} из ${total} ${firstMismatch}`);
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+
+  // Щелчок по тексту при открытой панели озвучки выбирает место старта
+  await page.evaluate(() => window.pdfReaderApp.tts.showBar(true));
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await page.waitForTimeout(800);
+  const target = await page.evaluate(() => {
+    // markedContent — служебные контейнеры без размеров, щёлкать нужно по тексту.
+    const spans = document.querySelectorAll('.page[data-page-number="2"] .textLayer span:not(.markedContent)');
+    const span = [...spans].find((candidate) =>
+      candidate.textContent.includes('Проф.')
+    );
+    span.scrollIntoView({ block: 'center' });
+    const rect = span.getBoundingClientRect();
+    return { x: rect.left + 4, y: rect.top + rect.height / 2 };
+  });
+  await page.waitForTimeout(400);
+  await page.mouse.click(target.x, target.y);
+  await page.waitForTimeout(500);
+  const pickStatus = await page.evaluate(() => document.getElementById('ttsStatus').textContent);
+  await page.click('#ttsPlay');
+  await page.waitForTimeout(400);
+  const spokenAfterPick = await page.evaluate(() => window.spokenSentences.at(-1));
+  check(
+    'щелчок по тексту выбирает, откуда читать',
+    pickStatus.includes('Проф. Иванов') && spokenAfterPick.startsWith('Проф. Иванов как-то заметил'),
+    `${pickStatus} → «${spokenAfterPick.slice(0, 40)}»`
+  );
+  check('сокращение «проф.» не разрывает фразу', /^Проф\. Иванов.*работает\.$/.test(spokenAfterPick), spokenAfterPick);
+  await page.evaluate(() => {
+    window.pdfReaderApp.tts.stop();
+    window.pdfReaderApp.tts.showBar(false);
+  });
+
+  // Кнопки «−» и «+» у скорости автопрокрутки
+  await page.evaluate(() => window.pdfReaderApp.autoScroll.showPanel());
+  const speedOf = () => page.evaluate(() => Number(document.getElementById('asSpeed').value));
+  const speedBefore = await speedOf();
+  await page.click('#asFaster');
+  await page.waitForTimeout(200);
+  const speedUp = await speedOf();
+  await page.click('#asSlower');
+  await page.click('#asSlower');
+  await page.waitForTimeout(200);
+  const speedDown = await speedOf();
+  const speedLabel = await page.evaluate(() => document.getElementById('asSpeedValue').textContent);
+  check(
+    'кнопки − и + меняют скорость автопрокрутки',
+    speedUp > speedBefore && speedDown < speedUp && speedLabel === `${speedDown} px/с`,
+    `${speedBefore} → ${speedUp} → ${speedDown} (${speedLabel})`
+  );
+
+  // Закрепление вида: 200%, положение по горизонтали не уезжает
+  await page.evaluate(() => window.pdfReaderApp.setZoom('2'));
+  await page.waitForTimeout(700);
+  await page.evaluate(() => {
+    window.pdfReaderApp.container.scrollLeft = 150;
+  });
+  await page.keyboard.press('l');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    window.pdfReaderApp.container.scrollLeft = 0;
+  });
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 4 }));
+  await page.waitForTimeout(400);
+  const zoomRefused = await page.evaluate(() => window.pdfReaderApp.setZoom('1', { fromUser: true }) === false);
+  await page.waitForTimeout(300);
+  const lockView = await page.evaluate(() => ({
+    locked: window.pdfReaderApp.viewLock.locked,
+    left: Math.round(window.pdfReaderApp.container.scrollLeft),
+    scale: window.pdfReaderApp.pdfViewer.currentScale,
+  }));
+  check('закреплённый вид не уезжает вбок', lockView.locked && Math.abs(lockView.left - 150) <= 2, `scrollLeft ${lockView.left}`);
+  check('закреплённый масштаб не меняется', zoomRefused && Math.abs(lockView.scale - 2) < 0.001, `масштаб ${lockView.scale}`);
+
+  await page.waitForTimeout(1800); // даём сохраниться месту чтения
+  await page.reload();
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForTimeout(2500);
+  const lockRestored = await page.evaluate(() => ({
+    locked: window.pdfReaderApp.viewLock.locked,
+    left: Math.round(window.pdfReaderApp.container.scrollLeft),
+    scale: window.pdfReaderApp.pdfViewer.currentScale,
+  }));
+  check(
+    'закрепление запоминается для документа',
+    lockRestored.locked && Math.abs(lockRestored.scale - 2) < 0.001 && Math.abs(lockRestored.left - 150) <= 2,
+    JSON.stringify(lockRestored)
+  );
+  await page.evaluate(() => window.pdfReaderApp.viewLock.release());
+
+  // Закладка из панели: появляется в списке и флажком на полях
+  await page.evaluate(() => window.pdfReaderApp.bookmarks.openPopover());
+  await page.click('#bmAdd');
+  await page.waitForTimeout(700);
+  const bookmarkView = await page.evaluate(() => ({
+    items: document.querySelectorAll('#bookmarksList .bookmark-item').length,
+    markers: document.querySelectorAll('.page .bookmark-marker').length,
+    noteFocused: document.activeElement?.classList.contains('bookmark-note') ?? false,
+  }));
+  check(
+    'закладка из панели видна в списке и флажком на странице',
+    bookmarkView.items === 1 && bookmarkView.markers >= 1 && bookmarkView.noteFocused,
+    JSON.stringify(bookmarkView)
+  );
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

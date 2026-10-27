@@ -77,7 +77,10 @@ export const BINDINGS = [
   { combos: ['KeyF'], label: 'Скрыть панели', run: (app) => app.toggleChrome() },
   { combos: ['Ctrl+Equal', 'Ctrl+NumpadAdd'], label: 'Крупнее', run: (app) => app.toolbar.zoomBy(1) },
   { combos: ['Ctrl+Minus', 'Ctrl+NumpadSubtract'], label: 'Мельче', run: (app) => app.toolbar.zoomBy(-1) },
-  { combos: ['Ctrl+Digit0', 'Ctrl+Numpad0'], label: 'Масштаб по ширине', run: (app) => app.setZoom('page-width') },
+  { combos: ['Ctrl+Digit0', 'Ctrl+Numpad0'], label: 'Масштаб по ширине', run: (app) => app.setZoom('page-width', { fromUser: true }) },
+  { combos: ['KeyL'], label: 'Закрепить масштаб и положение', run: (app) => app.viewLock.toggle() },
+  { combos: ['Shift+ArrowLeft'], label: 'Сдвинуть вид влево', run: (app) => app.viewLock.nudge(-1) },
+  { combos: ['Shift+ArrowRight'], label: 'Сдвинуть вид вправо', run: (app) => app.viewLock.nudge(1) },
 
   { section: 'Навигация и файлы' },
   { combos: ['F4'], label: 'Боковая панель', run: (app) => app.toggleSidebar() },

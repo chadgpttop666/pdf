@@ -5,6 +5,7 @@
 import { $, on } from './dom.js';
 import { get as getSetting, onSettingsChanged, updateSettings } from './settings.js';
 import { createCrop } from './crop.js';
+import { createPopover } from './ui/popover.js';
 
 const SIDES = ['left', 'right', 'top', 'bottom'];
 const SIDE_INPUTS = { left: 'cropLeft', right: 'cropRight', top: 'cropTop', bottom: 'cropBottom' };
@@ -38,6 +39,7 @@ export function createAppearance(app) {
 
   function applyFilter() {
     app.viewerEl.style.setProperty('--page-filter', filterValue());
+    app.el.dataset.pageTheme = getSetting('pageTheme');
   }
 
   /** При обрезанных полях «по ширине» должно считаться от видимой части страницы. */
@@ -91,7 +93,7 @@ export function createAppearance(app) {
     return SIDES.some((side) => crop.box[side] > 0);
   }
 
-  on($('btnAppearance'), 'click', () => togglePanel());
+  const popover = createPopover(panel, $('btnAppearance'), { onOpen: () => syncPanel() });
   on($('pageTheme'), 'change', async () => {
     await updateSettings({ pageTheme: $('pageTheme').value });
     applyFilter();
@@ -125,13 +127,6 @@ export function createAppearance(app) {
     });
   }
 
-  // Панель закрывается кликом мимо неё — это popover, а не модальное окно.
-  on(document, 'pointerdown', (event) => {
-    if (panel.hidden) return;
-    if (panel.contains(event.target) || event.target.closest('#btnAppearance')) return;
-    panel.hidden = true;
-  });
-
   app.eventBus.on('scalechanging', () => {
     crop.apply();
     applyCropAwareZoom();
@@ -139,13 +134,12 @@ export function createAppearance(app) {
   app.eventBus.on('pagesinit', () => crop.apply());
   app.eventBus.on('pagerendered', () => crop.apply());
 
+  // Масштаб при изменении области пересчитывает main.js (wireAutoFit), а
+  // обрезка подхватит его через scalechanging; здесь — только размеры полей.
   let resizeTimer = 0;
   on(window, 'resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      if (crop.enabled && ['page-width', 'auto'].includes(app.zoomIntent)) app.setZoom(app.zoomIntent);
-      crop.apply();
-    }, 150);
+    resizeTimer = setTimeout(() => crop.apply(), 150);
   });
 
   onSettingsChanged((_all, changed) => {
@@ -153,8 +147,7 @@ export function createAppearance(app) {
   });
 
   function togglePanel(force) {
-    panel.hidden = force ?? !panel.hidden;
-    if (!panel.hidden) syncPanel();
+    popover.toggle(force);
   }
 
   applyFilter();
@@ -167,7 +160,7 @@ export function createAppearance(app) {
     syncPanel,
     togglePanel,
     closePanel() {
-      panel.hidden = true;
+      popover.close();
     },
     async toggleInvert() {
       const next = getSetting('pageTheme') === 'invert' ? 'normal' : 'invert';

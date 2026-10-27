@@ -50,6 +50,7 @@ export function createScreenNav(app) {
   container.addEventListener('click', (event) => {
     if (!getSetting('clickZones')) return;
     if (event.target.closest('a, button, input, .textLayer .highlight')) return;
+    if (app.tts?.pickMode && event.target.closest('.textLayer')) return; // щелчок выбирает место озвучки
     if (window.getSelection()?.toString()) return;
     const rect = container.getBoundingClientRect();
     const position = (event.clientY - rect.top) / rect.height;

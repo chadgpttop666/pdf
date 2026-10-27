@@ -11,22 +11,22 @@
 <body>
   <div id="app" data-ui-theme="dark">
     <header id="toolbar">
-      <button id="btnSidebar" class="icon" title="Боковая панель (F4)" aria-label="Боковая панель">☰</button>
-      <button id="btnOpen" title="Открыть файл (Ctrl+O)">Открыть</button>
+      <button id="btnSidebar" class="icon" data-icon="sidebar" title="Боковая панель: оглавление, миниатюры, закладки (F4)" aria-label="Боковая панель"></button>
+      <button id="btnOpen" data-icon="open" title="Открыть файл (Ctrl+O)">Открыть</button>
 
       <span class="divider"></span>
 
       <div class="pager">
-        <button id="btnPrevPage" class="icon" title="Предыдущая страница">‹</button>
+        <button id="btnPrevPage" class="icon" data-icon="chevronLeft" title="Предыдущая страница" aria-label="Предыдущая страница"></button>
         <input id="pageNumber" type="number" min="1" value="1" aria-label="Номер страницы">
         <span id="pageCount">/ 0</span>
-        <button id="btnNextPage" class="icon" title="Следующая страница">›</button>
+        <button id="btnNextPage" class="icon" data-icon="chevronRight" title="Следующая страница" aria-label="Следующая страница"></button>
       </div>
 
       <span class="divider"></span>
 
       <div class="zoom">
-        <button id="btnZoomOut" class="icon" title="Мельче (Ctrl+-)">−</button>
+        <button id="btnZoomOut" class="icon" data-icon="minus" title="Мельче (Ctrl+−)" aria-label="Мельче"></button>
         <select id="zoomSelect" aria-label="Масштаб">
           <option value="auto">Авто</option>
           <option value="page-width">По ширине</option>
@@ -39,35 +39,36 @@
           <option value="2">200%</option>
           <option value="3">300%</option>
         </select>
-        <button id="btnZoomIn" class="icon" title="Крупнее (Ctrl++)">+</button>
+        <button id="btnZoomIn" class="icon" data-icon="plus" title="Крупнее (Ctrl++)" aria-label="Крупнее"></button>
+        <button id="btnLock" class="icon" data-icon="unlock" title="Закрепить масштаб и положение (L)" aria-label="Закрепить вид"></button>
       </div>
 
       <span class="divider"></span>
 
-      <button id="btnAutoScroll" title="Автопрокрутка (A)">Автоскролл</button>
-      <button id="btnSpeak" title="Озвучка (S)">Озвучка</button>
+      <button id="btnAutoScroll" data-icon="autoscroll" title="Автопрокрутка (A)">Автоскролл</button>
+      <button id="btnSpeak" data-icon="speak" title="Озвучка (S)">Озвучка</button>
 
       <div class="spacer"></div>
       <div id="docTitle" title=""></div>
       <div class="spacer"></div>
 
-      <button id="btnFind" class="icon" title="Поиск (Ctrl+F)">🔍</button>
-      <button id="btnBookmark" class="icon" title="Добавить закладку (B)">🔖</button>
-      <button id="btnAppearance" class="icon" title="Вид и обрезка полей (V)">◐</button>
-      <button id="btnSettings" class="icon" title="Настройки">⚙</button>
-      <button id="btnHelp" class="icon" title="Горячие клавиши (F1)">?</button>
+      <button id="btnFind" class="icon" data-icon="search" title="Поиск (Ctrl+F)" aria-label="Поиск"></button>
+      <button id="btnBookmark" class="icon" data-icon="bookmark" title="Закладки (B — поставить сразу)" aria-label="Закладки"></button>
+      <button id="btnAppearance" class="icon" data-icon="appearance" title="Вид и обрезка полей (V)" aria-label="Вид"></button>
+      <button id="btnSettings" class="icon" data-icon="settings" title="Настройки" aria-label="Настройки"></button>
+      <button id="btnHelp" class="icon" data-icon="help" title="Горячие клавиши (F1)" aria-label="Справка"></button>
     </header>
 
     <div id="findBar" class="bar" hidden>
       <input id="findInput" type="search" placeholder="Найти в документе" aria-label="Найти в документе">
-      <button id="findPrev" class="icon" title="Предыдущее (Shift+Enter)">‹</button>
-      <button id="findNext" class="icon" title="Следующее (Enter)">›</button>
+      <button id="findPrev" class="icon" data-icon="chevronLeft" title="Предыдущее (Shift+Enter)" aria-label="Предыдущее"></button>
+      <button id="findNext" class="icon" data-icon="chevronRight" title="Следующее (Enter)" aria-label="Следующее"></button>
       <label><input id="findHighlightAll" type="checkbox" checked> подсветить все</label>
       <label><input id="findMatchCase" type="checkbox"> регистр</label>
       <label><input id="findWholeWords" type="checkbox"> целые слова</label>
       <span id="findStatus" class="muted"></span>
       <div class="spacer"></div>
-      <button id="findClose" class="icon" title="Закрыть (Esc)">✕</button>
+      <button id="findClose" class="icon" data-icon="close" title="Закрыть (Esc)" aria-label="Закрыть"></button>
     </div>
 
     <div id="body">
@@ -95,8 +96,8 @@
           <h1>PDF-читалка</h1>
           <p>Перетащите PDF в окно или откройте файл.</p>
           <div class="welcome-actions">
-            <button id="welcomeOpen">Открыть файл</button>
-            <button id="welcomeHelp" class="ghost">Горячие клавиши</button>
+            <button id="welcomeOpen" data-icon="open">Открыть файл</button>
+            <button id="welcomeHelp" class="ghost" data-icon="help">Горячие клавиши</button>
           </div>
           <ul id="welcomeRecent" class="recent-list"></ul>
         </div>
@@ -104,35 +105,51 @@
     </div>
 
     <div id="ttsBar" class="bar" hidden>
-      <button id="ttsPlay" class="icon" title="Пуск/пауза (S)">▶</button>
-      <button id="ttsPrev" class="icon" title="Предыдущее предложение (,)">⏮</button>
-      <button id="ttsNext" class="icon" title="Следующее предложение (.)">⏭</button>
-      <button id="ttsStop" class="icon" title="Стоп (Shift+S)">■</button>
+      <button id="ttsPlay" class="icon" data-icon="play" title="Читать / пауза (S)" aria-label="Читать или пауза"></button>
+      <button id="ttsPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (,)" aria-label="Предыдущее предложение"></button>
+      <button id="ttsNext" class="icon" data-icon="skipForward" title="Следующее предложение (.)" aria-label="Следующее предложение"></button>
+      <button id="ttsStop" class="icon" data-icon="stop" title="Остановить (Shift+S)" aria-label="Остановить"></button>
       <label class="field">Голос
         <select id="ttsVoice" aria-label="Голос"></select>
       </label>
-      <label class="field">Скорость <span id="ttsRateValue" class="value">1.0×</span>
-        <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1">
-      </label>
+      <div class="field">
+        <span>Скорость</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="ttsRate" data-dir="-1" title="Медленнее (Shift+,)" aria-label="Медленнее"></button>
+        <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1" aria-label="Скорость речи">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsRate" data-dir="1" title="Быстрее (Shift+.)" aria-label="Быстрее"></button>
+        <span id="ttsRateValue" class="value">1.0×</span>
+      </div>
       <label class="field">Тон <span id="ttsPitchValue" class="value">1.0</span>
         <input id="ttsPitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
       </label>
       <span id="ttsStatus" class="muted"></span>
       <div class="spacer"></div>
-      <button id="ttsClose" class="icon" title="Скрыть панель">✕</button>
+      <button id="ttsClose" class="icon" data-icon="close" title="Скрыть панель" aria-label="Скрыть панель"></button>
     </div>
 
     <div id="autoscrollBar" class="bar" hidden>
-      <button id="asToggle" class="icon" title="Пуск/стоп (A)">▶</button>
-      <label class="field" id="asSpeedField">Скорость <span id="asSpeedValue" class="value">40 px/с</span>
-        <input id="asSpeed" type="range" min="5" max="400" step="5" value="40">
-      </label>
-      <label class="field" id="asStepField" hidden>Шаг <span id="asStepValue" class="value">90% экрана</span>
-        <input id="asStep" type="range" min="10" max="100" step="5" value="90">
-      </label>
-      <label class="field" id="asIntervalField" hidden>Пауза <span id="asIntervalValue" class="value">20 с</span>
-        <input id="asInterval" type="range" min="2" max="120" step="1" value="20">
-      </label>
+      <button id="asToggle" class="icon" data-icon="play" title="Пуск / стоп (A)" aria-label="Пуск или стоп"></button>
+      <div class="field" id="asSpeedField">
+        <span>Скорость</span>
+        <button type="button" class="icon stepper" id="asSlower" data-icon="minus" title="Медленнее ([)" aria-label="Медленнее"></button>
+        <input id="asSpeed" type="range" min="1" max="400" step="1" value="40" aria-label="Скорость автопрокрутки">
+        <button type="button" class="icon stepper" id="asFaster" data-icon="plus" title="Быстрее (])" aria-label="Быстрее"></button>
+        <span id="asSpeedValue" class="value">40 px/с</span>
+      </div>
+      <div class="field" id="asStepField" hidden>
+        <span>Шаг</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="asStep" data-dir="-1" title="Меньше" aria-label="Меньше"></button>
+        <input id="asStep" type="range" min="10" max="100" step="5" value="90" aria-label="Шаг">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="asStep" data-dir="1" title="Больше" aria-label="Больше"></button>
+        <span id="asStepValue" class="value">90% экрана</span>
+      </div>
+      <div class="field" id="asIntervalField" hidden>
+        <span>Пауза</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="asInterval" data-dir="-1" title="Короче" aria-label="Короче"></button>
+        <input id="asInterval" type="range" min="2" max="120" step="1" value="20" aria-label="Пауза">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="asInterval" data-dir="1" title="Длиннее" aria-label="Длиннее"></button>
+        <span id="asIntervalValue" class="value">20 с</span>
+      </div>
       <label class="field">Режим
         <select id="asMode" aria-label="Режим автопрокрутки">
           <option value="continuous">плавный</option>
@@ -140,7 +157,19 @@
         </select>
       </label>
       <div class="spacer"></div>
-      <button id="asClose" class="icon" title="Скрыть панель">✕</button>
+      <button id="asClose" class="icon" data-icon="close" title="Скрыть панель" aria-label="Скрыть панель"></button>
+    </div>
+
+    <div id="bookmarksPopover" class="popover" hidden>
+      <div class="popover-head">
+        <h3>Закладки</h3>
+        <button id="bmAdd" class="primary" data-icon="bookmarkPlus">Добавить здесь</button>
+      </div>
+      <p class="popover-hint">
+        Закладка запоминает место на странице, на полях появляется флажок.
+        Щелчок по закладке возвращает к этому месту. Поставить быстро — клавиша B.
+      </p>
+      <div id="bookmarksList"></div>
     </div>
 
     <div id="appearancePanel" class="popover" hidden>

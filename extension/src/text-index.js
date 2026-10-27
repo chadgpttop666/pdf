@@ -7,7 +7,7 @@
 // без которой невозможно подсветить читаемое место.
 
 /** Ровно те же параметры, с которыми текстовый слой строит pdf.js, — иначе
- *  порядок элементов разойдётся с textDivs и подсветка уедет. */
+ *  порядок кусков разойдётся со спанами слоя и подсветка уедет. */
 export const TEXT_CONTENT_PARAMS = { includeMarkedContent: true, disableNormalization: true };
 
 const MAX_SENTENCE_LENGTH = 320;
@@ -18,44 +18,40 @@ const MIN_SENTENCE_LENGTH = 3;
  *
  * Главная тонкость — перенос строки. Внутри абзаца он не должен попадать в
  * текст: сегментатор считает его концом предложения и рвёт фразу пополам.
- * Отличаем перенос от нового абзаца геометрически, по шагу между строками:
- * увеличенный шаг — новый абзац, обычный — та же фраза дальше. Длина
- * подставляемого разделителя всегда один символ, поэтому карта позиций
- * остаётся точной.
+ * Новый абзац узнаём по признакам книжной вёрстки: увеличенный шаг между
+ * строками, короткая строка (конец абзаца, заголовок, «* * *») или красная
+ * строка у следующей. Длина подставляемого разделителя всегда один символ,
+ * поэтому карта позиций остаётся точной.
+ *
+ * Номер спана считаем только по непустым кускам: пустые (pdf.js ставит их
+ * в конце почти каждой строки книжной вёрстки) он создаёт, но в DOM не
+ * вставляет. Если их считать, подсветка отстаёт на элемент с каждой строкой.
  *
  * @param {Array} items результат getTextContent().items
- * @returns {{ text: string, entries: Array<{divIndex:number,start:number,end:number}> }}
+ * @returns {{ text: string, entries: Array<{spanIndex:number,start:number,end:number}> }}
  */
 export function buildPageText(items) {
-  const records = [];
-  let divIndex = -1;
-  for (const item of items) {
-    if (item.str === undefined) continue; // служебные маркеры структуры
-    divIndex += 1;
-    records.push({ item, divIndex, empty: item.str === '' });
-  }
-
-  const lineStep = medianLineStep(records);
+  const lines = groupLines(items);
+  const layout = measureLayout(lines);
 
   let text = '';
   const entries = [];
-  let previous = null;
-  let pendingNewline = false;
-
-  for (const record of records) {
-    const { item } = record;
-    if (record.empty) {
-      pendingNewline = pendingNewline || Boolean(item.hasEOL);
-      continue;
+  lines.forEach((line, lineIndex) => {
+    if (lineIndex > 0 && text) {
+      const last = text.at(-1);
+      if (last !== ' ' && last !== '\n') {
+        text += isParagraphBreak(lines[lineIndex - 1], line, layout) ? '\n' : ' ';
+      }
     }
-    if (previous) text += separatorBetween(previous, item, text, { lineStep, pendingNewline });
-
-    const start = text.length;
-    text += item.str;
-    entries.push({ divIndex: record.divIndex, start, end: text.length });
-    pendingNewline = Boolean(item.hasEOL);
-    previous = item;
-  }
+    let previous = null;
+    for (const { item, spanIndex } of line.records) {
+      if (previous) text += gapSeparator(previous, item, text);
+      const start = text.length;
+      text += item.str;
+      entries.push({ spanIndex, start, end: text.length });
+      previous = item;
+    }
+  });
 
   return { text, entries };
 }
@@ -68,37 +64,80 @@ function isLineBreak(previous, item, pendingNewline = false) {
   return pendingNewline || Math.abs(itemY(item) - itemY(previous)) > itemFontSize(previous) * 0.5;
 }
 
-/** Типичный шаг между строками — опора для распознавания абзацев. */
-function medianLineStep(records) {
-  const steps = [];
+/** Куски текста по строкам; пустые куски только отмечают конец строки. */
+function groupLines(items) {
+  const lines = [];
+  let spanIndex = -1;
+  let current = null;
   let previous = null;
   let pendingNewline = false;
-  for (const record of records) {
-    if (record.empty) {
-      pendingNewline = pendingNewline || Boolean(record.item.hasEOL);
+
+  for (const item of items) {
+    if (item.str === undefined) continue; // служебные маркеры структуры
+    if (item.str === '') {
+      pendingNewline = pendingNewline || Boolean(item.hasEOL);
       continue;
     }
-    if (previous && isLineBreak(previous, record.item, pendingNewline)) {
-      const step = Math.abs(itemY(record.item) - itemY(previous));
-      if (step > 0) steps.push(step);
+    spanIndex += 1;
+    if (!current || isLineBreak(previous, item, pendingNewline)) {
+      current = { records: [] };
+      lines.push(current);
     }
-    pendingNewline = Boolean(record.item.hasEOL);
-    previous = record.item;
+    current.records.push({ item, spanIndex });
+    pendingNewline = Boolean(item.hasEOL);
+    previous = item;
   }
-  return steps.length ? median(steps) : 0;
+
+  for (const line of lines) {
+    const first = line.records[0].item;
+    line.left = Math.min(...line.records.map(({ item }) => itemX(item)));
+    line.right = Math.max(...line.records.map(({ item }) => itemX(item) + (item.width ?? 0)));
+    line.y = itemY(first);
+    line.fontSize = itemFontSize(first);
+    line.firstText = first.str.trimStart();
+    line.lastText = line.records.at(-1).item.str.trimEnd();
+  }
+  return lines;
 }
 
-function separatorBetween(previous, item, text, { lineStep, pendingNewline }) {
-  if (!text) return '';
-  const last = text.at(-1);
-  if (last === '\n' || last === ' ' || item.str.startsWith(' ')) return '';
-
-  if (isLineBreak(previous, item, pendingNewline)) {
-    const step = Math.abs(itemY(item) - itemY(previous));
-    const paragraph = lineStep > 0 && step > lineStep * 1.4;
-    return paragraph ? '\n' : ' ';
+/** Типичные шаг строк, ширина и левый край — то, от чего отличается абзац. */
+function measureLayout(lines) {
+  const steps = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const step = Math.abs(lines[i].y - lines[i - 1].y);
+    if (step > 0) steps.push(step);
   }
+  const usable = lines.length >= 3;
+  return {
+    lineStep: steps.length ? median(steps) : 0,
+    width: usable ? median(lines.map((line) => line.right - line.left)) : 0,
+    left: usable ? median(lines.map((line) => line.left)) : 0,
+  };
+}
 
+const SENTENCE_END = /[.!?…:;»"')\]]$/;
+const STARTS_PARAGRAPH = /^[\p{Lu}\d«„"—–-]/u;
+
+function isParagraphBreak(previous, next, layout) {
+  const step = Math.abs(next.y - previous.y);
+  if (layout.lineStep > 0 && step > layout.lineStep * 1.4) return true;
+  if (!layout.width) return false;
+
+  // Совсем короткая строка — заголовок, «* * *» или хвост абзаца.
+  const width = previous.right - previous.left;
+  if (width < layout.width * 0.5) return true;
+  // Недотянутая до края строка перед фразой с заглавной — конец абзаца.
+  // Одной короткой строки мало: в тексте без выравнивания такие на каждом шагу.
+  const startsAnew = STARTS_PARAGRAPH.test(next.firstText);
+  if (width < layout.width * 0.85 && startsAnew && SENTENCE_END.test(previous.lastText)) return true;
+  // Красная строка у следующей строки.
+  return startsAnew && next.left > layout.left + next.fontSize * 0.8;
+}
+
+/** Пробел между кусками одной строки, если на письме между ними зазор. */
+function gapSeparator(previous, item, text) {
+  const last = text.at(-1);
+  if (last === ' ' || last === '\n' || item.str.startsWith(' ')) return '';
   const gap = itemX(item) - (itemX(previous) + (previous.width ?? 0));
   return gap > itemFontSize(previous) * 0.2 ? ' ' : '';
 }
@@ -130,28 +169,46 @@ export function segmentSentences(text, lang = 'ru') {
     }
   }
 
-  return mergeNumbering(ranges, source)
+  return mergeFalseBreaks(ranges, source)
     .flatMap((range) => splitLong(trimRange(source, range), source))
     .filter(Boolean);
 }
 
+// Сокращения, после которых точка не заканчивает фразу. Сегментатор рвёт
+// фразу только перед заглавной буквой, поэтому важны сокращения, за которыми
+// обычно идёт имя: «проф. Франца», «ул. Ленина». А «и т. д.» или «в 1928 г.»
+// перед заглавной — это как раз настоящий конец предложения.
+const ABBREVIATION = new RegExp(
+  '(?:^|[\\s(«„"])(?:' +
+    [
+      'проф', 'акад', 'доц', 'ген', 'тов', 'кн', 'гр', 'св', 'им', 'ул', 'пр', 'см', 'ср', 'напр',
+      'т\\.\\s?е', 'Mr', 'Mrs', 'Dr', 'Prof', 'St', 'vs', 'e\\.g', 'i\\.e',
+    ].join('|') +
+    ')\\.$',
+  'iu'
+);
+// Инициал: одна заглавная буква с точкой — «А. С. Пушкин», «Л. Эрхард».
+const INITIAL = /(?:^|[\s(«„"])\p{Lu}\.$/u;
+// Номер в заголовке: «Глава 1.», «§ 2)».
+const NUMBERING = /\d[.)]$/;
+
 /**
- * «Глава 1.» — не предложение, а начало заголовка: сегментатор видит точку
- * после числа и обрывает фразу. Такие огрызки приклеиваем к следующему куску.
+ * Сегментатор рвёт фразу после любой точки перед заглавной буквой: после
+ * номера главы, инициала, сокращения «проф.». Такие огрызки приклеиваем к
+ * следующему куску.
  */
-function mergeNumbering(ranges, text) {
+function mergeFalseBreaks(ranges, text) {
   const merged = [];
+  let glueNext = false;
   for (const range of ranges) {
-    const piece = text.slice(range.start, range.end).trim();
+    const piece = text.slice(range.start, range.end).trimEnd();
     const previous = merged.at(-1);
-    const isNumbering = piece.length < 20 && /\d[.)]$/.test(piece);
-    if (previous && previous.numbering) {
-      merged[merged.length - 1] = { start: previous.start, end: range.end, numbering: false };
-      continue;
-    }
-    merged.push({ ...range, numbering: isNumbering });
+    if (previous && glueNext) previous.end = range.end;
+    else merged.push({ start: range.start, end: range.end });
+    glueNext =
+      (piece.trim().length < 20 && NUMBERING.test(piece)) || INITIAL.test(piece) || ABBREVIATION.test(piece);
   }
-  return merged.map(({ start, end }) => ({ start, end }));
+  return merged;
 }
 
 /** Обрезает пробелы по краям диапазона, чтобы подсветка не захватывала пустоту. */
@@ -284,11 +341,11 @@ export class TextIndex {
     return index < 0 ? Math.max(0, page.sentences.length - 1) : index;
   }
 
-  /** Позиция в тексте страницы по элементу текстового слоя и смещению в нём. */
-  async offsetForDiv(pageNumber, divIndex, offsetInDiv = 0) {
+  /** Позиция в тексте страницы по спану текстового слоя и смещению в нём. */
+  async offsetForSpan(pageNumber, spanIndex, offsetInSpan = 0) {
     const page = await this.page(pageNumber);
-    const entry = page?.entries.find((candidate) => candidate.divIndex === divIndex);
+    const entry = page?.entries.find((candidate) => candidate.spanIndex === spanIndex);
     if (!entry) return 0;
-    return Math.min(entry.end, entry.start + offsetInDiv);
+    return Math.min(entry.end, entry.start + offsetInSpan);
   }
 }

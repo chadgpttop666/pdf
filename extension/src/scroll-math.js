@@ -1,7 +1,7 @@
 // Чистые расчёты прокрутки — вынесены отдельно, чтобы проверять их обычными
 // юнит-тестами без браузера.
 
-export const MIN_SPEED = 5;
+export const MIN_SPEED = 1;
 export const MAX_SPEED = 400;
 
 /** Шаг перемотки «на экран»: высота области минус нахлёст. */
@@ -28,10 +28,18 @@ export function clampSpeed(speed) {
   return clamp(Math.round(speed), MIN_SPEED, MAX_SPEED);
 }
 
-/** Шаг изменения скорости: чем быстрее, тем крупнее, чтобы хватало одного нажатия. */
-export function speedIncrement(speed) {
-  if (speed < 40) return 5;
-  if (speed < 120) return 10;
+/**
+ * Шаг изменения скорости: на медленных скоростях мелкий (разница между 4 и
+ * 5 px/с при чтении заметна), на быстрых — крупный, чтобы хватало пары
+ * нажатий. При замедлении шаг берётся по скорости, в которую идём, —
+ * иначе с 10 px/с сразу прыгнули бы на 8.
+ */
+export function speedIncrement(speed, direction = 1) {
+  const base = direction < 0 ? speed - 1 : speed;
+  if (base < 10) return 1;
+  if (base < 30) return 2;
+  if (base < 60) return 5;
+  if (base < 150) return 10;
   return 25;
 }
 

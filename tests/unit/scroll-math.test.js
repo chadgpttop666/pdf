@@ -47,14 +47,22 @@ describe('nextAutoScrollTop', () => {
 
 describe('clampSpeed и speedIncrement', () => {
   it('держит скорость в допустимых пределах', () => {
-    assert.equal(clampSpeed(0), 5);
+    assert.equal(clampSpeed(0), 1);
     assert.equal(clampSpeed(10000), 400);
     assert.equal(clampSpeed(42.4), 42);
   });
 
-  it('увеличивает шаг регулировки вместе со скоростью', () => {
-    assert.equal(speedIncrement(20), 5);
-    assert.equal(speedIncrement(60), 10);
+  it('на медленных скоростях шаг регулировки мелкий, на быстрых — крупный', () => {
+    assert.equal(speedIncrement(5), 1);
+    assert.equal(speedIncrement(20), 2);
+    assert.equal(speedIncrement(40), 5);
+    assert.equal(speedIncrement(100), 10);
     assert.equal(speedIncrement(300), 25);
+  });
+
+  it('при замедлении шаг берётся по скорости, в которую идём', () => {
+    assert.equal(speedIncrement(10, -1), 1); // 10 → 9, а не 10 → 8
+    assert.equal(speedIncrement(30, -1), 2);
+    assert.equal(speedIncrement(30, 1), 5);
   });
 });

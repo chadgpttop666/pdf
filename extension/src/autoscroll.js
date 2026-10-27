@@ -33,7 +33,7 @@ export function createAutoScroll(app) {
   }
 
   function syncUi() {
-    toggleButton.textContent = running ? '❚❚' : '▶';
+    app.icons.setIcon(toggleButton, running ? 'pause' : 'play');
     toggleButton.setAttribute('aria-pressed', String(running));
     $('btnAutoScroll').setAttribute('aria-pressed', String(running));
     $('btnAutoScroll').classList.toggle('active', running);
@@ -134,7 +134,7 @@ export function createAutoScroll(app) {
 
   function adjustSpeed(direction) {
     const speed = getSetting('autoScrollSpeed');
-    setSpeed(speed + direction * speedIncrement(speed));
+    setSpeed(speed + direction * speedIncrement(speed, direction));
   }
 
   function restartIfRunning() {
@@ -152,6 +152,8 @@ export function createAutoScroll(app) {
     bar.hidden = true;
   });
   on(speedInput, 'input', () => setSpeed(Number(speedInput.value)));
+  on($('asSlower'), 'click', () => adjustSpeed(-1));
+  on($('asFaster'), 'click', () => adjustSpeed(1));
   on(stepInput, 'input', async () => {
     await updateSettings({ autoScrollStepPercent: Number(stepInput.value) });
     syncUi();
