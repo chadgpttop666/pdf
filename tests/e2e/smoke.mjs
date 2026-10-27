@@ -6,6 +6,7 @@
 // Chromium. Синтез речи подменяется заглушкой: голосов в headless нет.
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -223,6 +224,21 @@ try {
 
   const recent = await page.evaluate(() => document.querySelectorAll('#welcomeRecent li').length);
   check('документ попал в недавние', recent >= 1, `записей: ${recent}`);
+
+  // Скачивание: сохраняется исходный PDF, а не страница вьюера
+  const original = readFileSync(join(root, 'tests', 'fixtures', 'sample.pdf'));
+  for (const [how, trigger] of [
+    ['кнопкой', () => page.click('#btnDownload')],
+    ['по Ctrl+S', () => page.keyboard.press('Control+KeyS')],
+  ]) {
+    const [download] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), trigger()]);
+    const saved = readFileSync(await download.path());
+    check(
+      `PDF скачивается ${how}`,
+      download.suggestedFilename() === 'sample.pdf' && saved.equals(original),
+      `${download.suggestedFilename()}, ${saved.length} из ${original.length} байт`
+    );
+  }
 
   // ── Книжная вёрстка на русском: здесь всплывало то, чего не видно на простом PDF ──
   await page.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);

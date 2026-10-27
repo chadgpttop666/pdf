@@ -89,4 +89,34 @@ export class DocumentLoader {
       return null;
     }
   }
+
+  /**
+   * Сохранить исходный PDF на компьютер. Обычная ссылка с атрибутом download
+   * не требует отдельного разрешения: Firefox кладёт файл в «Загрузки» или
+   * спрашивает, куда сохранить, — как настроено в браузере.
+   * @returns {Promise<string|null>} имя файла или null, если документа нет
+   */
+  async download() {
+    const bytes = await this.getBytes();
+    if (!bytes) return null;
+
+    const filename = downloadName(this.source?.name);
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Сразу отзывать нельзя: загрузка стартует уже после щелчка.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return filename;
+  }
+}
+
+/** Имя для сохранения: без символов, запрещённых в Windows, и с расширением .pdf. */
+export function downloadName(name) {
+  const base = (name || 'документ').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || 'документ';
+  return /\.pdf$/i.test(base) ? base : `${base}.pdf`;
 }

@@ -124,10 +124,21 @@ export function openBytesFromLibrary(bytes, record) {
   );
 }
 
+/** Скачать открытый PDF на компьютер — кнопкой «Скачать» или Ctrl+S. */
+export async function downloadPdf() {
+  const filename = await app.loader.download();
+  if (filename) app.hud.show(`Сохраняю «${filename}»`, { duration: 2500 });
+  else app.hud.show('Сначала откройте документ');
+}
+
 function wireFileInputs() {
   const picker = $('filePicker');
   const pick = () => picker.click();
   on($('btnOpen'), 'click', pick);
+  on($('btnDownload'), 'click', downloadPdf);
+  app.eventBus.on('documentopened', () => {
+    $('btnDownload').disabled = false;
+  });
   on($('welcomeOpen'), 'click', pick);
   on(picker, 'change', async () => {
     const [file] = picker.files || [];
@@ -227,6 +238,7 @@ async function main() {
   app.openFile = openFile;
   app.openUrl = openUrl;
   app.openBytesFromLibrary = openBytesFromLibrary;
+  app.downloadPdf = downloadPdf;
   app.toolbar = createToolbar(app);
   app.wakeLock = createWakeLock();
   app.scroller = createScroller(app.container);

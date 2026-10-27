@@ -85,6 +85,8 @@ export const BINDINGS = [
   { section: 'Навигация и файлы' },
   { combos: ['F4'], label: 'Боковая панель', run: (app) => app.toggleSidebar() },
   { combos: ['Ctrl+KeyO'], label: 'Открыть файл', run: () => document.getElementById('filePicker').click() },
+  // Иначе Firefox сохранит страницу самого вьюера, а не документ.
+  { combos: ['Ctrl+KeyS'], label: 'Скачать PDF на компьютер', run: (app) => app.downloadPdf() },
   { combos: ['Ctrl+KeyF', 'Slash'], label: 'Поиск по документу', run: (app) => app.find?.open() },
   { combos: ['F3'], label: 'Следующее совпадение', run: (app) => app.find?.again(1) },
   { combos: ['Shift+F3'], label: 'Предыдущее совпадение', run: (app) => app.find?.again(-1) },
