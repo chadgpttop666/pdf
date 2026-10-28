@@ -58,6 +58,36 @@
 
 Нужен Firefox 140 или новее.
 
+### Постоянная установка с автообновлением
+
+Firefox ставит насовсем только подписанные дополнения. Подписывает их
+addons.mozilla.org (AMO) — бесплатно и без публикации в каталоге. В
+репозитории это делает GitHub Actions: при каждой новой версии он подписывает
+расширение и выкладывает его в **Releases**, а установленный Firefox сам
+находит обновление. Настраивается один раз:
+
+1. **Репозиторий публичный.** Settings → General → внизу Danger Zone →
+   Change repository visibility → Public. Иначе Firefox не сможет без
+   логина скачать обновление. В репозитории только код читалки: ваши PDF,
+   закладки и ключи туда не попадают.
+2. **Ключи AMO.** Войдите на https://addons.mozilla.org под аккаунтом Mozilla
+   (тем же, что для синхронизации Firefox, или создайте новый), откройте
+   https://addons.mozilla.org/developers/addon/api/key/, примите соглашение
+   разработчика и нажмите **Generate new credentials**. Появятся два значения:
+   *JWT issuer* и *JWT secret*.
+3. **Секреты в репозитории.** Settings → Secrets and variables → Actions →
+   New repository secret: `AMO_JWT_ISSUER` — значение JWT issuer,
+   `AMO_JWT_SECRET` — значение JWT secret. Секреты видит только GitHub
+   Actions, в коде и логах их нет.
+4. **Первая подпись.** Actions → «Подпись и релиз» → Run workflow. Через
+   несколько минут в Releases появится `pdf-reader-<версия>.xpi`.
+5. **Установка.** Если стоит временная версия — удалите её в
+   `about:debugging`. Скачайте `.xpi` из Releases и перетащите в окно
+   Firefox → «Добавить».
+
+Дальше Firefox проверяет обновления сам, примерно раз в сутки. Проверить
+сразу: `about:addons` → шестерёнка → «Проверить наличие обновлений».
+
 ### Быстро, на одну сессию
 
 1. Скачайте репозиторий (кнопка **Code → Download ZIP**) и распакуйте.
@@ -65,25 +95,10 @@
 3. **Загрузить временное дополнение…** → выберите файл `extension/manifest.json`.
 
 Так расширение работает до перезапуска браузера — удобно, чтобы попробовать.
+Закладки и список недавних временной версии при её удалении теряются.
 
-### Насовсем
-
-Firefox устанавливает только подписанные дополнения. Подпись бесплатная и не
-требует публикации в каталоге:
-
-```bash
-npm install
-npm run build                     # соберёт архив в dist/
-npx web-ext sign --channel unlisted \
-  --api-key <ключ> --api-secret <секрет> --source-dir extension
-```
-
-Ключи берутся на https://addons.mozilla.org/developers/addon/api/key/.
-Готовый `.xpi` из `web-ext-artifacts/` открывается в Firefox обычным
-перетаскиванием в окно браузера.
-
-Другой путь — Firefox Developer Edition или ESR с выключенной проверкой
-подписи (`about:config` → `xpinstall.signatures.required` → `false`); в
+Ещё путь без подписи — Firefox Developer Edition или ESR с выключенной
+проверкой (`about:config` → `xpinstall.signatures.required` → `false`); в
 обычном выпуске Firefox этот переключатель не действует.
 
 ## Как открывать документы

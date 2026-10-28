@@ -1,0 +1,91 @@
+# Подпись расширения на addons.mozilla.org и выпуск релиза.
+#
+# Новая версия в extension/manifest.json → AMO подписывает её (канал unlisted:
+# без публикации в каталоге) → релиз v<версия> с подписанным .xpi и
+# updates.json, по которому установленный Firefox сам подтягивает обновление.
+# Ключи AMO лежат в секретах репозитория — см. README, «Постоянная установка».
+
+name: Подпись и релиз
+
+on:
+  push:
+    branches: [main, claude/pdf-reader-app-lm05nj]
+    paths:
+      - 'extension/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/make-updates-json.mjs'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Зависимости
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: Юнит-тесты
+        run: npm test
+
+      # Ошибка линтера — это отказ AMO в подписи, поэтому проверяем заранее.
+      - name: Проверка расширения
+        run: npm run lint
+
+      - name: Что выпускать
+        id: plan
+        run: |
+          version="$(node -p "require('./extension/manifest.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "Релиз v$version уже есть — подписывать нечего."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$AMO_JWT_ISSUER" ] || [ -z "$AMO_JWT_SECRET" ]; then
+            echo "::warning title=Нет ключей AMO::Добавьте секреты AMO_JWT_ISSUER и AMO_JWT_SECRET (README, «Постоянная установка») и перезапустите workflow."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Подпись на AMO
+        if: steps.plan.outputs.release == 'true'
+        run: >
+          npx web-ext sign
+          --channel unlisted
+          --source-dir extension
+          --artifacts-dir signed
+          --api-key "$AMO_JWT_ISSUER"
+          --api-secret "$AMO_JWT_SECRET"
+          --approval-timeout 1800000
+
+      - name: Релиз
+        if: steps.plan.outputs.release == 'true'
+        run: |
+          version="${{ steps.plan.outputs.version }}"
+          xpi="pdf-reader-$version.xpi"
+          mv signed/*.xpi "$xpi"
+          node scripts/make-updates-json.mjs "$xpi" > updates.json
+          gh release create "v$version" "$xpi" updates.json \
+            --target "$GITHUB_SHA" \
+            --title "PDF-читалка $version" \
+            --notes "Подписанная версия для Firefox. Установка: скачайте $xpi и перетащите в окно Firefox. Уже установленная читалка обновится сама."

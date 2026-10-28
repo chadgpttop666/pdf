@@ -1,6 +1,6 @@
 {
   "name": "pdf-reader-extension",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Читалка PDF для Firefox: автопрокрутка, озвучка, прокрутка по экрану",
   "private": true,
   "type": "module",

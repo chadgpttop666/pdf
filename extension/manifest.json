@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "PDF-читалка",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Чтение PDF с автопрокруткой, озвучкой и перемоткой по экрану",
   "browser_specific_settings": {
     "gecko": {
       "id": "pdf-reader@chadgpttop666.github.io",
       "strict_min_version": "140.0",
+      "update_url": "https://github.com/chadgpttop666/pdf/releases/latest/download/updates.json",
       "data_collection_permissions": {
         "required": [
           "none"
