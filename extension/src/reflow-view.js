@@ -101,7 +101,24 @@ export function createReflow(app) {
     const marker = el('div', { class: 'rf-page-marker', 'aria-hidden': 'true' }, String(pageNumber));
     section.replaceChildren(marker, ...paragraphs);
     if (!page.sentences.length) {
-      section.append(el('p', { class: 'rf-empty' }, 'На этой странице нет текста — возможно, это картинка или скан.'));
+      const empty = el('p', { class: 'rf-empty' }, 'На этой странице нет текста — возможно, это картинка или скан. ');
+      if (app.ocr && !app.ocr.has(pageNumber)) {
+        empty.append(
+          el('button', {
+            class: 'rf-ocr',
+            onclick: async (event) => {
+              const button = event.currentTarget;
+              button.disabled = true;
+              button.textContent = 'Распознаю…';
+              await app.ocr.recognize(pageNumber).catch(() => {
+                button.disabled = false;
+                button.textContent = 'Не получилось — ещё раз';
+              });
+            },
+          }, 'Распознать текст')
+        );
+      }
+      section.append(empty);
     }
     app.eventBus.dispatch('reflowpagefilled', { source: api, pageNumber });
   }
@@ -290,6 +307,14 @@ export function createReflow(app) {
 
   onSettingsChanged((_all, changed) => {
     if (Object.keys(changed).some((key) => key.startsWith('reflow') || key === 'uiTheme')) applyLook();
+  });
+
+  // Страницу распознали — заполняем её заново уже с текстом.
+  app.eventBus.on('ocrpagedone', ({ pageNumber }) => {
+    index?.forget?.(pageNumber);
+    if (!filled.has(pageNumber)) return;
+    filled.delete(pageNumber);
+    fillPage(pageNumber);
   });
 
   const api = {

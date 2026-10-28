@@ -831,6 +831,81 @@ try {
     JSON.stringify(roundTrip)
   );
 
+  // ── Распознавание скана ──
+  await page.goto(`${BASE}/viewer.html?file=/fixtures/scan.pdf`);
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForSelector('.page[data-page-number="1"] .ocr-offer button.primary', { timeout: 15000 });
+  check('на странице-скане предлагается распознать текст', true);
+  await page.click('.page[data-page-number="1"] .ocr-offer button.primary');
+  await page.waitForFunction(() => window.pdfReaderApp.ocr.has(1), null, { timeout: 90000 });
+  await page.waitForFunction(
+    () => document.querySelectorAll('.page[data-page-number="1"] .textLayer span:not(.markedContent)').length > 100,
+    null,
+    { timeout: 15000 }
+  );
+  const ocrLayer = await page.evaluate(() => {
+    const spans = [...document.querySelectorAll('.page[data-page-number="1"] .textLayer span:not(.markedContent)')];
+    return {
+      count: spans.length,
+      text: spans.map((span) => span.textContent).join(''),
+      offer: Boolean(document.querySelector('.page[data-page-number="1"] .ocr-offer')),
+    };
+  });
+  check(
+    'распознанный текст лёг текстовым слоем на скан',
+    ocrLayer.count > 100 && ocrLayer.text.includes('Красная нить любого длинного текста') && !ocrLayer.offer,
+    `${ocrLayer.count} слов: «${ocrLayer.text.slice(0, 80)}…»`
+  );
+
+  await page.click('#viewerContainer', { position: { x: 5, y: 5 } });
+  await page.keyboard.press('Control+f');
+  await page.keyboard.type('непрерывность');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1000);
+  const scanFind = await page.evaluate(() => document.getElementById('findStatus').textContent);
+  check('поиск находит распознанный текст', /[1-9]\d* из [1-9]/.test(scanFind), scanFind);
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(() => {
+    window.spokenSentences.length = 0;
+    window.pdfReaderApp.tts.start({ pageNumber: 1, sentenceIndex: 0 });
+  });
+  await page.waitForFunction(() => window.spokenSentences.some((text) => text.includes('Красная нить любого длинного текста')), null, {
+    timeout: 20000,
+  });
+  check('озвучка читает распознанный скан', true);
+  // Следующая страница-скан распознаётся заранее, пока читается эта.
+  await page.waitForFunction(() => window.pdfReaderApp.ocr.has(2), null, { timeout: 90000 });
+  const scanText = await page.evaluate(async () => {
+    const pages = [1, 2].map((n) => window.pdfReaderApp.loader.pdfDocument.getPage(n).then((p) => p.getTextContent()));
+    return (await Promise.all(pages)).map((content) => content.items.map((item) => item.str).join('')).join(' ');
+  });
+  const latinWords = scanText.match(/\b[A-Za-z]{2,}\b/g) || [];
+  check(
+    'русский скан распознан русским языком — без латинских двойников',
+    scanText.includes('силы на то, чтобы') && latinWords.length === 0,
+    latinWords.join(', ') || 'латиницы нет'
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  await page.evaluate(() => window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: 0 }));
+  await page.waitForTimeout(1200);
+  const scanPage2 = await page.evaluate(() => ({ position: window.pdfReaderApp.tts.position, spoken: window.spokenSentences.at(-1) }));
+  check(
+    'следующая страница скана распознана заранее и читается',
+    scanPage2.position.pageNumber === 2 && /[А-Яа-я]{3}/.test(scanPage2.spoken || ''),
+    JSON.stringify(scanPage2)
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+
+  await page.reload();
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.pdfReaderApp.ocr.has(1) && window.pdfReaderApp.ocr.has(2), null, { timeout: 8000 });
+  await page.waitForTimeout(800);
+  const restoredOcr = await page.evaluate(
+    () => document.querySelectorAll('.page[data-page-number="1"] .textLayer span:not(.markedContent)').length
+  );
+  check('распознанное сохраняется — второй раз не распознаётся', restoredOcr > 100, `${restoredOcr} слов`);
+
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {
   failures += 1;

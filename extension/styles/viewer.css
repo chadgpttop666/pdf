@@ -344,6 +344,34 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 #app.tts-picking .textLayer,
 #app.tts-picking .textLayer span { cursor: pointer; }
 
+/* ── Распознавание сканов ────────────────────────────────────────── */
+
+/* Плашка поверх страницы без текста: предложение распознать и прогресс. */
+.ocr-offer {
+  position: absolute;
+  top: calc(var(--crop-t, 0px) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 8px 10px;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.ocr-offer .ocr-hint { color: var(--fg-muted); }
+.ocr-offer .ocr-progress { font-variant-numeric: tabular-nums; }
+#app[data-page-theme='invert'] .ocr-offer { filter: invert(1) hue-rotate(180deg); }
+.rf-ocr { margin-left: 6px; font-style: normal; }
+
 /* ── HUD, всплывающие панели, приветствие ────────────────────────── */
 
 #hud {

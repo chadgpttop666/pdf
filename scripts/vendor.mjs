@@ -1,4 +1,5 @@
-// Копирует нужные куски pdfjs-dist, ONNX Runtime и фонемизатора Piper в
+// Копирует нужные куски pdfjs-dist, ONNX Runtime, фонемизатора Piper и
+// tesseract.js (распознавание сканов) в
 // extension/vendor/, чтобы расширение устанавливалось из репозитория без
 // npm install. Загружать код из сети расширению нельзя — всё, что исполняется
 // (включая WASM), должно лежать внутри.
@@ -16,6 +17,13 @@ const src = join(root, 'node_modules', 'pdfjs-dist');
 const dst = join(root, 'extension', 'vendor');
 const ortSrc = join(root, 'node_modules', 'onnxruntime-web', 'dist');
 const piperSrc = join(root, 'node_modules', '@diffusionstudio', 'piper-wasm', 'build');
+const tesseractSrc = join(root, 'node_modules', 'tesseract.js', 'dist');
+const tesseractCoreSrc = join(root, 'node_modules', 'tesseract.js-core');
+// Ядро — одна сборка с SIMD и только LSTM: её понимает любой Firefox из
+// поддерживаемых, а выбор варианта воркером оставил бы ссылки на CDN.
+const TESSERACT_CORE = 'tesseract-core-simd-lstm.wasm.js';
+// Данные языков best_int: точность почти как у best, размер втрое меньше.
+const TESSERACT_LANGS = ['rus', 'eng'];
 
 // ONNX Runtime: только CPU-сборка на WASM. Потоки в расширении недоступны
 // (нет cross-origin isolation), поэтому работает однопоточно.
@@ -100,6 +108,32 @@ async function vendorOrt() {
   }
 }
 
+/**
+ * В сборке tesseract.js есть запасные ветки на конструкторе Function — на
+ * случай, когда нет globalThis. В Firefox он есть всегда, ветки
+ * недостижимы, но линтер AMO считает их eval. Заменяем на globalThis.
+ */
+function removeEvalFallbacks(code) {
+  return code
+    .replace(/new Function\("return this"\)\(\)/g, 'globalThis')
+    .replace(/Function\("r","regeneratorRuntime = r"\)\((\w+)\)/g, '(globalThis.regeneratorRuntime=$1)');
+}
+
+/** tesseract.js: обёртка, воркер, ядро и данные языков — всё локально. */
+async function vendorTesseract() {
+  const out = join(dst, 'tesseract');
+  await mkdir(join(out, 'lang'), { recursive: true });
+  for (const file of ['tesseract.esm.min.js', 'worker.min.js']) {
+    const code = await readFile(join(tesseractSrc, file), 'utf8');
+    await writeFile(join(out, file), removeEvalFallbacks(code).replace(/\/\/# sourceMappingURL=\S*\s*$/, ''));
+  }
+  await cp(join(tesseractCoreSrc, TESSERACT_CORE), join(out, TESSERACT_CORE));
+  for (const lang of TESSERACT_LANGS) {
+    const from = join(root, 'node_modules', '@tesseract.js-data', lang, '4.0.0_best_int', `${lang}.traineddata.gz`);
+    await cp(from, join(out, 'lang', `${lang}.traineddata.gz`));
+  }
+}
+
 async function main() {
   if (!existsSync(src)) {
     console.error('Нет node_modules/pdfjs-dist — сначала выполните npm install');
@@ -123,12 +157,14 @@ async function main() {
 
   await vendorOrt();
   const espeakBytes = await vendorPiper();
+  await vendorTesseract();
 
   const versionOf = async (dir) => JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')).version;
   const versions = [
     `pdfjs-dist ${await versionOf(src)}`,
     `onnxruntime-web ${await versionOf(dirname(ortSrc))}`,
     `@diffusionstudio/piper-wasm ${await versionOf(dirname(piperSrc))} (espeak-ng: ${[...ESPEAK_DICTS].join(', ')})`,
+    `tesseract.js ${await versionOf(dirname(tesseractSrc))}, tesseract.js-core ${await versionOf(tesseractCoreSrc)} (${TESSERACT_LANGS.join(', ')}, best_int)`,
   ];
   await writeFile(
     join(dst, 'VERSION'),

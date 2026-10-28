@@ -163,6 +163,11 @@ export function createTts(app) {
     return true;
   }
 
+  async function needsOcr(pageNumber) {
+    if (!app.ocr || !getSetting('ocrAuto') || app.ocr.has(pageNumber)) return false;
+    return (await app.ocr.looksScanned()) && app.ocr.isPageTextless(pageNumber);
+  }
+
   /** Синтезировать следующую фразу заранее, пока звучит текущая. */
   async function prefetchNext(page, sentenceIndex) {
     if (!provider.prepare) return;
@@ -277,6 +282,20 @@ export function createTts(app) {
       while (state !== 'idle' && myGeneration === generation) {
         const page = await index.page(position.pageNumber);
         if (!page) break;
+        // Сканы распознаём на страницу вперёд, чтобы чтение не вставало.
+        if (position.sentenceIndex === 0 && getSetting('ocrAuto')) app.ocr?.prefetch(page.pageNumber + 1);
+
+        // Страница-скан: сначала распознать, потом читать.
+        if (!page.sentences.length && (await needsOcr(page.pageNumber))) {
+          setStatus(`Стр. ${page.pageNumber}: распознаю текст скана…`);
+          try {
+            await app.ocr.recognize(page.pageNumber);
+          } catch (error) {
+            console.warn('Не удалось распознать страницу', error);
+          }
+          if (myGeneration !== generation || state === 'idle') return;
+          if (app.ocr.has(page.pageNumber)) continue; // текст появился — перечитываем страницу
+        }
 
         if (position.sentenceIndex >= page.sentences.length) {
           if (position.pageNumber >= index.numPages) {
@@ -541,6 +560,9 @@ export function createTts(app) {
       if (page) view().highlightSentence(page, position.sentenceIndex);
     });
   });
+
+  // Страницу распознали — её текст другой, перечитываем при следующем обращении.
+  app.eventBus.on('ocrpagedone', ({ pageNumber }) => index?.forget(pageNumber));
 
   onSettingsChanged(async (_all, changed) => {
     // Другой состав текста — другие предложения: индекс строим заново.

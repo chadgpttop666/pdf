@@ -1,15 +1,17 @@
 // Локальная библиотека: место чтения, закладки, сами файлы недавних
-// документов, статистика чтения по дням и скачанные нейроголоса. Всё лежит
-// в IndexedDB браузера и никуда не отправляется.
+// документов, статистика чтения по дням, скачанные нейроголоса и
+// распознанный текст сканов. Всё лежит в IndexedDB браузера и никуда не
+// отправляется.
 
 import { emptyDay, mergeDays } from './stats-math.js';
 
 const DB_NAME = 'pdf-reader';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const DOCUMENTS = 'documents';
 const FILES = 'files';
 const STATS = 'stats';
 const VOICES = 'voices';
+const OCR = 'ocr';
 
 let dbPromise = null;
 
@@ -32,6 +34,10 @@ function openDb() {
       // Версия 3: нейроголоса Piper — модель (Blob) и её описание.
       if (!db.objectStoreNames.contains(VOICES)) {
         db.createObjectStore(VOICES, { keyPath: 'id' });
+      }
+      // Версия 4: распознанный текст страниц-сканов, ключ «документ#страница».
+      if (!db.objectStoreNames.contains(OCR)) {
+        db.createObjectStore(OCR, { keyPath: 'key' }).createIndex('docId', 'docId');
       }
     };
     request.onsuccess = () => {
@@ -119,9 +125,10 @@ export async function loadFile(id) {
 }
 
 export async function deleteDocument(id) {
-  return transaction([DOCUMENTS, FILES], 'readwrite', async (documents, files) => {
+  return transaction([DOCUMENTS, FILES, OCR], 'readwrite', async (documents, files, ocr) => {
     await request(documents.delete(id));
     await request(files.delete(id));
+    for (const key of await request(ocr.index('docId').getAllKeys(id))) await request(ocr.delete(key));
   });
 }
 
@@ -156,9 +163,10 @@ export async function pruneFiles(maxBytes) {
 }
 
 export async function clearLibrary() {
-  return transaction([DOCUMENTS, FILES], 'readwrite', async (documents, files) => {
+  return transaction([DOCUMENTS, FILES, OCR], 'readwrite', async (documents, files, ocr) => {
     await request(documents.clear());
     await request(files.clear());
+    await request(ocr.clear());
   });
 }
 
@@ -200,4 +208,13 @@ export async function putVoice(record) {
 
 export async function deleteVoice(id) {
   return transaction(VOICES, 'readwrite', (store) => request(store.delete(id)));
+}
+
+/** Распознанные страницы документа. */
+export async function listOcr(docId) {
+  return transaction(OCR, 'readonly', (store) => request(store.index('docId').getAll(docId)));
+}
+
+export async function putOcr(record) {
+  return transaction(OCR, 'readwrite', (store) => request(store.put({ ...record, key: `${record.docId}#${record.pageNumber}` })));
 }

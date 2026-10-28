@@ -421,6 +421,16 @@ export class TextIndex {
     return this.furniturePromise;
   }
 
+  /**
+   * Текст страницы поменялся (её распознали) — перечитать при следующем
+   * обращении. Профиль колонтитулов тоже пересчитывается: на скане до
+   * распознавания он был пустым.
+   */
+  forget(pageNumber) {
+    this.pages.delete(pageNumber);
+    this.furniturePromise = null;
+  }
+
   async page(pageNumber) {
     if (pageNumber < 1 || pageNumber > this.numPages) return null;
     if (this.pages.has(pageNumber)) return this.pages.get(pageNumber);
@@ -435,8 +445,9 @@ export class TextIndex {
         filter = (lines) => classifyFurniture(lines, box, profile);
       }
       const { text, entries } = buildPageText(content.items, filter);
-      this.language ??= detectLanguage(text);
-      const sentences = segmentSentences(text, this.language);
+      // По пустой странице (скан до распознавания) язык не определить.
+      if (text.trim()) this.language ??= detectLanguage(text);
+      const sentences = segmentSentences(text, this.language ?? 'ru');
       return { pageNumber, text, entries, sentences };
     })();
 

@@ -21,6 +21,7 @@ import { createReadingState } from './reading-state.js';
 import { createBookmarks } from './bookmarks.js';
 import { createHighlights } from './highlights.js';
 import { createStats } from './stats.js';
+import { createOcr } from './ocr.js';
 import { createRecent } from './ui/recent.js';
 import { createSettingsDialog } from './ui/settings-dialog.js';
 import { bindKeyboard } from './keyboard.js';
@@ -269,6 +270,7 @@ async function main() {
   app.bookmarks = createBookmarks(app);
   app.highlights = createHighlights(app);
   app.stats = createStats(app);
+  app.ocr = createOcr(app);
   app.recent = createRecent(app);
   app.settingsDialog = createSettingsDialog(app);
   await app.recent.render();

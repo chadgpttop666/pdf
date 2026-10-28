@@ -267,6 +267,11 @@ export function createStats(app) {
     updateEta();
   });
   app.eventBus.on('textindexchanged', () => setTimeout(sampleAverage, 1500));
+  let resampleTimer = 0;
+  app.eventBus.on('ocrpagedone', () => {
+    clearTimeout(resampleTimer);
+    resampleTimer = setTimeout(sampleAverage, 2000);
+  });
   app.eventBus.on('pagechanging', () => updateEta());
   app.eventBus.on('viewmodechanged', () => {
     counted = null;
@@ -281,12 +286,14 @@ export function createStats(app) {
     const count = Math.min(SAMPLE_PAGES, total);
     const pages = new Set();
     for (let i = 0; i < count; i += 1) pages.add(1 + Math.round((i * (total - 1)) / Math.max(1, count - 1)));
-    let chars = 0;
+    const counts = [];
     for (const pageNumber of pages) {
-      chars += await charsOf(pageNumber);
+      counts.push(await charsOf(pageNumber));
       if (sampled !== index()) return; // пока считали, открыли другой документ
     }
-    averageChars = chars / pages.size;
+    // Пустые страницы — обычно ещё не распознанные сканы: по ним среднее занизится.
+    const withText = counts.filter((count) => count > 0);
+    averageChars = withText.length ? withText.reduce((sum, count) => sum + count, 0) / withText.length : 0;
     updateEta();
   }
 
