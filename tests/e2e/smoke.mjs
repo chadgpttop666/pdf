@@ -437,6 +437,117 @@ try {
   );
   await page.evaluate(() => window.pdfReaderApp.bookmarks.closePopover());
 
+  // ── Выделения и заметки ──
+  await page.evaluate(() => window.pdfReaderApp.tts.showBar(false));
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
+  await page.waitForTimeout(900);
+  const selected = await page.evaluate(async () => {
+    const { textSpansOfPage } = await import('/src/visible-text.js');
+    const spans = textSpansOfPage(window.pdfReaderApp, 3);
+    const index = spans.findIndex((span, i) => span.textContent.length > 30 && spans[i + 1]?.textContent.length > 30);
+    const range = document.createRange();
+    range.setStart(spans[index].firstChild, 4);
+    range.setEnd(spans[index + 1].firstChild, 10);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const first = range.getClientRects()[0];
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return {
+      index,
+      left: first.left,
+      top: first.top,
+      head: spans[index].textContent.slice(4, 24).replace(/\s+/g, ' ').trim(),
+      tail: spans[index + 1].textContent.slice(0, 10).trim(),
+    };
+  });
+  await page.waitForTimeout(200);
+  check('выделение мышью показывает панель маркера', await page.isVisible('#markToolbar'));
+  await page.click('.mark-swatch[data-color="green"]');
+  await page.waitForTimeout(500);
+  const marked = await page.evaluate(() => {
+    const [item] = window.pdfReaderApp.readingState.record.highlights;
+    const boxes = [...document.querySelectorAll('.page[data-page-number="3"] .mark-box.mark-green')];
+    const first = boxes[0]?.getBoundingClientRect();
+    return { item, boxes: boxes.length, left: first?.left, top: first?.top, bottom: first?.bottom };
+  });
+  check(
+    'маркер сохраняется в координатах спанов',
+    marked.item?.color === 'green' &&
+      marked.item.pieces.length === 1 &&
+      marked.item.pieces[0].pageNumber === 3 &&
+      marked.item.pieces[0].from.span === selected.index &&
+      marked.item.pieces[0].from.offset === 4 &&
+      marked.item.pieces[0].to.span === selected.index + 1 &&
+      marked.item.pieces[0].to.offset === 10,
+    JSON.stringify(marked.item?.pieces)
+  );
+  check(
+    'маркер лёг полосами точно на выделенный текст',
+    marked.boxes === 2 && Math.abs(marked.left - selected.left) <= 3 && selected.top >= marked.top - 1 && selected.top <= marked.bottom,
+    `полос ${marked.boxes}, x ${Math.round(marked.left)} vs ${Math.round(selected.left)}`
+  );
+  check(
+    'текст выделения — со склейкой строк через пробел',
+    marked.item?.text.startsWith(selected.head) && marked.item.text.includes(` ${selected.tail}`),
+    `«${marked.item?.text}»`
+  );
+
+  // Щелчок по маркеру — правка: заметка сохраняется и видна в боковой панели
+  const box = await page.evaluate(() => {
+    const rect = document.querySelector('.page[data-page-number="3"] .mark-box').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.click(box.x, box.y);
+  await page.waitForTimeout(250);
+  const editing = await page.evaluate(() => ({
+    toolbar: !document.getElementById('markToolbar').hidden,
+    remove: !document.getElementById('markDelete').hidden,
+    active: document.querySelector('.mark-swatch.active')?.dataset.color,
+  }));
+  check('щелчок по маркеру открывает правку', editing.toolbar && editing.remove && editing.active === 'green', JSON.stringify(editing));
+  await page.click('#markNoteToggle');
+  await page.keyboard.type('моя заметка');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  await page.evaluate(() => {
+    window.pdfReaderApp.toggleSidebar(true);
+    document.querySelector('#sidebar [data-tab="bookmarks"]').click();
+  });
+  await page.waitForTimeout(300);
+  const noted = await page.evaluate(() => ({
+    note: window.pdfReaderApp.readingState.record.highlights[0].note,
+    toolbar: !document.getElementById('markToolbar').hidden,
+    listed: document.querySelector('#highlightsPanel .mark-item .mark-note')?.textContent,
+    hasNoteMark: Boolean(document.querySelector('.page[data-page-number="3"] .mark-box.has-note')),
+  }));
+  check(
+    'заметка сохраняется по Esc и видна во вкладке «Заметки»',
+    noted.note === 'моя заметка' && !noted.toolbar && noted.listed === 'моя заметка' && noted.hasNoteMark,
+    JSON.stringify(noted)
+  );
+
+  const [notesDownload] = await Promise.all([
+    page.waitForEvent('download', { timeout: 5000 }),
+    page.click('#exportNotes'),
+  ]);
+  const markdown = readFileSync(await notesDownload.path(), 'utf8');
+  // Headless Chromium подменяет кириллические имена на «download», поэтому
+  // имя сверяем по сообщению самой программы.
+  const notesName = await page.evaluate(() => document.getElementById('hud').textContent);
+  check(
+    'конспект .md: глава, цитата со страницей, заметка, закладки',
+    notesName.includes('«russian — конспект.md»') &&
+      /^## Глава I/m.test(markdown) &&
+      markdown.includes(`> ${marked.item.text}`) &&
+      markdown.includes('> — с. 3') &&
+      markdown.includes('моя заметка') &&
+      markdown.includes('## Закладки'),
+    `${notesName}\n${markdown.slice(0, 300)}`
+  );
+  await page.evaluate(() => window.pdfReaderApp.toggleSidebar(false));
+  await page.waitForTimeout(300);
+
   // ── Режим «только текст» ──
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
   await page.waitForTimeout(700);
@@ -476,6 +587,40 @@ try {
   const sizeAfter = await page.evaluate(() => getComputedStyle(document.getElementById('reflowArticle')).fontSize);
   check('Ctrl+= в режиме текста увеличивает шрифт', parseFloat(sizeAfter) > parseFloat(sizeBefore), `${sizeBefore} → ${sizeAfter}`);
 
+  // Выделение из PDF видно и в режиме текста; новое выделение здесь — клавишей H
+  await page.waitForTimeout(300);
+  const reflowMarks = await page.evaluate(() => {
+    const ranges = [...(globalThis.CSS?.highlights?.get('mark-green') || [])];
+    return ranges.map((range) => range.toString()).join(' ');
+  });
+  check(
+    'выделение из PDF подсвечено в режиме текста',
+    reflowMarks.replace(/\s+/g, ' ').trim() === marked.item.text.replace(/\s+/g, ' '),
+    `«${reflowMarks}»`
+  );
+  const reflowSelected = await page.evaluate(() => {
+    const node = document.querySelector('.rf-page[data-page="3"] .rf-s[data-s="5"]').firstChild;
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, Math.min(node.length, 25));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    return range.toString();
+  });
+  await page.keyboard.press('h');
+  await page.waitForTimeout(500);
+  const reflowMarked = await page.evaluate(() => {
+    const items = window.pdfReaderApp.readingState.record.highlights;
+    const created = items.find((item) => item.color === 'green' && item.note === '');
+    const ranges = [...(globalThis.CSS?.highlights?.get('mark-green') || [])].map((range) => range.toString());
+    return { count: items.length, created, ranges };
+  });
+  check(
+    'клавиша H выделяет в режиме текста последним цветом',
+    reflowMarked.count === 2 && reflowMarked.created?.text === reflowSelected.trim() && reflowMarked.ranges.includes(reflowSelected),
+    JSON.stringify({ text: reflowMarked.created?.text, ranges: reflowMarked.ranges })
+  );
+
   // Озвучка в режиме текста подсвечивает само предложение и слово
   await page.evaluate(() => {
     window.pdfReaderApp.tts.start({ pageNumber: 3, sentenceIndex: 4 });
@@ -511,6 +656,26 @@ try {
     page: window.pdfReaderApp.pdfViewer.currentPageNumber,
   }));
   check('выход из режима текста — на ту же страницу', !backInPdf.active && backInPdf.page === 3, JSON.stringify(backInPdf));
+  await page.waitForTimeout(500);
+  const roundTrip = await page.evaluate(async () => {
+    const { textSpansOfPage } = await import('/src/visible-text.js');
+    const app = window.pdfReaderApp;
+    const created = app.readingState.record.highlights.find((item) => !item.note);
+    const [piece] = created.pieces;
+    const spans = textSpansOfPage(app, piece.pageNumber);
+    const parts = [];
+    for (let i = piece.from.span; i <= piece.to.span; i += 1) {
+      const content = spans[i].textContent;
+      parts.push(content.slice(i === piece.from.span ? piece.from.offset : 0, i === piece.to.span ? piece.to.offset : content.length));
+    }
+    return { created: created.text, text: parts.join(' '), boxes: document.querySelectorAll('.page[data-page-number="3"] .mark-box').length };
+  });
+  const letters = (text) => text.replace(/[\s-]/g, '');
+  check(
+    'выделение из режима текста ложится на те же слова в PDF',
+    letters(roundTrip.text) === letters(roundTrip.created) && roundTrip.boxes >= 3,
+    JSON.stringify(roundTrip)
+  );
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

@@ -546,6 +546,104 @@ li.collapsed > .outline-tree { display: none; }
 .bookmark-marker .icon-svg { width: 22px; height: 26px; }
 .bookmark-marker:hover { color: #be123c; }
 
+/* ── Выделения маркером и заметки ──────────────────────────────── */
+
+:root {
+  --mark-yellow: #ffe066;
+  --mark-green: #a8ee9a;
+  --mark-blue: #a5d8ff;
+  --mark-pink: #fbb6d0;
+}
+
+/* Как и подсветка озвучки: полосы умножаются на страницу, буквы не бледнеют. */
+.mark-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  mix-blend-mode: multiply;
+}
+.mark-box { position: absolute; border-radius: 3px; }
+.mark-box.has-note { box-shadow: inset 0 -2px 0 rgb(0 0 0 / 35%); }
+.mark-yellow { --mark: var(--mark-yellow); }
+.mark-green { --mark: var(--mark-green); }
+.mark-blue { --mark: var(--mark-blue); }
+.mark-pink { --mark: var(--mark-pink); }
+.mark-box { background: var(--mark); }
+#app[data-page-theme='invert'] .mark-layer { filter: invert(1) hue-rotate(180deg); }
+
+/* В режиме текста — CSS Custom Highlight API, полупрозрачно под любую тему. */
+::highlight(mark-yellow) { background-color: rgb(255 214 10 / 45%); color: inherit; }
+::highlight(mark-green) { background-color: rgb(74 222 128 / 40%); color: inherit; }
+::highlight(mark-blue) { background-color: rgb(56 167 248 / 38%); color: inherit; }
+::highlight(mark-pink) { background-color: rgb(244 114 182 / 40%); color: inherit; }
+
+.mark-toolbar {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.mark-row { display: flex; align-items: center; gap: 4px; }
+.mark-swatch {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--mark);
+}
+.mark-swatch:hover { transform: scale(1.1); background: var(--mark); }
+.mark-swatch.active,
+.mark-swatch.active:hover { background: var(--mark); border-color: var(--fg); box-shadow: inset 0 0 0 2px var(--bg-raised); }
+.mark-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
+#markDelete:hover { color: var(--danger); }
+#markNote { width: 260px; resize: vertical; font: inherit; font-size: 13px; }
+
+/* Вкладка «Заметки»: закладки и выделения одним списком. */
+.notes-panel h4 { margin: 4px 2px 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--fg-muted); }
+.notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
+.notes-head h4 { margin: 0 2px; }
+.notes-head button { font-size: 12px; }
+.mark-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.mark-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--mark);
+  border-radius: 8px;
+}
+.mark-jump {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 3px;
+  align-items: start;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 2px;
+}
+.mark-jump .bookmark-page { grid-row: span 3; }
+.mark-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+.mark-note { color: var(--fg-muted); font-style: italic; font-size: 12px; white-space: pre-wrap; }
+
 #bookmarksPopover { width: 340px; }
 .popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .popover-head h3 { margin: 0; }

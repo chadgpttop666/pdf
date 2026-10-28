@@ -55,3 +55,26 @@ export function formatDate(timestamp) {
   if (!timestamp) return '';
   return new Date(timestamp).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
+
+/** Имя файла без символов, которые Windows не разрешает. */
+export function safeFileName(name) {
+  return String(name).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || 'документ';
+}
+
+/**
+ * Сохранить файл на компьютер. Обычная ссылка с атрибутом download не
+ * требует отдельного разрешения: Firefox кладёт файл в «Загрузки» или
+ * спрашивает, куда сохранить, — как настроено в браузере.
+ */
+export function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Сразу отзывать нельзя: загрузка стартует уже после щелчка.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

@@ -51,6 +51,11 @@ const ICONS = {
   skipForward: [['path', { d: 'M6 6v12l8.5-6z', ...FILLED }], ['path', { d: 'M17.5 6v12' }]],
   close: [['path', { d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' }]],
   trash: [['path', { d: 'M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5' }]],
+  note: [
+    ['path', { d: 'M5 4.5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-7l-4.5 3.5v-3.5H5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z' }],
+    ['path', { d: 'M8 9h8M8 12.5h5' }],
+  ],
+  marker: [['path', { d: 'M14.5 4.5l5 5-8.5 8.5H6v-5z' }], ['path', { d: 'M4 21h16' }]],
 };
 
 const SVG_ATTRIBUTES = {

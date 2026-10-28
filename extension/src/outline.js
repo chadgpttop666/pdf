@@ -144,5 +144,14 @@ export function createOutline(app) {
     return starts.find((start) => start > pageNumber) ?? null;
   }
 
-  return { load, markCurrent, nextChapterStart };
+  /** Название главы, в которой лежит страница, — для разделов конспекта. */
+  function chapterTitleAt(pageNumber) {
+    let title = null;
+    for (const entry of rows) {
+      if (entry.depth === chapterDepth && entry.pageNumber && entry.pageNumber <= pageNumber) title = entry.item.title;
+    }
+    return title;
+  }
+
+  return { load, markCurrent, nextChapterStart, chapterTitleAt };
 }

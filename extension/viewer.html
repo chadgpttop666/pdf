@@ -78,13 +78,21 @@
         <nav class="tabs" role="tablist">
           <button data-tab="outline" class="active" role="tab">Оглавление</button>
           <button data-tab="thumbs" role="tab">Миниатюры</button>
-          <button data-tab="bookmarks" role="tab">Закладки</button>
+          <button data-tab="bookmarks" role="tab">Заметки</button>
           <button data-tab="recent" role="tab">Недавние</button>
         </nav>
         <div class="panels">
           <div id="outlinePanel" data-panel="outline" class="panel active"></div>
           <div id="thumbsPanel" data-panel="thumbs" class="panel"></div>
-          <div id="bookmarksPanel" data-panel="bookmarks" class="panel"></div>
+          <div data-panel="bookmarks" class="panel notes-panel">
+            <h4>Закладки</h4>
+            <div id="bookmarksPanel"></div>
+            <div class="notes-head">
+              <h4>Выделения</h4>
+              <button id="exportNotes" data-icon="download" title="Выделения, заметки и закладки одним файлом Markdown — по главам" disabled>Конспект .md</button>
+            </div>
+            <div id="highlightsPanel"></div>
+          </div>
           <div id="recentPanel" data-panel="recent" class="panel"></div>
         </div>
       </aside>
@@ -228,6 +236,19 @@
         <input id="cropBottom" type="range" min="0" max="30" step="0.5" value="0">
       </label>
       <button id="cropReset" class="wide">Сбросить поля</button>
+    </div>
+
+    <div id="markToolbar" class="mark-toolbar" role="toolbar" aria-label="Маркер" hidden>
+      <div class="mark-row">
+        <button class="mark-swatch mark-yellow" data-color="yellow" title="Жёлтый маркер (H — последний выбранный)" aria-label="Жёлтый"></button>
+        <button class="mark-swatch mark-green" data-color="green" title="Зелёный маркер" aria-label="Зелёный"></button>
+        <button class="mark-swatch mark-blue" data-color="blue" title="Голубой маркер" aria-label="Голубой"></button>
+        <button class="mark-swatch mark-pink" data-color="pink" title="Розовый маркер" aria-label="Розовый"></button>
+        <span class="mark-sep"></span>
+        <button id="markNoteToggle" class="icon" data-icon="note" title="Заметка к выделению" aria-label="Заметка"></button>
+        <button id="markDelete" class="icon" data-icon="trash" title="Убрать выделение" aria-label="Убрать выделение" hidden></button>
+      </div>
+      <textarea id="markNote" rows="3" placeholder="Заметка — сохраняется сама" hidden></textarea>
     </div>
 
     <div id="hud" hidden></div>

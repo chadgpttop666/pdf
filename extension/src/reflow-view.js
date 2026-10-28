@@ -103,6 +103,7 @@ export function createReflow(app) {
     if (!page.sentences.length) {
       section.append(el('p', { class: 'rf-empty' }, 'На этой странице нет текста — возможно, это картинка или скан.'));
     }
+    app.eventBus.dispatch('reflowpagefilled', { source: api, pageNumber });
   }
 
   /** Заполнение всех страниц в фоне: сначала вокруг места чтения, потом дальше. */

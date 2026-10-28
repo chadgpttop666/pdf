@@ -138,6 +138,7 @@ export function createReadingState(app) {
         addedAt: existing?.addedAt || Date.now(),
         openedAt: Date.now(),
         bookmarks: existing?.bookmarks || [],
+        highlights: existing?.highlights || [],
         state: existing?.state || null,
       };
       await library.putDocument(record);

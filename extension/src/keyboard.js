@@ -95,6 +95,7 @@ export const BINDINGS = [
   { combos: ['F3'], label: 'Следующее совпадение', run: (app) => app.find?.again(1), when: pdfMode },
   { combos: ['Shift+F3'], label: 'Предыдущее совпадение', run: (app) => app.find?.again(-1), when: pdfMode },
   { combos: ['KeyB'], label: 'Закладка на этом месте', run: (app) => app.bookmarks?.addHere() },
+  { combos: ['KeyH'], label: 'Выделить маркером то, что выделено мышью', run: (app) => app.highlights?.markSelection() },
   { combos: ['F1'], label: 'Эта справка', run: (app) => app.help.toggle() },
   { combos: ['Escape'], label: 'Закрыть панели, остановить всё', run: (app) => app.escape(), allowWhileTyping: true },
 ];

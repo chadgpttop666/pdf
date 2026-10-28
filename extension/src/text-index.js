@@ -324,6 +324,38 @@ export function cleanForSpeech(raw) {
 }
 
 /**
+ * Точка в тексте страницы → место в спане текстового слоя. Спаны —
+ * устойчивая система координат: она не меняется, если колонтитулы начали
+ * или перестали выбрасываться, поэтому в ней хранятся выделения.
+ * Если позиция попала в разделитель между кусками, берём начало следующего.
+ * @returns {{ span: number, offset: number } | null}
+ */
+export function offsetToSpanPoint(entries, textOffset) {
+  for (const entry of entries) {
+    if (textOffset <= entry.end) {
+      return { span: entry.spanIndex, offset: Math.max(0, textOffset - entry.start) };
+    }
+  }
+  const last = entries.at(-1);
+  return last ? { span: last.spanIndex, offset: last.end - last.start } : null;
+}
+
+/** Обратно: место в спане → позиция в тексте страницы (null — спан выброшен как служебный). */
+export function spanPointToOffset(entries, { span, offset }) {
+  const entry = entries.find((candidate) => candidate.spanIndex === span);
+  return entry ? Math.min(entry.end, entry.start + offset) : null;
+}
+
+/**
+ * Позиция в «очищенном» тексте предложения (как его видит режим текста и
+ * синтезатор) по позиции в исходном. map — из cleanForSpeech.
+ */
+export function cleanedIndexForRaw(map, rawOffset) {
+  const index = map.findIndex((raw) => raw >= rawOffset);
+  return index < 0 ? map.length : index;
+}
+
+/**
  * Длина слова, начинающегося с позиции. Firefox присылает в событиях
  * синтеза только начало слова, без длины, — её досчитываем сами.
  */

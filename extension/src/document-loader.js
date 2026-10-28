@@ -2,6 +2,7 @@
 // локальной библиотеки. Наружу отдаёт единый объект источника, по которому
 // потом считается ключ документа и заголовок окна.
 
+import { safeFileName, saveBlob } from './dom.js';
 import { documentResources, pdfjs } from './viewer-setup.js';
 
 /**
@@ -91,9 +92,7 @@ export class DocumentLoader {
   }
 
   /**
-   * Сохранить исходный PDF на компьютер. Обычная ссылка с атрибутом download
-   * не требует отдельного разрешения: Firefox кладёт файл в «Загрузки» или
-   * спрашивает, куда сохранить, — как настроено в браузере.
+   * Сохранить исходный PDF на компьютер.
    * @returns {Promise<string|null>} имя файла или null, если документа нет
    */
   async download() {
@@ -101,22 +100,13 @@ export class DocumentLoader {
     if (!bytes) return null;
 
     const filename = downloadName(this.source?.name);
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.hidden = true;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    // Сразу отзывать нельзя: загрузка стартует уже после щелчка.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    saveBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
     return filename;
   }
 }
 
-/** Имя для сохранения: без символов, запрещённых в Windows, и с расширением .pdf. */
+/** Имя для сохранения: с расширением .pdf. */
 export function downloadName(name) {
-  const base = (name || 'документ').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || 'документ';
+  const base = safeFileName(name || 'документ');
   return /\.pdf$/i.test(base) ? base : `${base}.pdf`;
 }
