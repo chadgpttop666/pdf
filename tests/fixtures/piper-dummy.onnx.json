@@ -1,0 +1,20 @@
+{
+  "dataset": "dummy",
+  "audio": {
+    "sample_rate": 22050,
+    "quality": "test"
+  },
+  "espeak": {
+    "voice": "ru"
+  },
+  "language": {
+    "code": "ru_RU"
+  },
+  "inference": {
+    "noise_scale": 0.667,
+    "length_scale": 1,
+    "noise_w": 0.8
+  },
+  "num_speakers": 1,
+  "speaker_id_map": {}
+}

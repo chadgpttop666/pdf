@@ -772,6 +772,19 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
 .settings-grid .setting .hint { color: var(--fg-muted); font-size: 12px; max-width: 46ch; }
 .settings-grid .range-control { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .settings-grid input[type='text'] { min-width: 220px; }
+.settings-grid .setting.piper-voices { flex-direction: column; align-items: stretch; gap: 8px; }
+.piper-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.piper-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.piper-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .settings-grid .group-title { margin-top: 8px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; font-size: 11px; }
 
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: baseline; }

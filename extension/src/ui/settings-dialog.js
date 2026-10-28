@@ -85,11 +85,113 @@ export function createSettingsDialog(app) {
     grid.append(section);
   }
 
+  let piperMessage = ''; // переживает перерисовку диалога после загрузки голоса
+
+  /** Нейроголоса Piper: скачать, удалить, загрузить из файлов. */
+  async function renderPiperVoices(container) {
+    const piper = app.tts?.piper;
+    if (!piper?.available) {
+      container.append(el('p', { class: 'hint' }, 'Нейроголоса в этом браузере недоступны.'));
+      return;
+    }
+    const voices = await piper.voices();
+    const status = el('span', { class: 'hint piper-status' }, piperMessage);
+    const say = (text) => {
+      piperMessage = text;
+      status.textContent = text;
+    };
+    const refresh = async () => {
+      await app.tts.refreshVoices();
+      render();
+    };
+    const fail = (error) => say(error.message || String(error));
+
+    const list = el('ul', { class: 'piper-list' });
+    for (const voice of voices) {
+      const action = voice.installed
+        ? el(
+            'button',
+            {
+              type: 'button',
+              onclick: async () => {
+                await piper.removeVoice(voice.id).catch(fail);
+                await refresh();
+              },
+            },
+            'Удалить'
+          )
+        : el(
+            'button',
+            {
+              type: 'button',
+              onclick: async (event) => {
+                const button = event.currentTarget;
+                button.disabled = true;
+                try {
+                  await piper.downloadVoice(voice.id, (loaded, total) => {
+                    status.textContent = `«${voice.name}»: ${formatBytes(loaded)} из ${formatBytes(total)}`;
+                  });
+                  say(`Голос «${voice.name}» скачан — выберите его на панели озвучки`);
+                  await refresh();
+                } catch (error) {
+                  fail(error);
+                  button.disabled = false;
+                }
+              },
+            },
+            `Скачать ≈${voice.sizeMb} МБ`
+          );
+      list.append(
+        el('li', {}, [
+          el('span', {}, [voice.name, el('span', { class: 'hint' }, ` ${voice.lang || ''}${voice.installed ? ' · скачан' : ''}`)]),
+          action,
+        ])
+      );
+    }
+
+    const picker = el('input', { type: 'file', accept: '.onnx,.json', multiple: '', hidden: '' });
+    on(picker, 'change', async () => {
+      try {
+        const id = await piper.importVoice(picker.files);
+        say('Голос загружен и выбран для озвучки');
+        await updateSettings({ ttsVoiceUri: id });
+        await refresh();
+      } catch (error) {
+        fail(error);
+      }
+      picker.value = '';
+    });
+
+    container.append(
+      el('span', { class: 'label' }, [
+        el('span', {}, 'Нейроголоса Piper'),
+        el(
+          'span',
+          { class: 'hint' },
+          'Голос скачивается один раз (≈60 МБ) и дальше работает без интернета. Если HuggingFace недоступен, ' +
+            'скачайте файлы .onnx и .onnx.json голоса где-нибудь ещё и загрузите их кнопкой ниже.'
+        ),
+      ]),
+      list,
+      el('div', { class: 'piper-actions' }, [
+        el('button', { type: 'button', onclick: () => picker.click() }, 'Загрузить голос из файлов…'),
+        picker,
+        status,
+      ])
+    );
+  }
+
   function render() {
     clear(grid);
     for (const item of SETTINGS_SCHEMA) {
       if (item.group) {
         grid.append(el('div', { class: 'group-title' }, item.group));
+        continue;
+      }
+      if (item.custom === 'piperVoices') {
+        const section = el('div', { class: 'setting piper-voices' });
+        grid.append(section);
+        renderPiperVoices(section);
         continue;
       }
       if (item.type === 'hidden') continue;
@@ -108,12 +210,14 @@ export function createSettingsDialog(app) {
   }
 
   on($('btnSettings'), 'click', () => {
+    piperMessage = '';
     render();
     dialog.showModal();
   });
 
   return {
     open() {
+      piperMessage = '';
       render();
       dialog.showModal();
     },

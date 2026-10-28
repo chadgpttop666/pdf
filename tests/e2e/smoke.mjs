@@ -96,6 +96,9 @@ try {
   const page = await context.newPage();
   const consoleErrors = [];
   page.on('console', (message) => {
+    // Скачивание голоса с HuggingFace: в среде тестов сеть может быть закрыта —
+    // это проверяется отдельно, по сообщению на панели озвучки.
+    if (message.location()?.url?.includes('huggingface.co')) return;
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
@@ -619,6 +622,85 @@ try {
   await page.evaluate(() => window.pdfReaderApp.stats.flush());
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
   await page.waitForTimeout(300);
+
+  // ── Нейроголос Piper (тестовая модель вместо настоящего голоса) ──
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
+  await page.waitForSelector('.piper-actions input[type=file]', { state: 'attached' });
+  await page.setInputFiles('.piper-actions input[type=file]', [
+    join(root, 'tests', 'fixtures', 'piper-dummy.onnx'),
+    join(root, 'tests', 'fixtures', 'piper-dummy.onnx.json'),
+  ]);
+  await page.waitForFunction(() => document.querySelector('.piper-status')?.textContent.includes('загружен'), null, { timeout: 10000 });
+  const piperListed = await page.evaluate(() => ({
+    voice: document.getElementById('ttsVoice').value,
+    option: [...document.querySelectorAll('#ttsVoice optgroup')].map((group) => group.label + ': ' + [...group.children].map((o) => o.textContent).join(', ')),
+    installed: [...document.querySelectorAll('.piper-list li')].some((li) => li.textContent.includes('скачан')),
+  }));
+  check(
+    'нейроголос загружается из файлов и выбирается',
+    piperListed.voice === 'piper:piper-dummy' && piperListed.installed && piperListed.option.some((label) => label.startsWith('Нейроголоса')),
+    JSON.stringify(piperListed)
+  );
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
+
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await page.waitForTimeout(500);
+  await page.click('#viewerContainer', { position: { x: 5, y: 5 } });
+  await page.keyboard.press('s'); // настоящий жест: браузер разрешит звук
+  await page.waitForFunction(() => window.pdfReaderApp.tts.engine === 'piper' && window.pdfReaderApp.tts.state === 'speaking', null, { timeout: 10000 });
+  const piperStart = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
+  let piperWord = false;
+  for (let i = 0; i < 40 && !piperWord; i += 1) {
+    await page.waitForTimeout(100);
+    piperWord = await page.evaluate(() => Boolean(document.querySelector('.tts-word-box')));
+  }
+  await page.waitForFunction(
+    (start) => {
+      const now = window.pdfReaderApp.tts.position;
+      return now.pageNumber > start.pageNumber || now.sentenceIndex > start.sentenceIndex;
+    },
+    piperStart,
+    { timeout: 15000 }
+  );
+  const piperRun = await page.evaluate(() => ({
+    position: window.pdfReaderApp.tts.position,
+    state: window.pdfReaderApp.tts.state,
+    sentence: Boolean(document.querySelector('.tts-sentence-box')),
+  }));
+  check(
+    'нейроголос читает фразу за фразой с подсветкой предложения и слов',
+    piperRun.state === 'speaking' && piperRun.sentence && piperWord,
+    `${JSON.stringify(piperStart)} → ${JSON.stringify(piperRun.position)}, слово: ${piperWord}`
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  // Дальше тесты рассчитаны на подменённый системный синтез.
+  await page.selectOption('#ttsVoice', 'mock-ru');
+  await page.waitForTimeout(200);
+  check('обратно на системный голос', (await page.evaluate(() => window.pdfReaderApp.tts.engine)) === 'web-speech');
+
+  // Голос из каталога: спрашиваем, качаем; если сеть не пускает — понятная ошибка и откат выбора.
+  let downloadQuestion = '';
+  page.once('dialog', (dialog) => {
+    downloadQuestion = dialog.message();
+    dialog.accept();
+  });
+  await page.selectOption('#ttsVoice', 'piper:ru_RU-irina-medium');
+  await page.waitForFunction(
+    () => /не скачался|скачан/.test(document.getElementById('ttsStatus').textContent),
+    null,
+    { timeout: 30000 }
+  );
+  const downloadResult = await page.evaluate(() => ({
+    status: document.getElementById('ttsStatus').textContent,
+    voice: document.getElementById('ttsVoice').value,
+  }));
+  check(
+    'скачивание голоса: вопрос с размером, при ошибке — подсказка и прежний голос',
+    downloadQuestion.includes('≈61 МБ') &&
+      (downloadResult.status.includes('скачан и работает') ||
+        (downloadResult.status.includes('загрузить из файла') && downloadResult.voice === 'mock-ru')),
+    JSON.stringify(downloadResult)
+  );
 
   // ── Режим «только текст» ──
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));

@@ -1,14 +1,15 @@
 // Локальная библиотека: место чтения, закладки, сами файлы недавних
-// документов и статистика чтения по дням. Всё лежит в IndexedDB браузера и
-// никуда не отправляется.
+// документов, статистика чтения по дням и скачанные нейроголоса. Всё лежит
+// в IndexedDB браузера и никуда не отправляется.
 
 import { emptyDay, mergeDays } from './stats-math.js';
 
 const DB_NAME = 'pdf-reader';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const DOCUMENTS = 'documents';
 const FILES = 'files';
 const STATS = 'stats';
+const VOICES = 'voices';
 
 let dbPromise = null;
 
@@ -28,8 +29,20 @@ function openDb() {
       if (!db.objectStoreNames.contains(STATS)) {
         db.createObjectStore(STATS, { keyPath: 'day' });
       }
+      // Версия 3: нейроголоса Piper — модель (Blob) и её описание.
+      if (!db.objectStoreNames.contains(VOICES)) {
+        db.createObjectStore(VOICES, { keyPath: 'id' });
+      }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Другая вкладка обновляет базу до новой версии — уступаем ей.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
   });
   return dbPromise;
@@ -169,4 +182,22 @@ export async function addStatsDay(delta) {
 
 export async function clearStats() {
   return transaction(STATS, 'readwrite', (store) => request(store.clear()));
+}
+
+/** Скачанные голоса без самих моделей — для списков. */
+export async function listVoices() {
+  const all = await transaction(VOICES, 'readonly', (store) => request(store.getAll()));
+  return all.map(({ model, ...info }) => info);
+}
+
+export async function getVoice(id) {
+  return transaction(VOICES, 'readonly', (store) => request(store.get(id)));
+}
+
+export async function putVoice(record) {
+  return transaction(VOICES, 'readwrite', (store) => request(store.put(record)));
+}
+
+export async function deleteVoice(id) {
+  return transaction(VOICES, 'readwrite', (store) => request(store.delete(id)));
 }

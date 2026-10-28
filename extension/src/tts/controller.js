@@ -1,12 +1,14 @@
 // Озвучка документа. Контроллер держит очередь предложений, ведёт подсветку
 // и прокрутку за читаемым местом, а сам синтез делегирует провайдеру —
-// системному или внешнему по HTTP, интерфейс у них одинаковый.
+// системному, внешнему по HTTP или нейроголосу Piper, интерфейс у них
+// одинаковый. Какой из них работает, решает выбранный голос.
 
-import { $, clear, el, on } from '../dom.js';
+import { $, clear, el, formatBytes, on } from '../dom.js';
 import { get as getSetting, onSettingsChanged, updateSettings } from '../settings.js';
 import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
 import { createHighlighter } from './highlighter.js';
 import { createHttpProvider } from './http-provider.js';
+import { PIPER_PREFIX, createPiperProvider } from './piper-provider.js';
 import { createWebSpeechProvider } from './web-speech.js';
 import { createSleepTimer } from './sleep-timer.js';
 import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
@@ -23,7 +25,9 @@ export function createTts(app) {
   });
 
   let index = null;
-  let provider = null;
+  let systemProvider = null; // голоса системы или внешний движок — по настройке
+  const piper = createPiperProvider();
+  let provider = null; // тот, что сейчас говорит
   let state = 'idle'; // idle | speaking | paused
   let generation = 0;
   let position = { pageNumber: 1, sentenceIndex: 0 };
@@ -46,10 +50,22 @@ export function createTts(app) {
     clearHighlights();
   }
 
-  function currentProvider() {
+  function systemEngine() {
     const kind = getSetting('ttsProvider');
     if (kind === 'http') return createHttpProvider({ url: getSetting('ttsHttpUrl') });
     return createWebSpeechProvider();
+  }
+
+  const wantsPiper = () => piper.available && String(getSetting('ttsVoiceUri') || '').startsWith(PIPER_PREFIX);
+  const pickProvider = () => (wantsPiper() ? piper : systemProvider);
+
+  /** Выбран голос другого движка — прерываем старый и говорим новым. */
+  function switchProvider() {
+    const next = pickProvider();
+    if (next === provider) return;
+    if (state === 'paused') provider?.resume();
+    provider?.cancel();
+    provider = next;
   }
 
   function speechOptions() {
@@ -80,36 +96,94 @@ export function createTts(app) {
 
   async function fillVoices() {
     const select = $('ttsVoice');
-    const list = await provider.voices();
+    const [system, neural] = await Promise.all([systemProvider.voices(), piper.available ? piper.voices() : []]);
     voicesLoaded = true;
     clear(select);
 
-    if (!list.length) {
-      select.append(el('option', { value: '' }, 'голосов не найдено'));
+    // Голоса языка документа показываем первыми — их обычно и выбирают.
+    const documentLang = index?.language || 'ru';
+    const rank = (voice) => ((voice.lang || '').toLowerCase().startsWith(documentLang) ? 0 : 1);
+    const sortedSystem = [...system].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+    const sortedNeural = [...neural].sort((a, b) => rank(a) - rank(b));
+
+    if (sortedNeural.length) {
+      const group = el('optgroup', { label: 'Нейроголоса Piper — работают без интернета' });
+      for (const voice of sortedNeural) {
+        group.append(el('option', { value: voice.id }, voice.installed ? voice.name : `${voice.name} — скачать ≈${voice.sizeMb} МБ`));
+      }
+      select.append(group);
+    }
+    if (sortedSystem.length) {
+      const group = el('optgroup', { label: getSetting('ttsProvider') === 'http' ? 'Внешний движок' : 'Голоса системы' });
+      for (const voice of sortedSystem) {
+        group.append(el('option', { value: voice.id }, `${voice.name}${voice.lang ? ` (${voice.lang})` : ''}`));
+      }
+      select.append(group);
+    } else {
       setStatus(
         getSetting('ttsProvider') === 'http'
           ? 'Внешний движок не вернул список голосов'
-          : 'Система не предоставила голоса синтеза'
+          : 'Система не предоставила голоса синтеза — выберите нейроголос'
       );
+    }
+    if (!select.options.length) {
+      select.append(el('option', { value: '' }, 'голосов не найдено'));
       return;
     }
 
-    // Голоса языка документа показываем первыми — их обычно и выбирают.
-    const documentLang = index?.language || 'ru';
-    const sorted = [...list].sort((a, b) => {
-      const aMatch = (a.lang || '').toLowerCase().startsWith(documentLang) ? 0 : 1;
-      const bMatch = (b.lang || '').toLowerCase().startsWith(documentLang) ? 0 : 1;
-      return aMatch - bMatch || a.name.localeCompare(b.name);
-    });
-
-    for (const voice of sorted) {
-      select.append(el('option', { value: voice.id }, `${voice.name}${voice.lang ? ` (${voice.lang})` : ''}`));
-    }
-
     const stored = getSetting('ttsVoiceUri');
-    const chosen = sorted.find((voice) => voice.id === stored) || sorted[0];
-    select.value = chosen.id;
-    if (chosen.id !== stored) await updateSettings({ ttsVoiceUri: chosen.id });
+    const usable = [...sortedSystem, ...sortedNeural.filter((voice) => voice.installed)];
+    const chosen = usable.find((voice) => voice.id === stored) || usable[0];
+    if (chosen) {
+      select.value = chosen.id;
+      if (chosen.id !== stored) await updateSettings({ ttsVoiceUri: chosen.id });
+    }
+    switchProvider();
+  }
+
+  /** Нейроголос ещё не скачан: спросить и скачать с прогрессом в строке панели. */
+  async function offerDownload(voiceId) {
+    const voice = (await piper.voices()).find((item) => item.id === voiceId);
+    if (!voice) return false;
+    const question =
+      `Скачать нейроголос «${voice.name}» (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
+      'Это нужно один раз: голос сохранится в браузере и дальше будет работать без интернета.';
+    if (!window.confirm(question)) return false;
+    try {
+      await piper.downloadVoice(voiceId, (loaded, total) => {
+        setStatus(`Скачиваю голос «${voice.name}»: ${formatBytes(loaded)} из ${formatBytes(total)}`);
+      });
+    } catch (error) {
+      setStatus(`Голос не скачался: ${error.message}. Его можно загрузить из файла: Настройки → Нейроголоса.`);
+      return false;
+    }
+    setStatus(`Голос «${voice.name}» скачан и работает без интернета`);
+    await updateSettings({ ttsVoiceUri: voiceId });
+    await fillVoices();
+    return true;
+  }
+
+  /** Синтезировать следующую фразу заранее, пока звучит текущая. */
+  async function prefetchNext(page, sentenceIndex) {
+    if (!provider.prepare) return;
+    let target = page;
+    let next = sentenceIndex + 1;
+    for (let guard = 0; guard < 6; guard += 1) {
+      if (next >= target.sentences.length) {
+        if (target.pageNumber >= index.numPages) return;
+        target = await index.page(target.pageNumber + 1);
+        if (!target) return;
+        next = 0;
+        continue;
+      }
+      const sentence = target.sentences[next];
+      const { text } = cleanForSpeech(target.text.slice(sentence.start, sentence.end));
+      if (/[\p{L}\p{N}]/u.test(text)) {
+        provider.prepare(text, speechOptions());
+        return;
+      }
+      next += 1;
+    }
   }
 
   /** Прокрутка за читаемым предложением: держим его в верхней трети экрана. */
@@ -247,6 +321,7 @@ export function createTts(app) {
         view().highlightSentence(page, sentenceIndex);
         setStatus(`Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}`);
 
+        prefetchNext(page, sentenceIndex);
         const options = speechOptions();
         const result = await provider.speak(text, {
           ...options,
@@ -325,6 +400,8 @@ export function createTts(app) {
       app.hud.show('Сначала откройте документ');
       return;
     }
+    // Пока идёт щелчок или нажатие клавиши — разрешаем звук нейроголосу.
+    if (wantsPiper()) piper.unlock();
     showBar(true);
     if (!voicesLoaded) await fillVoices();
     const picked = cursorShown ? position : null;
@@ -375,7 +452,17 @@ export function createTts(app) {
   on($('ttsPrev'), 'click', () => jump(-1));
   on($('ttsClose'), 'click', () => showBar(false));
   on($('ttsVoice'), 'change', async () => {
-    await updateSettings({ ttsVoiceUri: $('ttsVoice').value });
+    const select = $('ttsVoice');
+    const voiceId = select.value;
+    if (voiceId.startsWith(PIPER_PREFIX)) {
+      piper.unlock();
+      if (!(await piper.isInstalled(voiceId)) && !(await offerDownload(voiceId))) {
+        select.value = getSetting('ttsVoiceUri');
+        return;
+      }
+    }
+    await updateSettings({ ttsVoiceUri: voiceId });
+    switchProvider();
     if (state !== 'idle') jump(0);
   });
   on($('ttsRate'), 'input', async () => {
@@ -463,7 +550,8 @@ export function createTts(app) {
     }
     if ('ttsProvider' in changed || 'ttsHttpUrl' in changed) {
       finish();
-      provider = currentProvider();
+      systemProvider = systemEngine();
+      provider = pickProvider();
       voicesLoaded = false;
       await fillVoices();
     }
@@ -475,12 +563,22 @@ export function createTts(app) {
     else start();
   }
 
-  provider = currentProvider();
+  systemProvider = systemEngine();
+  provider = pickProvider();
   syncUi();
 
   return {
     start,
     stop: finish,
+    piper,
+    /** Какой движок сейчас говорит: web-speech, http или piper. */
+    get engine() {
+      return provider?.id ?? null;
+    },
+    /** Перечитать список голосов — после загрузки или удаления нейроголоса. */
+    async refreshVoices() {
+      await fillVoices();
+    },
     toggle,
     pause,
     resume,

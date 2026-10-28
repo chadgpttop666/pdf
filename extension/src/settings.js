@@ -100,8 +100,8 @@ export const SETTINGS_SCHEMA = [
       ['web-speech', 'голоса системы (Web Speech API)'],
       ['http', 'внешний движок по HTTP'],
     ],
-    label: 'Движок синтеза',
-    hint: 'Внешний движок — задел под локальный Piper и подобные',
+    label: 'Движок для голосов системы',
+    hint: 'Нейроголоса Piper выбираются прямо в списке голосов на панели озвучки',
   },
   {
     key: 'ttsHttpUrl',
@@ -144,6 +144,9 @@ export const SETTINGS_SCHEMA = [
     unit: ' мс',
     label: 'Пауза между предложениями',
   },
+  // Список голосов Piper строится в settings-dialog.js: это не настройка, а
+  // управление скачанными файлами.
+  { custom: 'piperVoices' },
   { group: 'Вид' },
   {
     key: 'uiTheme',

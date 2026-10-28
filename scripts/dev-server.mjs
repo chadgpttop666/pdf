@@ -2,7 +2,7 @@
 // viewer.html можно было открыть в любом браузере и прогнать смоук-тесты.
 // В самом Firefox расширение работает из moz-extension:// и сервер не нужен.
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { dirname } from 'node:path';
@@ -12,6 +12,11 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const extensionDir = join(root, 'extension');
 const fixturesDir = join(root, 'tests', 'fixtures');
 const port = Number(process.env.PORT || 8080);
+
+// Та же политика безопасности, что у страниц расширения в Firefox: тесты
+// сразу покажут, если что-то (WASM, eval, внешние скрипты) ею запрещено.
+const manifest = JSON.parse(readFileSync(join(extensionDir, 'manifest.json'), 'utf8'));
+const csp = manifest.content_security_policy?.extension_pages;
 
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -49,10 +54,12 @@ const server = createServer(async (req, res) => {
   try {
     const info = await stat(filePath);
     if (!info.isFile()) throw new Error('not a file');
+    const type = extname(filePath);
     res.writeHead(200, {
-      'Content-Type': types[extname(filePath)] || 'application/octet-stream',
+      'Content-Type': types[type] || 'application/octet-stream',
       'Content-Length': info.size,
       'Cache-Control': 'no-store',
+      ...(csp && ['.html', '.js', '.mjs'].includes(type) ? { 'Content-Security-Policy': csp } : {}),
     });
     createReadStream(filePath).pipe(res);
   } catch {
