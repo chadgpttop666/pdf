@@ -7,7 +7,8 @@ import { get as getSetting, onSettingsChanged, updateSettings } from './settings
 import { MAX_SPEED, MIN_SPEED, autoStepDistance, clampSpeed, nextAutoScrollTop, speedIncrement } from './scroll-math.js';
 
 export function createAutoScroll(app) {
-  const container = app.container;
+  // Прокручиваем ту область, что видна: страницы PDF или «только текст».
+  const viewport = () => app.activeContainer;
   const bar = $('autoscrollBar');
   const toggleButton = $('asToggle');
   const speedInput = $('asSpeed');
@@ -61,8 +62,9 @@ export function createAutoScroll(app) {
     if (!running) return;
     const dtMs = lastTs ? ts - lastTs : 16;
     lastTs = ts;
+    const container = viewport();
 
-    // Если пользователь прокрутил сам, подхватываем его позицию.
+    // Если пользователь прокрутил сам или переключил вид, подхватываем позицию.
     if (Math.abs(container.scrollTop - virtualTop) > 2) virtualTop = container.scrollTop;
 
     const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
@@ -80,7 +82,7 @@ export function createAutoScroll(app) {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       if (!running) return;
-      const distance = autoStepDistance(container.clientHeight, getSetting('autoScrollStepPercent'));
+      const distance = autoStepDistance(viewport().clientHeight, getSetting('autoScrollStepPercent'));
       await app.scroller.scrollBy(distance, { smooth: true, duration: getSetting('scrollAnimationMs') });
       if (!running) return;
       if (app.scroller.atBottom) {
@@ -99,7 +101,7 @@ export function createAutoScroll(app) {
     }
     running = true;
     bar.hidden = false;
-    virtualTop = container.scrollTop;
+    virtualTop = viewport().scrollTop;
     lastTs = 0;
     if (mode() === 'step') scheduleStep();
     else frame = requestAnimationFrame(continuousFrame);
@@ -176,12 +178,14 @@ export function createAutoScroll(app) {
     stop();
     app.hud.show('Автоскролл остановлен');
   };
-  on(container, 'wheel', stopOnUserInput, { passive: true });
-  on(container, 'touchstart', stopOnUserInput, { passive: true });
-  on(container, 'mousedown', (event) => {
-    // Клик по тексту не должен ронять автоскролл, а перетаскивание скроллбара — должно.
-    if (event.offsetX > container.clientWidth) stopOnUserInput(event);
-  });
+  for (const container of [app.container, $('reflowContainer')]) {
+    on(container, 'wheel', stopOnUserInput, { passive: true });
+    on(container, 'touchstart', stopOnUserInput, { passive: true });
+    on(container, 'mousedown', (event) => {
+      // Клик по тексту не должен ронять автоскролл, а перетаскивание скроллбара — должно.
+      if (event.offsetX > container.clientWidth) stopOnUserInput(event);
+    });
+  }
 
   onSettingsChanged((_all, changed) => {
     if ('autoScrollMode' in changed || 'autoScrollSpeed' in changed) syncUi();

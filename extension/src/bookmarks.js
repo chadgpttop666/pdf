@@ -20,12 +20,16 @@ export function createBookmarks(app) {
   }
 
   /** Подпись берём из текста рядом с текущим местом — по ней закладку узнают. */
-  async function labelFor(pageNumber) {
+  async function labelFor(pageNumber, sentenceIndex) {
     const index = app.tts?.textIndex;
     if (!index) return `Страница ${pageNumber}`;
     const page = await index.page(pageNumber).catch(() => null);
     if (!page?.text) return `Страница ${pageNumber}`;
-    const offset = await index.offsetForSpan(pageNumber, firstVisibleSpanIndex(app, pageNumber));
+    // В режиме «только текст» известно предложение, в обычном — видимый кусок текста.
+    const offset =
+      sentenceIndex != null
+        ? (page.sentences[sentenceIndex]?.start ?? 0)
+        : await index.offsetForSpan(pageNumber, firstVisibleSpanIndex(app, pageNumber));
     const fragment = page.text.slice(offset, offset + 90).replace(/\s+/g, ' ').trim();
     return fragment || `Страница ${pageNumber}`;
   }
@@ -35,12 +39,13 @@ export function createBookmarks(app) {
       app.hud.show('Закладки доступны после открытия документа');
       return null;
     }
-    const { pageNumber, offsetRatio } = pageOffsetRatio(app);
+    const where = app.reflow?.active ? app.reflow.position() : pageOffsetRatio(app);
+    const { pageNumber, offsetRatio } = where;
     const bookmark = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       pageNumber,
       offsetRatio,
-      label: await labelFor(pageNumber),
+      label: await labelFor(pageNumber, where.sentenceIndex),
       note: '',
       createdAt: Date.now(),
     };
@@ -59,6 +64,10 @@ export function createBookmarks(app) {
 
   function goTo(bookmark) {
     popover.close();
+    if (app.reflow?.active) {
+      app.reflow.scrollToPageRatio(bookmark.pageNumber, Math.max(0, bookmark.offsetRatio));
+      return;
+    }
     app.pdfViewer.scrollPageIntoView({ pageNumber: bookmark.pageNumber });
     requestAnimationFrame(() => {
       const div = app.pdfViewer.getPageView(bookmark.pageNumber - 1)?.div;

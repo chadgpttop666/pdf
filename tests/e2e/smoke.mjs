@@ -435,6 +435,82 @@ try {
     bookmarkView.items === 1 && bookmarkView.markers >= 1 && bookmarkView.noteFocused,
     JSON.stringify(bookmarkView)
   );
+  await page.evaluate(() => window.pdfReaderApp.bookmarks.closePopover());
+
+  // ── Режим «только текст» ──
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
+  await page.waitForTimeout(700);
+  await page.click('#viewerContainer', { position: { x: 5, y: 5 } }); // фокус в документ, не в поле заметки
+  await page.keyboard.press('t');
+  await page.waitForTimeout(1500);
+  const reflow = await page.evaluate(() => {
+    const container = document.getElementById('reflowContainer');
+    return {
+      active: window.pdfReaderApp.reflow.active,
+      position: window.pdfReaderApp.reflow.position(),
+      overflowX: container.scrollWidth - container.clientWidth,
+      header: [...document.querySelectorAll('.rf-page[data-page="3"] .rf-p')].some((p) => p.textContent.includes('Как читать с экрана')),
+      footnote: document.getElementById('reflowArticle').textContent.includes('Микрофильм —'),
+    };
+  });
+  check(
+    'режим «только текст» открывается на том же месте',
+    reflow.active && reflow.position.pageNumber === 3 && reflow.position.sentenceIndex === 0,
+    JSON.stringify(reflow.position)
+  );
+  check(
+    'текст без горизонтальной прокрутки, колонтитулов и сносок',
+    reflow.overflowX <= 1 && !reflow.header && !reflow.footnote,
+    JSON.stringify(reflow)
+  );
+
+  const reflowTop = () => page.evaluate(() => document.getElementById('reflowContainer').scrollTop);
+  const beforeSpace = await reflowTop();
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(500);
+  check('пробел листает и в режиме текста', (await reflowTop()) - beforeSpace > 300, `сдвиг ${Math.round((await reflowTop()) - beforeSpace)} px`);
+
+  const sizeBefore = await page.evaluate(() => getComputedStyle(document.getElementById('reflowArticle')).fontSize);
+  await page.keyboard.press('Control+Equal');
+  await page.waitForTimeout(400);
+  const sizeAfter = await page.evaluate(() => getComputedStyle(document.getElementById('reflowArticle')).fontSize);
+  check('Ctrl+= в режиме текста увеличивает шрифт', parseFloat(sizeAfter) > parseFloat(sizeBefore), `${sizeBefore} → ${sizeAfter}`);
+
+  // Озвучка в режиме текста подсвечивает само предложение и слово
+  await page.evaluate(() => {
+    window.pdfReaderApp.tts.start({ pageNumber: 3, sentenceIndex: 4 });
+  });
+  await page.waitForTimeout(600);
+  const reflowTts = await page.evaluate(() => ({
+    current: document.querySelector('.rf-s.rf-current')?.textContent ?? '',
+    spoken: window.spokenSentences.at(-1),
+    word: globalThis.CSS?.highlights?.has('rf-word') ?? false,
+  }));
+  check(
+    'озвучка в режиме текста подсвечивает читаемое предложение',
+    reflowTts.current && reflowTts.current === reflowTts.spoken && reflowTts.word,
+    `«${reflowTts.current.slice(0, 40)}», слово: ${reflowTts.word}`
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+
+  // Место в режиме текста переживает перезагрузку
+  await page.waitForTimeout(1800);
+  await page.reload();
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForTimeout(3000);
+  const reflowRestored = await page.evaluate(() => ({
+    active: window.pdfReaderApp.reflow.active,
+    page: window.pdfReaderApp.reflow.active ? window.pdfReaderApp.reflow.position().pageNumber : null,
+  }));
+  check('режим текста и место в нём восстанавливаются', reflowRestored.active && reflowRestored.page === 3, JSON.stringify(reflowRestored));
+
+  await page.keyboard.press('t');
+  await page.waitForTimeout(1200);
+  const backInPdf = await page.evaluate(() => ({
+    active: window.pdfReaderApp.reflow.active,
+    page: window.pdfReaderApp.pdfViewer.currentPageNumber,
+  }));
+  check('выход из режима текста — на ту же страницу', !backInPdf.active && backInPdf.page === 3, JSON.stringify(backInPdf));
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

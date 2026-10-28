@@ -182,6 +182,42 @@ export const SETTINGS_SCHEMA = [
     label: 'Определять поля автоматически',
     hint: 'Поля считаются по выборке страниц один раз при открытии',
   },
+  { group: 'Только текст (клавиша T)' },
+  {
+    key: 'reflowTheme',
+    type: 'select',
+    def: 'auto',
+    options: [
+      ['auto', 'как интерфейс'],
+      ['paper', 'бумага'],
+      ['sepia', 'сепия'],
+      ['night', 'ночь'],
+    ],
+    label: 'Цвета',
+  },
+  {
+    key: 'reflowFont',
+    type: 'select',
+    def: 'serif',
+    options: [
+      ['serif', 'с засечками (как в книге)'],
+      ['sans', 'без засечек'],
+    ],
+    label: 'Шрифт',
+  },
+  { key: 'reflowSize', type: 'range', def: 22, min: 12, max: 48, step: 1, unit: ' px', label: 'Размер шрифта', hint: 'Ctrl + / Ctrl − в режиме текста' },
+  { key: 'reflowLineHeight', type: 'range', def: 1.6, min: 1.2, max: 2.2, step: 0.05, label: 'Межстрочный интервал' },
+  { key: 'reflowWidth', type: 'range', def: 68, min: 30, max: 140, step: 2, unit: ' знаков', label: 'Ширина колонки' },
+  {
+    key: 'reflowAlign',
+    type: 'select',
+    def: 'justify',
+    options: [
+      ['justify', 'по ширине'],
+      ['left', 'по левому краю'],
+    ],
+    label: 'Выравнивание',
+  },
   { group: 'Прочее' },
   {
     key: 'interceptPdfLinks',

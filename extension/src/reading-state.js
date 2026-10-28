@@ -51,10 +51,14 @@ export function createReadingState(app) {
   }
 
   function currentState() {
-    const { pageNumber, offsetRatio } = pageOffsetRatio(app);
+    // В режиме «только текст» вид PDF стоит на месте входа — место берём из текста.
+    const reflow = app.reflow?.active ? app.reflow.position() : null;
+    const { pageNumber, offsetRatio } = reflow ?? pageOffsetRatio(app);
     return {
       pageNumber,
       offsetRatio,
+      viewMode: reflow ? 'reflow' : 'pdf',
+      sentenceIndex: reflow?.sentenceIndex ?? null,
       zoom: app.zoomIntent,
       left: Math.round(app.container.scrollLeft),
       viewLock: app.viewLock?.state ?? null,
@@ -103,6 +107,9 @@ export function createReadingState(app) {
       const expected = scrollToSaved(state);
       if (Number.isFinite(state.left) && !state.viewLock) app.container.scrollLeft = state.left;
       if (state.tts?.pageNumber) app.tts?.setPosition(state.tts);
+      if (state.viewMode === 'reflow') {
+        app.reflow?.enter({ pageNumber: state.pageNumber, sentenceIndex: state.sentenceIndex ?? 0 });
+      }
 
       // Масштаб применяется асинхронно и может сдвинуть вид — сверяемся.
       setTimeout(() => {
@@ -168,6 +175,8 @@ export function createReadingState(app) {
   app.eventBus.on('scalechanging', scheduleSave);
   app.viewLock?.onChange(() => scheduleSave());
   app.container.addEventListener('scroll', scheduleSave, { passive: true });
+  document.getElementById('reflowContainer').addEventListener('scroll', scheduleSave, { passive: true });
+  app.eventBus.on('viewmodechanged', scheduleSave);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') save();
   });

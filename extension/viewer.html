@@ -48,6 +48,7 @@
 
       <button id="btnAutoScroll" data-icon="autoscroll" title="Автопрокрутка (A)">Автоскролл</button>
       <button id="btnSpeak" data-icon="speak" title="Озвучка (S)">Озвучка</button>
+      <button id="btnReflow" data-icon="reflow" title="Только текст: крупный шрифт под ширину окна (T)">Текст</button>
 
       <div class="spacer"></div>
       <div id="docTitle" title=""></div>
@@ -90,6 +91,10 @@
 
       <div id="viewerContainer" tabindex="0" role="main">
         <div id="viewer" class="pdfViewer"></div>
+      </div>
+
+      <div id="reflowContainer" tabindex="0" hidden>
+        <article id="reflowArticle" class="rf-article" lang="ru"></article>
       </div>
 
       <div id="welcome">

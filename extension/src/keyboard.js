@@ -45,6 +45,8 @@ export function displayCombo(combo) {
     .join(' + ');
 }
 
+const pdfMode = (app) => !app.reflow?.active;
+
 /** Таблица действий. Модули могут быть ещё не подключены, поэтому всё через ?. */
 export const BINDINGS = [
   { section: 'Чтение' },
@@ -71,6 +73,7 @@ export const BINDINGS = [
   { combos: ['Shift+Comma'], label: 'Читать медленнее', run: (app) => app.tts?.adjustRate(-0.1) },
 
   { section: 'Вид' },
+  { combos: ['KeyT'], label: 'Режим «только текст»', run: (app) => app.reflow?.toggle() },
   { combos: ['KeyI'], label: 'Инверсия страницы', run: (app) => app.appearance?.toggleInvert() },
   { combos: ['KeyC'], label: 'Обрезка полей', run: (app) => app.appearance?.toggleCrop() },
   { combos: ['KeyV'], label: 'Панель вида', run: (app) => app.appearance?.togglePanel() },
@@ -87,9 +90,10 @@ export const BINDINGS = [
   { combos: ['Ctrl+KeyO'], label: 'Открыть файл', run: () => document.getElementById('filePicker').click() },
   // Иначе Firefox сохранит страницу самого вьюера, а не документ.
   { combos: ['Ctrl+KeyS'], label: 'Скачать PDF на компьютер', run: (app) => app.downloadPdf() },
-  { combos: ['Ctrl+KeyF', 'Slash'], label: 'Поиск по документу', run: (app) => app.find?.open() },
-  { combos: ['F3'], label: 'Следующее совпадение', run: (app) => app.find?.again(1) },
-  { combos: ['Shift+F3'], label: 'Предыдущее совпадение', run: (app) => app.find?.again(-1) },
+  // В режиме «только текст» это обычная страница — там работает поиск самого Firefox.
+  { combos: ['Ctrl+KeyF', 'Slash'], label: 'Поиск по документу', run: (app) => app.find?.open(), when: pdfMode },
+  { combos: ['F3'], label: 'Следующее совпадение', run: (app) => app.find?.again(1), when: pdfMode },
+  { combos: ['Shift+F3'], label: 'Предыдущее совпадение', run: (app) => app.find?.again(-1), when: pdfMode },
   { combos: ['KeyB'], label: 'Закладка на этом месте', run: (app) => app.bookmarks?.addHere() },
   { combos: ['F1'], label: 'Эта справка', run: (app) => app.help.toggle() },
   { combos: ['Escape'], label: 'Закрыть панели, остановить всё', run: (app) => app.escape(), allowWhileTyping: true },
@@ -108,6 +112,7 @@ export function bindKeyboard(app) {
     if (!binding) return;
     if (isTypingTarget(event.target) && !binding.allowWhileTyping) return;
     if (event.defaultPrevented) return;
+    if (binding.when && !binding.when(app)) return; // клавишу забирает браузер
 
     // Прокрутку и прочие действия перехватываем целиком: иначе браузер
     // прокрутит контейнер по-своему поверх нашей анимации.

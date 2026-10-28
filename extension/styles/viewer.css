@@ -202,6 +202,72 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
   background: var(--bg-sunken);
 }
 
+/* ── Режим «только текст» ────────────────────────────────────────── */
+
+#reflowContainer {
+  --rf-bg: #15171b;
+  --rf-fg: #d9d5cc;
+  --rf-muted: #7d7a73;
+  --rf-current: rgb(56 189 248 / 20%);
+  --rf-word: rgb(250 204 21 / 45%);
+  position: absolute;
+  inset: 0;
+  left: var(--sidebar-offset, 0);
+  z-index: 5;
+  overflow: auto;
+  outline: none;
+  background: var(--rf-bg);
+  color: var(--rf-fg);
+  /* При дозагрузке страниц выше экрана вид не должен прыгать. */
+  overflow-anchor: auto;
+}
+
+#reflowContainer[data-theme='paper'] { --rf-bg: #fbfaf6; --rf-fg: #1d1d1f; --rf-muted: #8a8780; --rf-current: #cfe8ff; --rf-word: #ffe27a; }
+#reflowContainer[data-theme='sepia'] { --rf-bg: #f3ead7; --rf-fg: #3b2f22; --rf-muted: #9a8a70; --rf-current: #e5d4ad; --rf-word: #f5c84c; }
+
+.rf-article {
+  position: relative;
+  max-width: var(--rf-width, 68ch);
+  margin: 0 auto;
+  padding: 48px 56px 60vh;
+  font-family: var(--rf-font);
+  font-size: var(--rf-size, 22px);
+  line-height: var(--rf-line, 1.6);
+  text-align: var(--rf-align, justify);
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
+
+.rf-page { position: relative; }
+.rf-page-marker {
+  position: absolute;
+  left: -48px;
+  top: 0.35em;
+  width: 36px;
+  text-align: right;
+  font: 12px/1 system-ui, sans-serif;
+  color: var(--rf-muted);
+  user-select: none;
+}
+
+.rf-p { margin: 0; text-indent: 1.5em; }
+.rf-p.rf-continued { text-indent: 0; }
+.rf-p.rf-heading { text-indent: 0; text-align: center; font-weight: 700; margin: 1.1em 0 0.5em; hyphens: manual; }
+.rf-empty { color: var(--rf-muted); font-style: italic; text-indent: 0; }
+.rf-s { border-radius: 4px; }
+.rf-s.rf-current { background: var(--rf-current); box-shadow: 0 0 0 2px var(--rf-current); }
+::highlight(rf-word) { background-color: var(--rf-word); color: inherit; }
+#app.tts-picking .rf-s { cursor: pointer; }
+
+/* Масштаб и замок относятся к страницам PDF — в режиме текста их заменяет размер шрифта. */
+#app.reflow-on #zoomSelect,
+#app.reflow-on #btnLock { opacity: .4; pointer-events: none; }
+
+@media (max-width: 720px) {
+  .rf-article { padding: 24px 20px 60vh; }
+  .rf-page-marker { display: none; }
+}
+
 /* Контейнер должен быть absolute (требование PDFViewer), поэтому позицию
    боковой панели компенсируем отступом слева. */
 #body { isolation: isolate; }

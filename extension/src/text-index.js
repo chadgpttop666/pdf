@@ -144,6 +144,9 @@ const STARTS_PARAGRAPH = /^[\p{Lu}\d«„"—–-]/u;
 function isParagraphBreak(previous, next, layout) {
   const step = Math.abs(next.y - previous.y);
   if (layout.lineStep > 0 && step > layout.lineStep * 1.4) return true;
+  // Сменился размер шрифта — заголовок и подзаголовок, заголовок и текст.
+  const sizes = [previous.fontSize, next.fontSize].sort((a, b) => a - b);
+  if (sizes[1] > sizes[0] * 1.12) return true;
   if (!layout.width) return false;
 
   // Совсем короткая строка — заголовок, «* * *» или хвост абзаца.
@@ -318,6 +321,15 @@ export function cleanForSpeech(raw) {
     map.pop();
   }
   return { text: out.join(''), map };
+}
+
+/**
+ * Длина слова, начинающегося с позиции. Firefox присылает в событиях
+ * синтеза только начало слова, без длины, — её досчитываем сами.
+ */
+export function wordLength(text, start) {
+  const match = /^[\p{L}\p{N}\p{M}'’-]+/u.exec(text.slice(start));
+  return match ? match[0].length : 1;
 }
 
 /** Грубое определение языка — нужно только для выбора голоса и сегментации. */

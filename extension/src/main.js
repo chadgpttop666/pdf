@@ -12,6 +12,7 @@ import { createAutoScroll } from './autoscroll.js';
 import { createAppearance } from './appearance.js';
 import { createViewLock } from './view-lock.js';
 import { createTts } from './tts/controller.js';
+import { createReflow } from './reflow-view.js';
 import { createFind } from './find-ui.js';
 import { createOutline } from './outline.js';
 import { createThumbnails } from './thumbnails.js';
@@ -52,8 +53,13 @@ export const app = {
   bookmarks: null,
   recent: null,
   help: null,
+  reflow: null,
   zoomIntent: 'page-width',
   wakeLock: null,
+  /** Область прокрутки, которая сейчас видна: страницы PDF или «только текст». */
+  get activeContainer() {
+    return this.reflow?.active ? this.reflow.container : this.container;
+  },
 };
 
 function applyUiTheme() {
@@ -241,13 +247,14 @@ async function main() {
   app.downloadPdf = downloadPdf;
   app.toolbar = createToolbar(app);
   app.wakeLock = createWakeLock();
-  app.scroller = createScroller(app.container);
+  app.scroller = createScroller(() => app.activeContainer);
   app.screenNav = createScreenNav(app);
   app.autoScroll = createAutoScroll(app);
   app.help = createHelp();
   app.appearance = createAppearance(app);
   app.viewLock = createViewLock(app);
   app.tts = createTts(app);
+  app.reflow = createReflow(app);
   app.find = createFind(app);
   app.outline = createOutline(app);
   app.thumbnails = createThumbnails(app);

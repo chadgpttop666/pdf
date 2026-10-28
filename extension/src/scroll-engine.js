@@ -1,10 +1,14 @@
 // Плавная прокрутка контейнера. Своя анимация вместо scrollTo({behavior:'smooth'}),
 // потому что нужны настраиваемая длительность, мгновенная отмена при вмешательстве
 // пользователя и точность до дробных пикселей для медленной автопрокрутки.
+//
+// Контейнер можно передать функцией: у читалки две области прокрутки —
+// страницы PDF и режим «только текст», — и работать надо с той, что видна.
 
 const easeInOutQuad = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
-export function createScroller(container) {
+export function createScroller(source) {
+  const current = () => (typeof source === 'function' ? source() : source);
   let frame = 0;
   let onDone = null;
 
@@ -17,14 +21,15 @@ export function createScroller(container) {
     callback?.(false);
   }
 
-  function maxTop() {
+  function maxTop(container = current()) {
     return Math.max(0, container.scrollHeight - container.clientHeight);
   }
 
   function scrollTo(top, { smooth = true, duration = 220 } = {}) {
     cancel();
+    const container = current(); // анимация доводится в той области, где началась
     const from = container.scrollTop;
-    const to = Math.min(Math.max(0, top), maxTop());
+    const to = Math.min(Math.max(0, top), maxTop(container));
     if (!smooth || duration <= 0 || Math.abs(to - from) < 1) {
       container.scrollTop = to;
       return Promise.resolve(true);
@@ -51,17 +56,17 @@ export function createScroller(container) {
     cancel,
     scrollTo,
     scrollBy(delta, options) {
-      return scrollTo(container.scrollTop + delta, options);
+      return scrollTo(current().scrollTop + delta, options);
     },
     get animating() {
       return frame !== 0;
     },
     get atBottom() {
-      return container.scrollTop >= maxTop() - 1;
+      return current().scrollTop >= maxTop() - 1;
     },
     get atTop() {
-      return container.scrollTop <= 1;
+      return current().scrollTop <= 1;
     },
-    maxTop,
+    maxTop: () => maxTop(),
   };
 }

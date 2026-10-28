@@ -13,6 +13,7 @@ const ICONS = {
     ['path', { d: 'M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.5h7.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z' }],
   ],
   download: [['path', { d: 'M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14' }]],
+  reflow: [['path', { d: 'M5 6h14M5 10h14M5 14h14M5 18h8' }]],
   chevronLeft: [['path', { d: 'M15 18l-6-6 6-6' }]],
   chevronRight: [['path', { d: 'M9 18l6-6-6-6' }]],
   chevronDown: [['path', { d: 'M6 9l6 6 6-6' }]],

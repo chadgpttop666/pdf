@@ -1,14 +1,16 @@
 // Перемотка экранами вместо страниц: шаг равен высоте видимой области минус
 // нахлёст, чтобы последняя прочитанная строка оставалась перед глазами.
+// Работает с той областью, что сейчас видна: страницы PDF или «только текст».
 
 import { get as getSetting } from './settings.js';
 
 export function createScreenNav(app) {
-  const container = app.container;
+  const viewport = () => app.activeContainer;
 
   function screenStep() {
-    const overlap = (getSetting('screenOverlapPercent') / 100) * container.clientHeight;
-    return Math.max(40, container.clientHeight - overlap);
+    const height = viewport().clientHeight;
+    const overlap = (getSetting('screenOverlapPercent') / 100) * height;
+    return Math.max(40, height - overlap);
   }
 
   function scrollOptions() {
@@ -33,10 +35,10 @@ export function createScreenNav(app) {
       return app.scroller.scrollBy(-screenStep(), scrollOptions());
     },
     lineDown() {
-      return app.scroller.scrollBy(Math.round(container.clientHeight * 0.12), { smooth: true, duration: 120 });
+      return app.scroller.scrollBy(Math.round(viewport().clientHeight * 0.12), { smooth: true, duration: 120 });
     },
     lineUp() {
-      return app.scroller.scrollBy(-Math.round(container.clientHeight * 0.12), { smooth: true, duration: 120 });
+      return app.scroller.scrollBy(-Math.round(viewport().clientHeight * 0.12), { smooth: true, duration: 120 });
     },
     toStart() {
       return app.scroller.scrollTo(0, scrollOptions());
@@ -47,16 +49,20 @@ export function createScreenNav(app) {
   };
 
   // Клик по краю экрана — как в читалках: низ листает вперёд, верх назад.
-  container.addEventListener('click', (event) => {
+  function onClick(event) {
     if (!getSetting('clickZones')) return;
     if (event.target.closest('a, button, input, .textLayer .highlight')) return;
-    if (app.tts?.pickMode && event.target.closest('.textLayer')) return; // щелчок выбирает место озвучки
+    // Щелчок по тексту при открытой панели озвучки выбирает место чтения.
+    if (app.tts?.pickMode && event.target.closest('.textLayer, .rf-s')) return;
     if (window.getSelection()?.toString()) return;
-    const rect = container.getBoundingClientRect();
+    const rect = event.currentTarget.getBoundingClientRect();
     const position = (event.clientY - rect.top) / rect.height;
     if (position > 0.72) nav.screenDown();
     else if (position < 0.18) nav.screenUp();
-  });
+  }
+
+  app.container.addEventListener('click', onClick);
+  document.getElementById('reflowContainer').addEventListener('click', onClick);
 
   return nav;
 }

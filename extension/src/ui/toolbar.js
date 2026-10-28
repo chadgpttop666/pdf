@@ -37,6 +37,11 @@ export function createToolbar(app) {
   }
 
   function zoomBy(direction) {
+    // В режиме «только текст» «крупнее» — это размер шрифта.
+    if (app.reflow?.active) {
+      app.reflow.adjustFontSize(direction);
+      return;
+    }
     const scale = app.pdfViewer.currentScale;
     const next =
       direction > 0
