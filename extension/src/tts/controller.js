@@ -86,6 +86,7 @@ export function createTts(app) {
       pitch: getSetting('ttsPitch'),
       volume: getSetting('ttsVolume'),
       lang: index?.language === 'ru' ? 'ru-RU' : index?.language || undefined,
+      mixLanguages: getSetting('ttsMixLanguages'),
     };
   }
 

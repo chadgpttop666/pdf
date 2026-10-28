@@ -115,6 +115,13 @@ export const SETTINGS_SCHEMA = [
   { key: 'ttsVolume', type: 'range', def: 1, min: 0, max: 1, step: 0.05, label: 'Громкость' },
   { key: 'ttsVoiceUri', type: 'hidden', def: '' },
   {
+    key: 'ttsMixLanguages',
+    type: 'bool',
+    def: true,
+    label: 'Английские вставки — английским голосом',
+    hint: 'Названия вроде «Journal of Political Philosophy» в русском тексте читает английский голос системы. Нейроголос произносит их по-английски сам',
+  },
+  {
     key: 'ttsSkipFurniture',
     type: 'bool',
     def: true,

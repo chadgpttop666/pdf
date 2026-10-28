@@ -25,6 +25,10 @@ const IDLE_SHUTDOWN_MS = 3 * 60 * 1000;
 const MIN_CONFIDENCE = 40;
 // Сколько страниц проверить, чтобы понять, скан ли весь документ.
 const SCAN_SAMPLE = 8;
+// Версия способа распознавания. Сохранённое прежним способом (версия 1
+// распознавала русские книги без английского и теряла названия) не
+// подставляем — такие страницы распознаются заново.
+const OCR_FORMAT = 2;
 
 export function createOcr(app) {
   const results = new Map(); // страница → распознанные элементы текста
@@ -185,7 +189,7 @@ export function createOcr(app) {
     const items = ocrLinesToItems(lines, (x, y) => viewport.convertToPdfPoint(x, y), { minConfidence: MIN_CONFIDENCE });
     await apply(pageNumber, items);
     if (id) {
-      const record = { docId: id, pageNumber, items, languages: docLanguages, confidence: data.confidence, createdAt: Date.now() };
+      const record = { docId: id, pageNumber, items, languages: docLanguages, format: OCR_FORMAT, confidence: data.confidence, createdAt: Date.now() };
       await library.putOcr(record).catch(() => {});
     }
     return items;
@@ -330,6 +334,7 @@ export function createOcr(app) {
     const stored = await library.listOcr(id).catch(() => []);
     for (const record of stored) {
       if (document !== pdfDocument || results.has(record.pageNumber)) continue;
+      if ((record.format ?? 1) < OCR_FORMAT) continue;
       docLanguages ??= record.languages ?? null;
       await apply(record.pageNumber, record.items);
     }

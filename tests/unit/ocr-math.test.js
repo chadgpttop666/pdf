@@ -56,7 +56,7 @@ describe('распознанный текст → текстовый слой', 
 describe('язык распознавания', () => {
   it('по доле кириллицы', async () => {
     const { pickLanguages } = await import('../../extension/src/ocr-math.js');
-    assert.deepEqual(pickLanguages('Красная нить любого длинного текста — это непрерывность.'), ['rus']);
+    assert.deepEqual(pickLanguages('Красная нить любого длинного текста — это непрерывность.'), ['rus', 'eng']);
     assert.deepEqual(pickLanguages('The red thread of any long text is continuity itself.'), ['eng']);
     assert.deepEqual(pickLanguages('Глава о PDF: viewer, reader и прочие tools для чтения'), ['rus', 'eng']);
     assert.equal(pickLanguages('12 стр.'), null);
@@ -67,5 +67,43 @@ describe('отбор слов распознавания', () => {
   it('неуверенное слово в хорошей строке остаётся', () => {
     const line = { words: [word('философа', 0, 100, 0, 20, 95), word('Кимлики', 110, 200, 0, 20, 92), word('слу-', 210, 250, 0, 20, 31)] };
     assert.deepEqual(ocrLinesToItems([line], unrotated, { minConfidence: 40 }).map((item) => item.str.trim()), ['философа', 'Кимлики', 'слу-']);
+  });
+});
+
+describe('латинские двойники в русском тексте', () => {
+  it('русское слово из «двойников» возвращается в кириллицу, английские названия остаются', async () => {
+    const { fixHomoglyphs } = await import('../../extension/src/ocr-math.js');
+    const line = (text) => fixHomoglyphs(text.split(' ').map((t) => ({ text: t, confidence: 90, bbox: {} }))).map((w) => w.text).join(' ');
+    assert.equal(line('силы Ha TO, чтобы снова'), 'силы на то, чтобы снова');
+    assert.equal(line('проект (Great Ape Project), международное'), 'проект (Great Ape Project), международное');
+    assert.equal(line('журнал («Ethics»), посвящённый'), 'журнал («Ethics»), посвящённый');
+    assert.equal(line('в сеpдце и'), 'в сердце и');
+    assert.equal(line('[Cavalieri, Singer 1993]'), '[Cavalieri, Singer 1993]');
+    assert.equal(line('трех западных 30Н).'), 'трех западных зон).');
+    assert.equal(line('в 30-х годах и 300 лет'), 'в 30-х годах и 300 лет');
+  });
+});
+
+describe('шум в хорошей строке', () => {
+  it('неуверенное тире в широком пробеле выбрасывается, неуверенное слово — нет', () => {
+    const line = {
+      words: [word('поручена', 0, 100, 0, 20, 95), word('—', 110, 130, 0, 20, 22), word('разработка', 140, 260, 0, 20, 93), word('слу-', 270, 300, 0, 20, 31)],
+    };
+    assert.deepEqual(ocrLinesToItems([line], unrotated, { minConfidence: 40 }).map((item) => item.str.trim()), ['поручена', 'разработка', 'слу-']);
+  });
+});
+
+describe('ложные тире в строке по ширине', () => {
+  it('узкая чёрточка в широком пробеле — шум, тире во всю высоту строки — текст', () => {
+    const line = {
+      words: [
+        word('поручена', 0, 100, 0, 36, 95),
+        word('—', 110, 125, 0, 36, 73),
+        word('разработка', 140, 260, 0, 36, 93),
+        word('—', 270, 304, 0, 36, 90),
+        word('это', 320, 360, 0, 36, 95),
+      ],
+    };
+    assert.deepEqual(ocrLinesToItems([line], unrotated).map((item) => item.str.trim()), ['поручена', 'разработка', '—', 'это']);
   });
 });

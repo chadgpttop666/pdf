@@ -40,9 +40,13 @@ async function waitForServer(url, attempts = 40) {
 }
 
 const speechMock = () => {
-  const voices = [{ voiceURI: 'mock-ru', name: 'Мок', lang: 'ru-RU', default: true }];
+  const voices = [
+    { voiceURI: 'mock-ru', name: 'Мок', lang: 'ru-RU', default: true },
+    { voiceURI: 'mock-en', name: 'Mock English', lang: 'en-US', default: false },
+  ];
   let current = null;
   window.spokenSentences = [];
+  window.spokenVoices = [];
   Object.defineProperty(window, 'speechSynthesis', {
     configurable: true,
     value: {
@@ -50,6 +54,8 @@ const speechMock = () => {
       speak(utterance) {
         current = utterance;
         window.spokenSentences.push(utterance.text);
+        window.spokenVoices.push(utterance.voice?.voiceURI ?? null);
+        setTimeout(() => utterance.onstart?.(), 5);
         setTimeout(() => utterance.onboundary?.({ charIndex: 0, charLength: 7, name: 'word' }), 30);
         utterance._timer = setTimeout(() => {
           current = null;
@@ -973,6 +979,27 @@ try {
   );
   await page.evaluate(() => window.pdfReaderApp.reflow.exit());
 
+  // Английские названия в русской фразе — английским голосом системы.
+  const englishSentence = await page.evaluate(async () => {
+    const page2 = await window.pdfReaderApp.tts.textIndex.page(2);
+    return page2.sentences.findIndex((sentence) => page2.text.slice(sentence.start, sentence.end).includes('Journal'));
+  });
+  await page.evaluate((index) => {
+    window.spokenSentences.length = 0;
+    window.spokenVoices.length = 0;
+    window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: index });
+  }, englishSentence);
+  await page.waitForFunction(() => window.spokenVoices.includes('mock-en') && window.spokenSentences.length >= 4, null, { timeout: 15000 });
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  const mixed = await page.evaluate(() => window.spokenSentences.map((text, i) => [window.spokenVoices[i], text]));
+  check(
+    'английские названия читает английский голос, остальное — русский',
+    mixed.some(([voice, text]) => voice === 'mock-en' && text === 'Journal of Political Philosophy') &&
+      mixed.some(([voice, text]) => voice === 'mock-en' && text === 'Ethics') &&
+      mixed.some(([voice, text]) => voice === 'mock-ru' && text.includes('Сегодня в нашем распоряжении')),
+    JSON.stringify(mixed.slice(0, 6))
+  );
+
   // ── Имя файла при скачивании: по адресу без имени ──
   const savedName = async (path) => {
     const [file, extra = ''] = path.split('&');
@@ -1038,6 +1065,12 @@ try {
   check('озвучка читает распознанный скан', true);
   // Следующая страница-скан распознаётся заранее, пока читается эта.
   await page.waitForFunction(() => window.pdfReaderApp.ocr.has(2), null, { timeout: 90000 });
+  const scanPage2Text = await page.evaluate(async () => (await window.pdfReaderApp.tts.textIndex.page(2)).text);
+  check(
+    'на распознанном скане колонтитул и номер страницы не читаются',
+    scanPage2Text.startsWith('Наконец') && !scanPage2Text.includes('Как читать с экрана') && !/\n\s*\d+\s*$/.test(scanPage2Text),
+    `«${scanPage2Text.slice(0, 40)}…${scanPage2Text.slice(-30)}»`
+  );
   const scanText = await page.evaluate(async () => {
     const pages = [1, 2].map((n) => window.pdfReaderApp.loader.pdfDocument.getPage(n).then((p) => p.getTextContent()));
     return (await Promise.all(pages)).map((content) => content.items.map((item) => item.str).join('')).join(' ');
@@ -1059,6 +1092,22 @@ try {
   );
   await page.evaluate(() => window.pdfReaderApp.tts.stop());
 
+  // Скан с английскими названиями: они распознаются, русские слова — без латинских двойников.
+  await page.goto(`${BASE}/viewer.html?file=/fixtures/scan-mixed.pdf`);
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+  await page.waitForSelector('.page[data-page-number="1"] .ocr-offer button.primary', { timeout: 15000 });
+  await page.click('.page[data-page-number="1"] .ocr-offer button.primary');
+  await page.waitForFunction(() => window.pdfReaderApp.ocr.has(1), null, { timeout: 90000 });
+  const mixedScan = await page.evaluate(async () => {
+    const content = await (await window.pdfReaderApp.loader.pdfDocument.getPage(1)).getTextContent();
+    return content.items.map((item) => item.str).join('');
+  });
+  check(
+    'на смешанном скане английские названия не теряются',
+    ['Journal of Political Philosophy', 'Ethics', 'Oxford Political Theory', 'в нашем распоряжении'].every((part) => mixedScan.includes(part)),
+    mixedScan.slice(0, 260)
+  );
+  await page.goto(`${BASE}/viewer.html?file=/fixtures/scan.pdf`);
   await page.reload();
   await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
   await page.waitForFunction(() => window.pdfReaderApp.ocr.has(1) && window.pdfReaderApp.ocr.has(2), null, { timeout: 8000 });

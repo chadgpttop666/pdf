@@ -92,6 +92,12 @@ export function classifyFurniture(lines, box, profile) {
     const key = `${bandOf(line, box)}:${normalizeFurniture(line.text)}`;
     if (PAGE_NUMBER.test(line.text) || profile.patterns.has(key)) dropLines.add(index);
   });
+  // Самая верхняя или нижняя строка из одного номера — номер страницы, даже
+  // если он дальше от края, чем полоса колонтитула (так бывает на сканах).
+  const byHeight = [...lines.keys()].sort((a, b) => lines[b].y - lines[a].y);
+  for (const index of [byHeight[0], byHeight.at(-1)]) {
+    if (index !== undefined && PAGE_NUMBER.test(lines[index].text)) dropLines.add(index);
+  }
 
   if (!profile.bodySize) return { dropLines, dropSpans };
   const isSmall = (size) => size < profile.bodySize * 0.85;

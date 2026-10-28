@@ -201,3 +201,14 @@ describe('абзацы и стык страниц', () => {
     assert.deepEqual(pageEdges(''), { runsOn: false, runsIn: false });
   });
 });
+
+describe('заголовок капсом', () => {
+  it('строка капсом не склеивается с текстом под ней, даже если тот со строчной', async () => {
+    const { buildPageText } = await import('../../extension/src/text-index.js');
+    const items = [
+      item('ПРЕДИСЛОВИЕ КО ВТОРОМУ ИЗДАНИЮ', { y: 760, width: 300 }),
+      item('вершенно новым темам, почти не замечавшимся', { y: 700, width: 400 }),
+    ];
+    assert.ok(buildPageText(items).text.includes('\n'));
+  });
+});

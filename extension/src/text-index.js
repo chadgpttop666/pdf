@@ -145,10 +145,18 @@ const STARTS_PARAGRAPH = /^[\p{Lu}\d«„"—–-]/u;
 // или открытой скобкой/кавычкой, — а следующая продолжает её со строчной.
 const LINE_CONTINUES = /[\p{L}\p{N},\-–(«"„]$/u;
 const STARTS_LOWERCASE = /^\p{Ll}/u;
+// Строка капсом — заголовок или колонтитул («ПРЕДИСЛОВИЕ КО ВТОРОМУ
+// ИЗДАНИЮ»): с текстом под ней её не склеиваем, даже если тот со строчной.
+const isAllCaps = (text = '') => {
+  const letters = text.replace(/[^\p{L}]/gu, '');
+  return letters.length >= 4 && letters === letters.toUpperCase();
+};
 
 function isParagraphBreak(previous, next, layout) {
   // Новый абзац со строчной буквы после оборванной фразы не начинается —
   // что бы ни говорила геометрия (сноска, иной шаг строк, кривая вёрстка).
+  // Заголовок капсом кончается там, где начинается обычный текст.
+  if (isAllCaps(previous.text) && !isAllCaps(next.text)) return true;
   if (LINE_CONTINUES.test(previous.lastText) && STARTS_LOWERCASE.test(next.firstText)) return false;
   const step = Math.abs(next.y - previous.y);
   if (layout.lineStep > 0 && step > layout.lineStep * 1.4) return true;
@@ -383,6 +391,10 @@ export function detectLanguage(text) {
 }
 
 const FURNITURE_SAMPLE = 12;
+// Страниц с текстом меньше этого — общий профиль ненадёжен (скан, который
+// распознаётся по ходу чтения): берём соседние страницы.
+const FURNITURE_MIN_TEXT_PAGES = 4;
+const FURNITURE_NEIGHBOURS = 4;
 
 /** Границы страницы по вертикали в координатах PDF — для полос колонтитулов. */
 function pageBox(page) {
@@ -416,6 +428,7 @@ export class TextIndex {
     this.language = null;
     this.skipFurniture = skipFurniture;
     this.furniturePromise = null;
+    this.localProfiles = new Map();
   }
 
   get numPages() {
@@ -427,19 +440,49 @@ export class TextIndex {
     this.furniturePromise ||= (async () => {
       const total = this.numPages;
       const step = Math.max(1, Math.floor(total / FURNITURE_SAMPLE));
-      const samples = [];
-      for (let number = 1; number <= total && samples.length < FURNITURE_SAMPLE; number += step) {
-        try {
-          const page = await this.pdfDocument.getPage(number);
-          const content = await page.getTextContent(TEXT_CONTENT_PARAMS);
-          samples.push({ lines: groupLines(content.items), box: pageBox(page) });
-        } catch {
-          /* страница без текста или битая — просто пропускаем */
-        }
-      }
-      return profileFurniture(samples);
+      const numbers = [];
+      for (let number = 1; number <= total && numbers.length < FURNITURE_SAMPLE; number += step) numbers.push(number);
+      return this.profileOf(numbers);
     })();
     return this.furniturePromise;
+  }
+
+  /**
+   * Профиль по страницам с текстом: пустые (нераспознанные сканы) не
+   * участвуют, иначе порог повтора колонтитула не набирается.
+   */
+  async profileOf(numbers) {
+    const samples = [];
+    for (const number of numbers) {
+      try {
+        const page = await this.pdfDocument.getPage(number);
+        const content = await page.getTextContent(TEXT_CONTENT_PARAMS);
+        const lines = groupLines(content.items);
+        if (lines.length) samples.push({ lines, box: pageBox(page) });
+      } catch {
+        /* битая страница — просто пропускаем */
+      }
+    }
+    return { ...profileFurniture(samples), textPages: samples.length };
+  }
+
+  /**
+   * Профиль для страницы. У скана, распознаваемого по ходу чтения, текст
+   * есть лишь на нескольких страницах — тогда колонтитулы и размер шрифта
+   * берём по соседям: колонтитул повторяется на соседних страницах.
+   */
+  async profileFor(pageNumber) {
+    const global = await this.furnitureProfile();
+    if (global.textPages >= FURNITURE_MIN_TEXT_PAGES) return global;
+    const from = Math.max(1, pageNumber - FURNITURE_NEIGHBOURS);
+    const to = Math.min(this.numPages, pageNumber + FURNITURE_NEIGHBOURS);
+    const key = `${from}-${to}`;
+    if (!this.localProfiles.has(key)) {
+      const numbers = [];
+      for (let number = from; number <= to; number += 1) numbers.push(number);
+      this.localProfiles.set(key, this.profileOf(numbers));
+    }
+    return this.localProfiles.get(key);
   }
 
   /**
@@ -450,6 +493,7 @@ export class TextIndex {
   forget(pageNumber) {
     this.pages.delete(pageNumber);
     this.furniturePromise = null;
+    this.localProfiles.clear();
   }
 
   async page(pageNumber) {
@@ -461,7 +505,7 @@ export class TextIndex {
       const content = await page.getTextContent(TEXT_CONTENT_PARAMS);
       let filter;
       if (this.skipFurniture) {
-        const profile = await this.furnitureProfile();
+        const profile = await this.profileFor(pageNumber);
         const box = pageBox(page);
         filter = (lines) => classifyFurniture(lines, box, profile);
       }
