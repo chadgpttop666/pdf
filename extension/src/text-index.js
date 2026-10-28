@@ -6,6 +6,8 @@
 // обратно, причём с сохранением карты «символ → элемент текстового слоя»,
 // без которой невозможно подсветить читаемое место.
 
+import { classifyFurniture, profileFurniture } from './page-furniture.js';
+
 /** Ровно те же параметры, с которыми текстовый слой строит pdf.js, — иначе
  *  порядок кусков разойдётся со спанами слоя и подсветка уедет. */
 export const TEXT_CONTENT_PARAMS = { includeMarkedContent: true, disableNormalization: true };
@@ -28,10 +30,20 @@ const MIN_SENTENCE_LENGTH = 3;
  * вставляет. Если их считать, подсветка отстаёт на элемент с каждой строкой.
  *
  * @param {Array} items результат getTextContent().items
+ * @param {(lines: Array) => {dropLines?: Set<number>, dropSpans?: Set<number>}} [filter]
+ *   что выбросить из текста (колонтитулы, сноски); номера спанов при этом не
+ *   сдвигаются — они посчитаны по всем непустым кускам заранее
  * @returns {{ text: string, entries: Array<{spanIndex:number,start:number,end:number}> }}
  */
-export function buildPageText(items) {
-  const lines = groupLines(items);
+export function buildPageText(items, filter) {
+  const allLines = groupLines(items);
+  const { dropLines = new Set(), dropSpans = new Set() } = filter?.(allLines) ?? {};
+  const lines = allLines
+    .filter((_, index) => !dropLines.has(index))
+    .map((line) =>
+      dropSpans.size ? { ...line, records: line.records.filter((record) => !dropSpans.has(record.spanIndex)) } : line
+    )
+    .filter((line) => line.records.length);
   const layout = measureLayout(lines);
 
   let text = '';
@@ -60,12 +72,18 @@ const itemX = (item) => item.transform?.[4] ?? 0;
 const itemY = (item) => item.transform?.[5] ?? 0;
 const itemFontSize = (item) => Math.abs(item.transform?.[3]) || item.height || 10;
 
+/**
+ * Новая строка — заметный сдвиг по вертикали. Мерим по большему из двух
+ * шрифтов: знак сноски мелкий и приподнят, и по его собственному размеру
+ * строка рвалась бы сразу после него.
+ */
 function isLineBreak(previous, item, pendingNewline = false) {
-  return pendingNewline || Math.abs(itemY(item) - itemY(previous)) > itemFontSize(previous) * 0.5;
+  const size = Math.max(itemFontSize(previous), itemFontSize(item));
+  return pendingNewline || Math.abs(itemY(item) - itemY(previous)) > size * 0.5;
 }
 
 /** Куски текста по строкам; пустые куски только отмечают конец строки. */
-function groupLines(items) {
+export function groupLines(items) {
   const lines = [];
   let spanIndex = -1;
   let current = null;
@@ -96,6 +114,11 @@ function groupLines(items) {
     line.fontSize = itemFontSize(first);
     line.firstText = first.str.trimStart();
     line.lastText = line.records.at(-1).item.str.trimEnd();
+    line.text = line.records
+      .map(({ item }) => item.str)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
   return lines;
 }
@@ -138,6 +161,9 @@ function isParagraphBreak(previous, next, layout) {
 function gapSeparator(previous, item, text) {
   const last = text.at(-1);
   if (last === ' ' || last === '\n' || item.str.startsWith(' ')) return '';
+  // Перед закрывающей пунктуацией пробела не бывает — зазор там остаётся,
+  // например, от выброшенного знака сноски.
+  if (/^[.,;:!?…)\]»"]/.test(item.str)) return '';
   const gap = itemX(item) - (itemX(previous) + (previous.width ?? 0));
   return gap > itemFontSize(previous) * 0.2 ? ' ' : '';
 }
@@ -304,16 +330,51 @@ export function detectLanguage(text) {
   return 'ru';
 }
 
+const FURNITURE_SAMPLE = 12;
+
+/** Границы страницы по вертикали в координатах PDF — для полос колонтитулов. */
+function pageBox(page) {
+  const [, bottom, , top] = page.view;
+  return { bottom, top };
+}
+
 /** Индекс текста документа с ленивой загрузкой и кешем по страницам. */
 export class TextIndex {
-  constructor(pdfDocument) {
+  /**
+   * @param {object} pdfDocument
+   * @param {{ skipFurniture?: boolean }} [options] выбрасывать колонтитулы,
+   *   номера страниц и сноски — для чтения вслух и режима «только текст»
+   */
+  constructor(pdfDocument, { skipFurniture = false } = {}) {
     this.pdfDocument = pdfDocument;
     this.pages = new Map();
     this.language = null;
+    this.skipFurniture = skipFurniture;
+    this.furniturePromise = null;
   }
 
   get numPages() {
     return this.pdfDocument?.numPages || 0;
+  }
+
+  /** Профиль колонтитулов по выборке страниц равномерно по документу; считается один раз. */
+  furnitureProfile() {
+    this.furniturePromise ||= (async () => {
+      const total = this.numPages;
+      const step = Math.max(1, Math.floor(total / FURNITURE_SAMPLE));
+      const samples = [];
+      for (let number = 1; number <= total && samples.length < FURNITURE_SAMPLE; number += step) {
+        try {
+          const page = await this.pdfDocument.getPage(number);
+          const content = await page.getTextContent(TEXT_CONTENT_PARAMS);
+          samples.push({ lines: groupLines(content.items), box: pageBox(page) });
+        } catch {
+          /* страница без текста или битая — просто пропускаем */
+        }
+      }
+      return profileFurniture(samples);
+    })();
+    return this.furniturePromise;
   }
 
   async page(pageNumber) {
@@ -323,7 +384,13 @@ export class TextIndex {
     const promise = (async () => {
       const page = await this.pdfDocument.getPage(pageNumber);
       const content = await page.getTextContent(TEXT_CONTENT_PARAMS);
-      const { text, entries } = buildPageText(content.items);
+      let filter;
+      if (this.skipFurniture) {
+        const profile = await this.furnitureProfile();
+        const box = pageBox(page);
+        filter = (lines) => classifyFurniture(lines, box, profile);
+      }
+      const { text, entries } = buildPageText(content.items, filter);
       this.language ??= detectLanguage(text);
       const sentences = segmentSentences(text, this.language);
       return { pageNumber, text, entries, sentences };

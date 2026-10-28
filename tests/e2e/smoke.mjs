@@ -248,8 +248,9 @@ try {
   // Оглавление: цепочки одинаковых заголовков схлопнуты, у пунктов номера страниц
   await page.evaluate(() => window.pdfReaderApp.sidebar.open('outline'));
   await page.waitForTimeout(900);
+  // Как в настоящей книге: сверху название, главы — уровнем ниже.
   const ruOutline = await page.evaluate(() =>
-    [...document.querySelectorAll('#outlinePanel > .outline-tree > li')].map((li) => ({
+    [...document.querySelectorAll('#outlinePanel > .outline-tree > li > .outline-tree > li')].map((li) => ({
       title: li.querySelector(':scope > .outline-row .outline-title').textContent,
       page: li.querySelector(':scope > .outline-row .outline-page').textContent,
       children: [...li.querySelectorAll(':scope > .outline-tree > li > .outline-row .outline-title')].map(
@@ -271,6 +272,37 @@ try {
   check('«по ширине» пересчитывается при открытой боковой панели', overflow <= 2, `лишняя ширина ${overflow}px`);
   await page.evaluate(() => window.pdfReaderApp.sidebar.toggle(false));
   await page.waitForTimeout(500);
+
+  // Колонтитул, номер страницы и сноска не попадают в текст для чтения
+  const page3 = await page.evaluate(async () => {
+    const textPage = await window.pdfReaderApp.tts.textIndex.page(3);
+    return textPage.text;
+  });
+  check(
+    'колонтитул, номер страницы и сноска не читаются',
+    !page3.includes('Как читать с экрана') && !page3.includes('Микрофильм —') && !/\n3$/.test(page3) && page3.includes('микрофильмов.'),
+    `начало «${page3.slice(0, 30)}», конец «${page3.slice(-40)}»`
+  );
+
+  // Таймер сна «до конца главы»: дочитали страницу перед новой главой — тишина
+  const chapterStart = await page.evaluate(() => window.pdfReaderApp.outline.nextChapterStart(4));
+  await page.evaluate(async () => {
+    const reader = window.pdfReaderApp.tts;
+    const page4 = await reader.textIndex.page(4);
+    reader.sleepTimer.choose('chapter');
+    reader.start({ pageNumber: 4, sentenceIndex: page4.sentences.length - 1 });
+  });
+  await page.waitForTimeout(2500);
+  const sleepResult = await page.evaluate(() => ({
+    state: window.pdfReaderApp.tts.state,
+    status: document.getElementById('ttsStatus').textContent,
+    page: window.pdfReaderApp.tts.position.pageNumber,
+  }));
+  check(
+    'таймер сна останавливает чтение в начале следующей главы',
+    chapterStart === 5 && sleepResult.state === 'idle' && sleepResult.status.includes('Таймер сна') && sleepResult.page === 5,
+    `глава со стр. ${chapterStart}; ${JSON.stringify(sleepResult)}`
+  );
 
   // Подсветка совпадает с тем, что читается, на каждой строке
   await page.evaluate(() => {

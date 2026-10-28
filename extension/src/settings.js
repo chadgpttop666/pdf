@@ -115,6 +115,13 @@ export const SETTINGS_SCHEMA = [
   { key: 'ttsVolume', type: 'range', def: 1, min: 0, max: 1, step: 0.05, label: 'Громкость' },
   { key: 'ttsVoiceUri', type: 'hidden', def: '' },
   {
+    key: 'ttsSkipFurniture',
+    type: 'bool',
+    def: true,
+    label: 'Не читать колонтитулы, номера страниц и сноски',
+    hint: 'Колонтитулы узнаются по повтору вверху и внизу страниц, сноски — по мелкому шрифту',
+  },
+  {
     key: 'ttsFollowScroll',
     type: 'bool',
     def: true,

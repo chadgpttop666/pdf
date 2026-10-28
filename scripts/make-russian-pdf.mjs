@@ -33,7 +33,7 @@ const chapters = [
     sections: [
       [
         'Красная нить любого длинного текста — это непрерывность. Пока читатель видит предыдущую строку, он помнит, о чём шла речь; стоит ей исчезнуть, и приходится возвращаться назад. Поэтому прокрутка на целый экран без нахлёста — плохая идея, хотя кажется самой естественной.',
-        'Достаточно оставить внизу одну-две строки прошлого экрана, чтобы глаз сразу нашёл продолжение. Этот приём известен давно: так устроены телесуфлёры, бегущие строки и старые читальные аппараты для микрофильмов.',
+        'Достаточно оставить внизу одну-две строки прошлого экрана, чтобы глаз сразу нашёл продолжение. Этот приём известен давно: так устроены телесуфлёры, бегущие строки и старые читальные аппараты для микрофильмов{{сноска}}.',
       ],
       [
         'Вторая составляющая непрерывности — темп. Текст должен приходить к читателю с той скоростью, с какой он его усваивает: медленнее на сложных местах и быстрее на знакомых. Ровная автопрокрутка хороша для художественной прозы, а для учебника удобнее шаги с паузами.',
@@ -64,9 +64,28 @@ const chapters = [
   },
 ];
 
-const paragraphs = (texts) => texts.map((text) => `<p>${text}</p>`).join('\n');
+// Сноска в формате HTML-импорта LibreOffice: знак в тексте и сам текст внизу
+// страницы мелким шрифтом — как в настоящих книгах.
+const FOOTNOTE_MARK =
+  '<a class="sdfootnoteanc" name="sdfootnote1anc" href="#sdfootnote1sym"><sup>1</sup></a>';
+const FOOTNOTE_BODY =
+  '<div id="sdfootnote1"><p class="sdfootnote"><a class="sdfootnotesym" name="sdfootnote1sym" href="#sdfootnote1anc">1</a>' +
+  'Микрофильм — фотокопия документа на плёнке в сильном уменьшении.</p></div>';
+
+let footnoteUsed = false;
+const paragraphs = (texts) =>
+  texts
+    .map((text) => {
+      // Сноска ставится один раз, хотя абзацы глав повторяются для объёма.
+      const withNote = text.replace('{{сноска}}', footnoteUsed ? '' : FOOTNOTE_MARK);
+      if (text.includes('{{сноска}}')) footnoteUsed = true;
+      return `<p>${withNote}</p>`;
+    })
+    .join('\n');
 
 const body = [
+  // Колонтитул и номер страницы на каждой странице: их озвучка должна пропускать.
+  '<div title="header"><p class="running">Как читать с экрана</p></div>',
   '<h1>Как читать с экрана</h1>',
   '<p class="author">Учебный текст для проверки читалки</p>',
   ...chapters.map(
@@ -76,6 +95,8 @@ const body = [
 ${chapter.sections.map((section) => `<h4>* * *</h4>\n${paragraphs(section)}`).join('\n')}
 ${chapter.sections.map((section) => paragraphs(section)).join('\n')}`
   ),
+  '<div title="footer"><p class="running"><sdfield type=PAGE subtype=RANDOM format=PAGE>1</sdfield></p></div>',
+  FOOTNOTE_BODY,
 ].join('\n');
 
 const html = `<!doctype html>
@@ -89,6 +110,7 @@ const html = `<!doctype html>
   h3 { display: none; }
   h4 { text-align: center; font-size: 14pt; margin: 12pt 0 6pt; }
   .author { text-align: center; text-indent: 0; }
+  .running { text-align: center; text-indent: 0; font-size: 11pt; }
 </style></head>
 <body>
 ${body}
@@ -97,8 +119,11 @@ ${body}
 const workdir = mkdtempSync(join(tmpdir(), 'reader-pdf-'));
 const source = join(workdir, 'russian.html');
 writeFileSync(source, html);
-execFileSync('soffice', ['--headless', '--convert-to', 'pdf:writer_web_pdf_Export', '--outdir', workdir, source], {
-  stdio: 'ignore',
-});
+// Импорт обычным Writer, а не Writer/Web: только он понимает колонтитулы и сноски.
+execFileSync(
+  'soffice',
+  ['--headless', '--infilter=HTML (StarWriter)', '--convert-to', 'pdf:writer_pdf_Export', '--outdir', workdir, source],
+  { stdio: 'ignore' }
+);
 copyFileSync(join(workdir, 'russian.pdf'), out);
 console.log(`russian: ${out}`);

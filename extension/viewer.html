@@ -123,6 +123,18 @@
       <label class="field">Тон <span id="ttsPitchValue" class="value">1.0</span>
         <input id="ttsPitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
       </label>
+      <label class="field" title="Остановить чтение через заданное время или в начале следующей главы">Сон
+        <select id="ttsSleep" aria-label="Таймер сна">
+          <option value="off">выкл</option>
+          <option value="15">15 мин</option>
+          <option value="30">30 мин</option>
+          <option value="45">45 мин</option>
+          <option value="60">1 час</option>
+          <option value="90">1,5 часа</option>
+          <option value="chapter">до конца главы</option>
+        </select>
+        <span id="ttsSleepLeft" class="value"></span>
+      </label>
       <span id="ttsStatus" class="muted"></span>
       <div class="spacer"></div>
       <button id="ttsClose" class="icon" data-icon="close" title="Скрыть панель" aria-label="Скрыть панель"></button>

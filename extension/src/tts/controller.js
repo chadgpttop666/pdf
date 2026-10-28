@@ -8,6 +8,7 @@ import { TextIndex, cleanForSpeech } from '../text-index.js';
 import { createHighlighter } from './highlighter.js';
 import { createHttpProvider } from './http-provider.js';
 import { createWebSpeechProvider } from './web-speech.js';
+import { createSleepTimer } from './sleep-timer.js';
 import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,6 +16,11 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function createTts(app) {
   const bar = $('ttsBar');
   const highlighter = createHighlighter(app);
+  const sleepTimer = createSleepTimer({
+    select: $('ttsSleep'),
+    label: $('ttsSleepLeft'),
+    chapterEndAfter: (pageNumber) => app.outline?.nextChapterStart(pageNumber) ?? null,
+  });
 
   let index = null;
   let provider = null;
@@ -193,6 +199,13 @@ export function createTts(app) {
           continue;
         }
 
+        sleepTimer.arm(page.pageNumber);
+        if (sleepTimer.shouldStop(page.pageNumber)) {
+          sleepTimer.reset();
+          finish('Таймер сна: чтение остановлено');
+          return;
+        }
+
         await ensurePageVisible(page.pageNumber);
         if (myGeneration !== generation) return;
 
@@ -200,8 +213,10 @@ export function createTts(app) {
         follow(bounds);
         setStatus(`Стр. ${page.pageNumber}, предложение ${position.sentenceIndex + 1} из ${page.sentences.length}`);
 
+        const options = speechOptions();
         const result = await provider.speak(text, {
-          ...speechOptions(),
+          ...options,
+          volume: options.volume * sleepTimer.volumeFactor(),
           onBoundary: (event) => highlightWord(page, sentence, map, event),
         });
 
@@ -223,6 +238,7 @@ export function createTts(app) {
   function finish(message) {
     state = 'idle';
     cursorShown = false;
+    sleepTimer.disarm();
     generation += 1;
     provider?.cancel();
     highlighter.clear();
@@ -361,9 +377,14 @@ export function createTts(app) {
     else await showCursor(target);
   });
 
+  function buildIndex(pdfDocument) {
+    return new TextIndex(pdfDocument, { skipFurniture: getSetting('ttsSkipFurniture') });
+  }
+
   app.eventBus.on('documentopened', ({ pdfDocument }) => {
     finish();
-    index = new TextIndex(pdfDocument);
+    sleepTimer.reset();
+    index = buildIndex(pdfDocument);
     voicesLoaded = false;
     setStatus('');
   });
@@ -378,6 +399,11 @@ export function createTts(app) {
   });
 
   onSettingsChanged(async (_all, changed) => {
+    // Другой состав текста — другие предложения: индекс строим заново.
+    if ('ttsSkipFurniture' in changed && index) {
+      finish();
+      index = buildIndex(index.pdfDocument);
+    }
     if ('ttsProvider' in changed || 'ttsHttpUrl' in changed) {
       finish();
       provider = currentProvider();
@@ -432,5 +458,6 @@ export function createTts(app) {
     },
     showBar,
     lastHighlight: (kind) => highlighter.lastText(kind),
+    sleepTimer,
   };
 }

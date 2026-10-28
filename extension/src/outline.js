@@ -38,7 +38,8 @@ async function pageNumberOf(pdfDocument, dest) {
 
 export function createOutline(app) {
   const panel = document.getElementById('outlinePanel');
-  let rows = []; // { row, li, pageNumber } в порядке документа
+  let rows = []; // { row, li, pageNumber, depth } в порядке документа
+  let chapterDepth = 0; // уровень, на котором в документе лежат главы
   let loadToken = 0;
 
   function goTo(item) {
@@ -76,7 +77,7 @@ export function createOutline(app) {
       row.append(title, page);
       li.append(row);
 
-      const entry = { row, li, page, item, pageNumber: null };
+      const entry = { row, li, page, item, depth, pageNumber: null };
       rows.push(entry);
       if (hasChildren) li.append(renderItems(item.items, depth + 1, expandDepth));
       list.append(li);
@@ -111,6 +112,7 @@ export function createOutline(app) {
     // Если наверху один-два пункта (название книги, автор), сразу раскрываем
     // следующий уровень — иначе главы спрятаны за лишним щелчком.
     const expandDepth = outline.length <= 3 ? 1 : 0;
+    chapterDepth = expandDepth;
     panel.append(renderItems(outline, 0, expandDepth));
 
     // Номера страниц подставляем по мере вычисления, не задерживая показ.
@@ -129,5 +131,18 @@ export function createOutline(app) {
   });
   app.eventBus.on('pagechanging', ({ pageNumber }) => markCurrent(pageNumber));
 
-  return { load, markCurrent };
+  /**
+   * Страница, с которой начинается следующая глава, — для таймера сна «до
+   * конца главы». Глава — пункт того уровня, который раскрыт сразу.
+   * @returns {number|null} null — глав дальше нет, читать до конца книги
+   */
+  function nextChapterStart(pageNumber) {
+    const starts = rows
+      .filter((entry) => entry.depth === chapterDepth && entry.pageNumber)
+      .map((entry) => entry.pageNumber)
+      .sort((a, b) => a - b);
+    return starts.find((start) => start > pageNumber) ?? null;
+  }
+
+  return { load, markCurrent, nextChapterStart };
 }
