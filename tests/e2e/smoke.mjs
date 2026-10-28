@@ -646,6 +646,15 @@ try {
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
   await page.waitForTimeout(500);
   await page.click('#viewerContainer', { position: { x: 5, y: 5 } });
+  // Что видел читатель до первого звука: крутилка и статус подготовки.
+  await page.evaluate(() => {
+    window.piperUi = { busy: false, statuses: [] };
+    const bar = document.getElementById('ttsBar');
+    new MutationObserver(() => {
+      if (bar.classList.contains('tts-busy')) window.piperUi.busy = true;
+      window.piperUi.statuses.push(document.getElementById('ttsStatus').textContent);
+    }).observe(bar, { attributes: true, subtree: true, childList: true, characterData: true });
+  });
   await page.keyboard.press('s'); // настоящий жест: браузер разрешит звук
   await page.waitForFunction(() => window.pdfReaderApp.tts.engine === 'piper' && window.pdfReaderApp.tts.state === 'speaking', null, { timeout: 10000 });
   const piperStart = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
@@ -672,7 +681,38 @@ try {
     piperRun.state === 'speaking' && piperRun.sentence && piperWord,
     `${JSON.stringify(piperStart)} → ${JSON.stringify(piperRun.position)}, слово: ${piperWord}`
   );
+  const piperUi = await page.evaluate(() => ({
+    ...window.piperUi,
+    badge: !document.getElementById('ttsEngine').hidden,
+  }));
+  check(
+    'видно, что нейроголос готовится: крутилка, статус, метка «нейро»',
+    piperUi.busy && piperUi.badge && piperUi.statuses.some((text) => /Загружаю нейроголос|готовит фразу/.test(text)),
+    JSON.stringify({ busy: piperUi.busy, badge: piperUi.badge, statuses: [...new Set(piperUi.statuses)].slice(0, 4) })
+  );
+
+  // Скорость меняют на ходу — нейроголос не замолкает, новая скорость со следующей фразы.
+  const rateBefore = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
+  await page.click('[data-step-for="ttsRate"][data-dir="1"]');
+  await page.waitForTimeout(150);
+  const rateStatus = await page.evaluate(() => document.getElementById('ttsStatus').textContent);
+  await page.waitForFunction(
+    (start) => {
+      const now = window.pdfReaderApp.tts.position;
+      return now.pageNumber > start.pageNumber || now.sentenceIndex > start.sentenceIndex;
+    },
+    rateBefore,
+    { timeout: 15000 }
+  );
+  const rateAfter = await page.evaluate(() => ({ state: window.pdfReaderApp.tts.state, focus: document.activeElement?.id }));
+  check(
+    'смена скорости не останавливает нейроголос',
+    rateAfter.state === 'speaking' && /со следующей фразы/.test(rateStatus),
+    `${rateStatus}; ${JSON.stringify(rateAfter)}`
+  );
+  check('после щелчка по кнопке фокус вернулся в документ', rateAfter.focus === 'viewerContainer', String(rateAfter.focus));
   await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  await page.click('[data-step-for="ttsRate"][data-dir="-1"]');
   // Дальше тесты рассчитаны на подменённый системный синтез.
   await page.selectOption('#ttsVoice', 'mock-ru');
   await page.waitForTimeout(200);
@@ -701,6 +741,76 @@ try {
         (downloadResult.status.includes('загрузить из файла') && downloadResult.voice === 'mock-ru')),
     JSON.stringify(downloadResult)
   );
+
+  // ── Панель озвучки и клавиши ──
+  await page.evaluate(() => {
+    window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: 0 });
+  });
+  await page.waitForTimeout(400);
+  await page.focus('#viewerContainer');
+  await page.keyboard.press('Space');
+  const afterSpace = await page.evaluate(() => window.pdfReaderApp.tts.state);
+  await page.keyboard.press('Space');
+  const afterSecondSpace = await page.evaluate(() => window.pdfReaderApp.tts.state);
+  check('пробел ставит озвучку на паузу и продолжает', afterSpace === 'paused' && afterSecondSpace === 'speaking', `${afterSpace} → ${afterSecondSpace}`);
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  const scrollBeforeSpace = await page.evaluate(() => window.pdfReaderApp.container.scrollTop);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(500);
+  const scrolledBySpace = (await page.evaluate(() => window.pdfReaderApp.container.scrollTop)) - scrollBeforeSpace;
+  check('без озвучки пробел листает', scrolledBySpace > 200, `${Math.round(scrolledBySpace)} px`);
+
+  await page.focus('#ttsRate'); // фокус остался на ползунке скорости
+  await page.keyboard.press('s');
+  await page.waitForTimeout(300);
+  const sOnSlider = await page.evaluate(() => window.pdfReaderApp.tts.state);
+  check('S работает, даже когда фокус на ползунке скорости', sOnSlider === 'speaking', sOnSlider);
+
+  await page.waitForSelector('.tts-sentence-box', { timeout: 5000 });
+  await page.click('#ttsClose');
+  await page.waitForTimeout(200);
+  const closedBar = await page.evaluate(() => ({
+    state: window.pdfReaderApp.tts.state,
+    hidden: document.getElementById('ttsBar').hidden,
+    boxes: document.querySelectorAll('.tts-sentence-box, .tts-word-box').length,
+  }));
+  check(
+    'закрытие панели останавливает чтение и убирает подсветку',
+    closedBar.state === 'idle' && closedBar.hidden && closedBar.boxes === 0,
+    JSON.stringify(closedBar)
+  );
+
+  await page.click('#btnSettings');
+  await page.waitForTimeout(200);
+  await page.mouse.click(8, 400);
+  await page.waitForTimeout(200);
+  check('щелчок мимо окна настроек закрывает его', !(await page.evaluate(() => document.getElementById('settingsDialog').open)));
+
+  // Чтение у низа страницы: следующая уже занимает экран, но вид не прыгает назад.
+  const lastOnPage2 = await page.evaluate(async () => (await window.pdfReaderApp.tts.textIndex.page(2)).sentences.length - 1);
+  const scrollAtBottom = await page.evaluate(() => {
+    const app = window.pdfReaderApp;
+    const div = app.pdfViewer.getPageView(1).div;
+    app.container.scrollTop = div.offsetTop + div.offsetHeight - 260;
+    return app.container.scrollTop;
+  });
+  await page.waitForTimeout(500);
+  const spokenBefore = await page.evaluate(() => window.spokenSentences.length);
+  const startedAt = Date.now();
+  await page.evaluate((index) => {
+    window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: index });
+  }, lastOnPage2);
+  await page.waitForFunction((count) => window.spokenSentences.length > count, spokenBefore, { timeout: 5000 });
+  const firstSoundMs = Date.now() - startedAt;
+  await page.waitForTimeout(300);
+  const scrollJump = scrollAtBottom - (await page.evaluate(() => window.pdfReaderApp.container.scrollTop));
+  check(
+    'у низа страницы вид не прыгает к её началу и чтение начинается сразу',
+    scrollJump < 500 && firstSoundMs < 450,
+    `сдвиг назад ${Math.round(scrollJump)} px, до звука ${firstSoundMs} мс`
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  await page.evaluate(() => window.pdfReaderApp.tts.showBar(false));
 
   // ── Режим «только текст» ──
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
@@ -830,6 +940,38 @@ try {
     letters(roundTrip.text) === letters(roundTrip.created) && roundTrip.boxes >= 3,
     JSON.stringify(roundTrip)
   );
+
+  // ── Фраза через стык страниц ──
+  await page.goto(`${BASE}/viewer.html?file=/fixtures/joint.pdf`);
+  await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0 && window.pdfReaderApp.tts.textIndex, null, { timeout: 20000 });
+  await page.waitForTimeout(800);
+  const jointLast = await page.evaluate(async () => (await window.pdfReaderApp.tts.textIndex.page(1)).sentences.length - 1);
+  await page.evaluate((index) => {
+    window.spokenSentences.length = 0;
+    window.pdfReaderApp.tts.start({ pageNumber: 1, sentenceIndex: index });
+  }, jointLast);
+  await page.waitForFunction(() => window.spokenSentences.length >= 1, null, { timeout: 5000 });
+  await page.waitForTimeout(900);
+  const joint = await page.evaluate(() => ({ first: window.spokenSentences[0], position: window.pdfReaderApp.tts.position }));
+  check(
+    'фраза через стык страниц читается одной фразой',
+    /которому была поручена разработка проекта/.test(joint.first) && joint.position.pageNumber === 2 && joint.position.sentenceIndex >= 1,
+    `«${joint.first}» → ${JSON.stringify(joint.position)}`
+  );
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+  await page.evaluate(() => window.pdfReaderApp.reflow.enter());
+  await page.waitForTimeout(1200);
+  const jointReflow = await page.evaluate(() => ({
+    headings: [...document.querySelectorAll('.rf-heading')].map((node) => node.textContent),
+    runsOn: document.querySelector('.rf-page[data-page="1"] .rf-p:last-of-type')?.classList.contains('rf-runs-on'),
+    continued: document.querySelector('.rf-page[data-page="2"] .rf-p')?.classList.contains('rf-continued'),
+  }));
+  check(
+    'в режиме текста обрывок фразы — не заголовок, стык страниц — один абзац',
+    jointReflow.headings.length === 0 && jointReflow.runsOn && jointReflow.continued,
+    JSON.stringify(jointReflow)
+  );
+  await page.evaluate(() => window.pdfReaderApp.reflow.exit());
 
   // ── Имя файла при скачивании: по адресу без имени ──
   const savedName = async (path) => {

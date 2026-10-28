@@ -62,3 +62,10 @@ describe('язык распознавания', () => {
     assert.equal(pickLanguages('12 стр.'), null);
   });
 });
+
+describe('отбор слов распознавания', () => {
+  it('неуверенное слово в хорошей строке остаётся', () => {
+    const line = { words: [word('философа', 0, 100, 0, 20, 95), word('Кимлики', 110, 200, 0, 20, 92), word('слу-', 210, 250, 0, 20, 31)] };
+    assert.deepEqual(ocrLinesToItems([line], unrotated, { minConfidence: 40 }).map((item) => item.str.trim()), ['философа', 'Кимлики', 'слу-']);
+  });
+});

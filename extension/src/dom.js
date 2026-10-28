@@ -32,11 +32,37 @@ export function clear(node) {
   return node;
 }
 
-/** Не даёт горячим клавишам срабатывать, когда пользователь печатает. */
+/**
+ * Не даёт горячим клавишам срабатывать, когда пользователь печатает.
+ * Ползунки, флажки и кнопки — не ввод текста: после того как подвинули
+ * скорость, S и пробел должны работать.
+ */
 export function isTypingTarget(target) {
   const node = target instanceof Element ? target : null;
   if (!node) return false;
-  return node.matches('input, textarea, select, [contenteditable="true"]');
+  const nonText = ['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file', 'image'];
+  if (node.matches('input')) return !nonText.includes(node.type);
+  return node.matches('textarea, select, [contenteditable="true"]');
+}
+
+/**
+ * Модальное окно закрывается щелчком мимо него. Нажали внутри, а отпустили
+ * снаружи (выделяли текст) — не считается.
+ */
+export function closeOnBackdropClick(dialog) {
+  const outside = (event) => {
+    if (event.target !== dialog) return false;
+    const rect = dialog.getBoundingClientRect();
+    return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+  };
+  let pressedOutside = false;
+  dialog.addEventListener('pointerdown', (event) => {
+    pressedOutside = outside(event);
+  });
+  dialog.addEventListener('click', (event) => {
+    if (pressedOutside && outside(event)) dialog.close();
+    pressedOutside = false;
+  });
 }
 
 export function formatBytes(bytes) {

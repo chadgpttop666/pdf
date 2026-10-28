@@ -11,6 +11,9 @@ export const OCR_FONT = 'ocr-text';
 const ASCENT = 0.8;
 export const OCR_STYLES = { [OCR_FONT]: { fontFamily: 'sans-serif', ascent: ASCENT, descent: ASCENT - 1, vertical: false } };
 
+/** Строка с такой средней уверенностью — текст, а не шум. */
+const TRUSTED_LINE = 60;
+
 /** Меньше стольких знаков — страница считается картинкой или сканом. */
 export const TEXTLESS_CHARS = 20;
 
@@ -30,7 +33,12 @@ export function isTextless(items) {
 export function ocrLinesToItems(lines, toPdf, { minConfidence = 20 } = {}) {
   const items = [];
   for (const line of lines) {
-    const words = (line.words || []).filter((word) => word.text?.trim() && (word.confidence ?? 100) >= minConfidence);
+    const all = (line.words || []).filter((word) => word.text?.trim());
+    // Неуверенные слова отбрасываем только в «шумных» строках (обрывки
+    // картинок). В нормальной строке слово с переносом или на краю скана
+    // часто распознано неуверенно, но оно есть — без него фраза рвётся.
+    const lineConfidence = all.reduce((sum, word) => sum + (word.confidence ?? 100), 0) / (all.length || 1);
+    const words = lineConfidence >= TRUSTED_LINE ? all : all.filter((word) => (word.confidence ?? 100) >= minConfidence);
     if (!words.length) continue;
     // Все слова строки — на одной базовой линии и одного кегля: так строка
     // текста остаётся строкой и для выделения, и для разбора на предложения.

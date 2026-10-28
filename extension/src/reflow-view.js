@@ -88,15 +88,19 @@ export function createReflow(app) {
       cursor = sentence.end;
     });
 
-    for (const candidate of paragraphs) {
+    paragraphs.forEach((candidate, i) => {
       const text = candidate.textContent.trim();
-      // Короткая одиночная строка без точки — заголовок или «* * *».
-      if (candidate.children.length === 1 && text.length <= HEADING_MAX && !/[.!?…:;,]$/.test(text)) {
+      // Короткая одиночная строка без точки — заголовок или «* * *». Но не
+      // обрывок фразы: ни последний абзац страницы, которая обрывается
+      // посреди фразы, ни строка, за которой текст продолжается со строчной.
+      const cutOff = (i === paragraphs.length - 1 && page.runsOn) || /^\p{Ll}/u.test(paragraphs[i + 1]?.textContent.trim() || '');
+      if (!cutOff && candidate.children.length === 1 && text.length <= HEADING_MAX && !/[.!?…:;,\-–(«]$/.test(text)) {
         candidate.classList.add('rf-heading');
       }
-    }
+    });
     // Страница началась с середины фразы — абзац продолжается без отступа.
     if (paragraphs[0] && !STARTS_SENTENCE.test(page.text.trimStart())) paragraphs[0].classList.add('rf-continued');
+    if (paragraphs.length && page.runsOn) paragraphs.at(-1).classList.add('rf-runs-on');
 
     const marker = el('div', { class: 'rf-page-marker', 'aria-hidden': 'true' }, String(pageNumber));
     section.replaceChildren(marker, ...paragraphs);

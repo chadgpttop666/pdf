@@ -31,3 +31,14 @@ describe('нейроголос Piper', () => {
     assert.deepEqual(estimateWordTimings('* * *'), []);
   });
 });
+
+describe('тайминги слов с заменами', () => {
+  it('число звучит дольше — следующее слово позже', () => {
+    const text = 'В 1928 году.';
+    const segments = [{ start: 2, end: 6, spoken: 'тысяча девятьсот двадцать восьмом' }];
+    const timings = estimateWordTimings(text, segments);
+    assert.deepEqual(timings.map((timing) => text.slice(timing.charIndex, timing.charIndex + timing.charLength)), ['В', '1928', 'году']);
+    // «В» = 1 буква, замена = 30 букв, «году» = 4: «году» начинается на 31/35.
+    assert.equal(timings[2].at, 31 / 35);
+  });
+});

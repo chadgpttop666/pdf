@@ -141,7 +141,15 @@ function measureLayout(lines) {
 const SENTENCE_END = /[.!?…:;»"')\]]$/;
 const STARTS_PARAGRAPH = /^[\p{Lu}\d«„"—–-]/u;
 
+// Строка оборвана посреди фразы: кончается буквой, цифрой, запятой, дефисом
+// или открытой скобкой/кавычкой, — а следующая продолжает её со строчной.
+const LINE_CONTINUES = /[\p{L}\p{N},\-–(«"„]$/u;
+const STARTS_LOWERCASE = /^\p{Ll}/u;
+
 function isParagraphBreak(previous, next, layout) {
+  // Новый абзац со строчной буквы после оборванной фразы не начинается —
+  // что бы ни говорила геометрия (сноска, иной шаг строк, кривая вёрстка).
+  if (LINE_CONTINUES.test(previous.lastText) && STARTS_LOWERCASE.test(next.firstText)) return false;
   const step = Math.abs(next.y - previous.y);
   if (layout.lineStep > 0 && step > layout.lineStep * 1.4) return true;
   // Сменился размер шрифта — заголовок и подзаголовок, заголовок и текст.
@@ -383,6 +391,19 @@ function pageBox(page) {
 }
 
 /** Индекс текста документа с ленивой загрузкой и кешем по страницам. */
+/**
+ * Как страница стыкуется с соседними: runsOn — обрывается посреди фразы,
+ * runsIn — начинается с продолжения (со строчной). Озвучка читает такой
+ * стык одной фразой, а режим «только текст» — одним абзацем.
+ */
+export function pageEdges(text) {
+  const trimmed = text.trim();
+  return {
+    runsOn: Boolean(trimmed) && LINE_CONTINUES.test(trimmed),
+    runsIn: STARTS_LOWERCASE.test(trimmed),
+  };
+}
+
 export class TextIndex {
   /**
    * @param {object} pdfDocument
@@ -448,7 +469,7 @@ export class TextIndex {
       // По пустой странице (скан до распознавания) язык не определить.
       if (text.trim()) this.language ??= detectLanguage(text);
       const sentences = segmentSentences(text, this.language ?? 'ru');
-      return { pageNumber, text, entries, sentences };
+      return { pageNumber, text, entries, sentences, ...pageEdges(text) };
     })();
 
     this.pages.set(pageNumber, promise);

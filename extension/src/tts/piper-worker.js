@@ -107,13 +107,24 @@ async function synthesize(text, rate) {
 }
 
 // Запросы выполняем по одному: сессия ONNX не любит параллельных run().
+// Эпоха меняется сразу, вне очереди: синтез фраз для места, откуда читатель
+// уже ушёл, пропускается, не дожидаясь своей очереди.
+let currentEpoch = 0;
 self.onmessage = ({ data: message }) => {
+  if (message.type === 'epoch') {
+    currentEpoch = message.epoch;
+    return;
+  }
   queue = queue.then(async () => {
     try {
       if (message.type === 'load') {
         await loadVoice(message.model, message.config);
         self.postMessage({ id: message.id, type: 'loaded' });
       } else if (message.type === 'synthesize') {
+        if (message.epoch < currentEpoch) {
+          self.postMessage({ id: message.id, type: 'error', message: 'Фраза больше не нужна', dropped: true });
+          return;
+        }
         const { pcm, sampleRate } = await synthesize(message.text, message.rate);
         self.postMessage({ id: message.id, type: 'audio', pcm, sampleRate }, [pcm.buffer]);
       } else if (message.type === 'phonemize') {

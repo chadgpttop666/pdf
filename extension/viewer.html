@@ -121,12 +121,13 @@
     </div>
 
     <div id="ttsBar" class="bar" hidden>
-      <button id="ttsPlay" class="icon" data-icon="play" title="Читать / пауза (S)" aria-label="Читать или пауза"></button>
+      <button id="ttsPlay" class="icon" data-icon="play" title="Читать / пауза (S или пробел)" aria-label="Читать или пауза"></button>
       <button id="ttsPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (,)" aria-label="Предыдущее предложение"></button>
       <button id="ttsNext" class="icon" data-icon="skipForward" title="Следующее предложение (.)" aria-label="Следующее предложение"></button>
       <button id="ttsStop" class="icon" data-icon="stop" title="Остановить (Shift+S)" aria-label="Остановить"></button>
       <label class="field">Голос
         <select id="ttsVoice" aria-label="Голос"></select>
+        <span id="ttsEngine" class="tts-engine" title="Нейроголос Piper: синтез прямо в браузере, без интернета. Перед первой фразой голос загружается — пара секунд" hidden>нейро</span>
       </label>
       <div class="field">
         <span>Скорость</span>

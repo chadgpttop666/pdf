@@ -35,7 +35,7 @@ export function createHttpProvider({ url }) {
       }
     },
 
-    async speak(text, { voiceId, rate = 1, pitch = 1, volume = 1, lang } = {}) {
+    async speak(text, { voiceId, rate = 1, pitch = 1, volume = 1, lang, onStart } = {}) {
       if (!url) throw new Error('Не указан адрес внешнего движка синтеза');
       releaseAudio();
       controller = new AbortController();
@@ -56,6 +56,7 @@ export function createHttpProvider({ url }) {
       audio.playbackRate = rate;
 
       return new Promise((resolve, reject) => {
+        audio.onplaying = () => onStart?.();
         audio.onended = () => resolve('ended');
         audio.onerror = () => reject(new Error('Не удалось воспроизвести ответ движка синтеза'));
         audio.play().catch(reject);

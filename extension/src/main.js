@@ -195,6 +195,29 @@ function wireProgress() {
  * изменении области (боковая панель, панели снизу, размер окна) их надо
  * применить заново, иначе страница вылезает за край.
  */
+/**
+ * После щелчка мышью по кнопке или ползунку тулбара и панелей фокус
+ * возвращается в документ. Иначе пробел нажмёт ту же кнопку ещё раз, а S
+ * уйдёт в поиск по списку голосов. Если кнопка сама увела фокус (поиск
+ * открыл своё поле) — не трогаем.
+ */
+function wireFocusReturn() {
+  const giveBack = (control) =>
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active === control || active === document.body || !active) app.activeContainer.focus({ preventScroll: true });
+    });
+  for (const panel of [$('toolbar'), $('ttsBar'), $('autoscrollBar')]) {
+    on(panel, 'click', (event) => {
+      const button = event.target.closest('button');
+      if (button && event.detail > 0) giveBack(button);
+    });
+    on(panel, 'change', (event) => {
+      if (event.target.matches('select, input[type="range"]')) giveBack(event.target);
+    });
+  }
+}
+
 function wireAutoFit() {
   let timer = 0;
   const observer = new ResizeObserver(() => {
@@ -328,6 +351,7 @@ async function main() {
   wireProgress();
   wireSteppers();
   wireAutoFit();
+  wireFocusReturn();
 
   const initial = documentFromQuery();
   if (initial) await openUrl(initial.url, { name: initial.name });

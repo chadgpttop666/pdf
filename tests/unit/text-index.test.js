@@ -179,3 +179,25 @@ describe('detectLanguage', () => {
     assert.equal(detectLanguage('A plain english sentence'), 'en');
   });
 });
+
+describe('абзацы и стык страниц', () => {
+  it('строка с запятой и продолжение со строчной — один абзац, даже с большим шагом', async () => {
+    const { buildPageText } = await import('../../extension/src/text-index.js');
+    const items = [
+      item('Более того, мне кажется, она объясняет,', { y: 700, width: 400 }),
+      item('почему эти темы и подходы стали предметом', { y: 670, width: 400 }),
+      item('дискуссии. Я надеюсь, что читатель узнает,', { y: 640, width: 400 }),
+      item('почему некоторые темы рассматриваются', { y: 580, width: 400 }),
+    ];
+    const { text } = buildPageText(items);
+    assert.ok(!text.includes('\n'), JSON.stringify(text));
+  });
+
+  it('страница обрывается посреди фразы и следующая продолжает её', async () => {
+    const { pageEdges } = await import('../../extension/src/text-index.js');
+    assert.deepEqual(pageEdges('Вскоре он возглавил отдел, которому была'), { runsOn: true, runsIn: false });
+    assert.deepEqual(pageEdges('поручена разработка реформы.'), { runsOn: false, runsIn: true });
+    assert.deepEqual(pageEdges('Конец главы.'), { runsOn: false, runsIn: false });
+    assert.deepEqual(pageEdges(''), { runsOn: false, runsIn: false });
+  });
+});

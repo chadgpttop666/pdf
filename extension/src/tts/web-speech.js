@@ -63,7 +63,7 @@ export function createWebSpeechProvider() {
     /**
      * @returns {Promise<'ended'|'cancelled'>} промис завершения фразы
      */
-    async speak(text, { voiceId, rate = 1, pitch = 1, volume = 1, lang, onBoundary } = {}) {
+    async speak(text, { voiceId, rate = 1, pitch = 1, volume = 1, lang, onBoundary, onStart } = {}) {
       if (!synth) throw new Error('Синтез речи недоступен в этом браузере');
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = rate;
@@ -80,6 +80,7 @@ export function createWebSpeechProvider() {
       startKeepAlive();
 
       return new Promise((resolve, reject) => {
+        utterance.onstart = () => onStart?.();
         utterance.onboundary = (event) => {
           onBoundary?.({ charIndex: event.charIndex, charLength: event.charLength, name: event.name });
         };

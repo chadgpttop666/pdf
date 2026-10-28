@@ -50,7 +50,12 @@ const pdfMode = (app) => !app.reflow?.active;
 /** Таблица действий. Модули могут быть ещё не подключены, поэтому всё через ?. */
 export const BINDINGS = [
   { section: 'Чтение' },
-  { combos: ['Space', 'PageDown', 'ArrowRight', 'KeyJ'], label: 'Вниз на экран', run: (app) => app.screenNav.screenDown() },
+  {
+    combos: ['Space'],
+    label: 'Вниз на экран; во время озвучки — пауза и продолжить',
+    run: (app) => (app.tts && app.tts.state !== 'idle' ? app.tts.toggle() : app.screenNav.screenDown()),
+  },
+  { combos: ['PageDown', 'ArrowRight', 'KeyJ'], label: 'Вниз на экран', run: (app) => app.screenNav.screenDown() },
   { combos: ['Shift+Space', 'PageUp', 'ArrowLeft', 'KeyK'], label: 'Вверх на экран', run: (app) => app.screenNav.screenUp() },
   { combos: ['ArrowDown'], label: 'Немного вниз', run: (app) => app.screenNav.lineDown() },
   { combos: ['ArrowUp'], label: 'Немного вверх', run: (app) => app.screenNav.lineUp() },

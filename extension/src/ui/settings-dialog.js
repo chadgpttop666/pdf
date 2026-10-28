@@ -1,12 +1,13 @@
 // Диалог настроек целиком строится из схемы: добавили настройку в
 // settings.js — она сама появилась здесь, без второго описания.
 
-import { $, clear, el, formatBytes, on } from '../dom.js';
+import { $, clear, closeOnBackdropClick, el, formatBytes, on } from '../dom.js';
 import { SETTINGS_SCHEMA, get as getSetting, updateSettings } from '../settings.js';
 import * as library from '../library.js';
 
 export function createSettingsDialog(app) {
   const dialog = $('settingsDialog');
+  closeOnBackdropClick(dialog);
   const grid = $('settingsGrid');
 
   function control(item) {

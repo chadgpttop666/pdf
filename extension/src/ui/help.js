@@ -1,10 +1,11 @@
 // Окно справки строится из таблицы горячих клавиш, поэтому не расходится с ней.
 
-import { $, clear, el } from '../dom.js';
+import { $, clear, closeOnBackdropClick, el } from '../dom.js';
 import { BINDINGS, displayCombo } from '../keyboard.js';
 
 export function createHelp() {
   const dialog = $('helpDialog');
+  closeOnBackdropClick(dialog);
   const content = $('helpContent');
 
   function render() {

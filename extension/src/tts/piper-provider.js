@@ -1,9 +1,12 @@
 // Провайдер нейроголосов Piper. Интерфейс тот же, что у web-speech.js, плюс
 // управление голосами: скачать с HuggingFace, загрузить из файла, удалить.
-// Синтез идёт в воркере (piper-worker.js), звук играет AudioContext.
-// Пока звучит фраза, следующая уже синтезируется — пауз между ними нет.
+// Синтез идёт в воркерах (piper-worker.js), звук играет AudioContext.
+// Контроллер заранее просит синтезировать несколько следующих фраз; на
+// машине с 4+ ядрами работают два воркера параллельно — паузы между фразами
+// не накапливаются, даже если синтез идёт почти со скоростью речи.
 
 import * as library from '../library.js';
+import { normalizeRussian } from './normalize-ru.js';
 import { estimateWordTimings } from './piper-math.js';
 
 export const PIPER_PREFIX = 'piper:';
@@ -19,80 +22,122 @@ export const PIPER_CATALOG = [
   { key: 'en_US-lessac-medium', name: 'Lessac (английский)', lang: 'en-US', path: 'en/en_US/lessac/medium/', sizeMb: 61 },
 ];
 
-const CACHE_SIZE = 4;
+const CACHE_SIZE = 8;
 const BOUNDARY_POLL_MS = 40;
+// Второй воркер — ещё одна копия модели в памяти (~150 МБ), поэтому только
+// там, где ядер хватает на параллельный синтез.
+const POOL_SIZE = (globalThis.navigator?.hardwareConcurrency || 2) >= 4 ? 2 : 1;
 
 const keyOf = (voiceId) => (voiceId?.startsWith(PIPER_PREFIX) ? voiceId.slice(PIPER_PREFIX.length) : voiceId);
 
+/** Русские голоса получают текст с числами и сокращениями словами. */
+function spokenForm(text, voiceId) {
+  if (/^en/i.test(keyOf(voiceId) || '') || !/\p{Script=Cyrillic}/u.test(text)) return { text, segments: [] };
+  return normalizeRussian(text);
+}
+
 export function createPiperProvider() {
-  let worker = null;
+  const slots = []; // воркеры: { worker, loadedKey, loading, pending }
   let seq = 0;
   const waiting = new Map();
-  let loadedKey = null;
-  let loading = null;
   const cache = new Map(); // голос|скорость|текст → промис со звуком
   let context = null;
   let current = null; // играющая фраза
   let token = 0; // растёт при каждой отмене — старые фразы узнают, что они не нужны
+  let epoch = 0; // то же для очередей воркеров: задания старой эпохи пропускаются
   let paused = false;
   let download = null; // { key, controller }
 
-  // ── Воркер ───────────────────────────────────────────────────────────
+  // ── Воркеры ──────────────────────────────────────────────────────────
 
-  function ensureWorker() {
-    if (worker) return worker;
-    worker = new Worker(new URL('./piper-worker.js', import.meta.url), { type: 'module' });
-    worker.onmessage = ({ data }) => {
+  function createSlot() {
+    const slot = { worker: null, loadedKey: null, loading: null, pending: 0 };
+    slot.worker = new Worker(new URL('./piper-worker.js', import.meta.url), { type: 'module' });
+    slot.worker.onmessage = ({ data }) => {
       const entry = waiting.get(data.id);
       if (!entry) return;
       waiting.delete(data.id);
-      if (data.type === 'error') entry.reject(new Error(data.message));
+      if (data.type === 'error') entry.reject(Object.assign(new Error(data.message), { dropped: Boolean(data.dropped) }));
       else entry.resolve(data);
     };
-    worker.onerror = (event) => {
+    slot.worker.onerror = (event) => {
       event.preventDefault?.();
-      for (const entry of waiting.values()) entry.reject(new Error(event.message || 'Сбой синтеза Piper'));
-      waiting.clear();
-      worker?.terminate();
-      worker = null;
-      loadedKey = null;
+      for (const [id, entry] of waiting) {
+        if (entry.slot !== slot) continue;
+        waiting.delete(id);
+        entry.reject(new Error(event.message || 'Сбой синтеза Piper'));
+      }
+      slot.worker.terminate();
+      slots.splice(slots.indexOf(slot), 1);
       cache.clear();
     };
-    return worker;
+    slot.worker.postMessage({ type: 'epoch', epoch });
+    slots.push(slot);
+    return slot;
   }
 
-  function call(message, transfer = []) {
+  function call(slot, message, transfer = []) {
     const id = (seq += 1);
     return new Promise((resolve, reject) => {
-      waiting.set(id, { resolve, reject });
-      ensureWorker().postMessage({ ...message, id }, transfer);
+      waiting.set(id, { resolve, reject, slot });
+      slot.worker.postMessage({ ...message, id }, transfer);
     });
   }
 
-  async function ensureVoice(voiceId) {
+  async function ensureVoice(slot, voiceId) {
     const key = keyOf(voiceId);
-    if (loadedKey === key && worker) return;
-    if (loading?.key === key) return loading.promise;
+    if (slot.loadedKey === key) return;
+    if (slot.loading?.key === key) return slot.loading.promise;
     const promise = (async () => {
       const record = await library.getVoice(key);
       if (!record) throw new Error('Этот нейроголос ещё не скачан');
       const model = await record.model.arrayBuffer();
-      await call({ type: 'load', model, config: record.config }, [model]);
-      loadedKey = key;
-      cache.clear();
+      await call(slot, { type: 'load', model, config: record.config }, [model]);
+      slot.loadedKey = key;
     })();
-    loading = { key, promise };
+    slot.loading = { key, promise };
     try {
       await promise;
     } finally {
-      if (loading?.promise === promise) loading = null;
+      if (slot.loading?.promise === promise) slot.loading = null;
     }
   }
 
-  function synthesize(text, { voiceId, rate = 1 }) {
-    const cacheKey = `${keyOf(voiceId)}|${rate}|${text}`;
+  /**
+   * Воркер для задания: наименее загруженный из тех, где голос уже в памяти.
+   * Пока голос не загружен нигде — первый воркер (он его и грузит).
+   */
+  function pickSlot(voiceId) {
+    const key = keyOf(voiceId);
+    if (!slots.length) return createSlot();
+    const ready = slots.filter((slot) => slot.loadedKey === key);
+    const candidates = ready.length ? ready : [slots.find((slot) => slot.loading?.key === key) ?? slots[0]];
+    return candidates.reduce((a, b) => (b.pending < a.pending ? b : a));
+  }
+
+  /**
+   * Второй воркер грузит голос заранее, без заданий: когда он понадобится,
+   * следующая фраза не будет ждать загрузки модели. Заводим его, только
+   * когда первый уже готов — на старте не грузим две модели разом.
+   */
+  function warmUp(voiceId) {
+    if (slots.length >= POOL_SIZE || !slots.some((slot) => slot.loadedKey === keyOf(voiceId))) return;
+    ensureVoice(createSlot(), voiceId).catch(() => {});
+  }
+
+  function synthesize(spoken, { voiceId, rate = 1 }) {
+    const cacheKey = `${keyOf(voiceId)}|${rate}|${spoken}`;
     if (!cache.has(cacheKey)) {
-      const promise = ensureVoice(voiceId).then(() => call({ type: 'synthesize', text, rate }));
+      const slot = pickSlot(voiceId);
+      slot.pending += 1;
+      const promise = ensureVoice(slot, voiceId).then(() => {
+        warmUp(voiceId);
+        return call(slot, { type: 'synthesize', text: spoken, rate, epoch });
+      });
+      promise.then(
+        () => (slot.pending -= 1),
+        () => (slot.pending -= 1)
+      );
       promise.catch(() => cache.delete(cacheKey));
       cache.set(cacheKey, promise);
       while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
@@ -121,7 +166,7 @@ export function createPiperProvider() {
     resolve(result);
   }
 
-  async function play(audio, text, { volume = 1, onBoundary }, myToken) {
+  async function play(audio, text, segments, { volume = 1, onBoundary, onStart }, myToken) {
     const ctx = audioContext();
     // Поставили на паузу, пока фраза синтезировалась, — начнём её на паузе.
     if (paused) await ctx.suspend();
@@ -138,7 +183,7 @@ export function createPiperProvider() {
 
     // Границ слов Piper не даёт: оцениваем их по доле произнесённых букв и
     // сверяем с часами AudioContext — на паузе они стоят, подсветка тоже.
-    const timings = onBoundary ? estimateWordTimings(text) : [];
+    const timings = onBoundary ? estimateWordTimings(text, segments) : [];
     const startedAt = ctx.currentTime;
     let next = 0;
     return new Promise((resolve) => {
@@ -158,6 +203,7 @@ export function createPiperProvider() {
         resolve('ended');
       };
       source.start();
+      onStart?.();
     });
   }
 
@@ -262,14 +308,18 @@ export function createPiperProvider() {
       source: 'file',
       storedAt: Date.now(),
     });
-    if (loadedKey === key) loadedKey = null; // заменили модель — перечитать
+    forgetVoice(key); // заменили модель — перечитать
     return PIPER_PREFIX + key;
   }
 
   async function removeVoice(voiceId) {
     const key = keyOf(voiceId);
     await library.deleteVoice(key);
-    if (loadedKey === key) loadedKey = null;
+    forgetVoice(key);
+  }
+
+  function forgetVoice(key) {
+    for (const slot of slots) if (slot.loadedKey === key) slot.loadedKey = null;
     cache.clear();
   }
 
@@ -291,13 +341,27 @@ export function createPiperProvider() {
     },
 
     /**
+     * @param options.onStart вызывается, когда звук действительно пошёл
      * @returns {Promise<'ended'|'cancelled'>}
      */
     async speak(text, options = {}) {
       const myToken = token;
-      const audio = await synthesize(text, options);
+      const { text: spoken, segments } = spokenForm(text, options.voiceId);
+      let audio;
+      try {
+        audio = await synthesize(spoken, options);
+      } catch (error) {
+        if (myToken !== token) return 'cancelled';
+        if (!error.dropped) throw error;
+        audio = await synthesize(spoken, options); // задание отменили по ошибке эпохи — ещё раз
+      }
       if (myToken !== token) return 'cancelled';
-      return play(audio, text, options, myToken);
+      return play(audio, text, segments, options, myToken);
+    },
+
+    /** Голос уже в памяти воркера — первая фраза пойдёт без загрузки модели. */
+    isVoiceReady(voiceId) {
+      return slots.some((slot) => slot.loadedKey === keyOf(voiceId));
     },
 
     /**
@@ -312,7 +376,7 @@ export function createPiperProvider() {
 
     /** Синтезировать заранее — пока звучит текущая фраза. */
     prepare(text, options = {}) {
-      synthesize(text, options).catch(() => {});
+      synthesize(spokenForm(text, options.voiceId).text, options).catch(() => {});
     },
 
     pause() {
@@ -325,6 +389,9 @@ export function createPiperProvider() {
     },
     cancel() {
       token += 1;
+      // Заготовки для прежнего места больше не нужны — воркеры их пропустят.
+      epoch += 1;
+      for (const slot of slots) slot.worker.postMessage({ type: 'epoch', epoch });
       stopCurrent('cancelled');
     },
     get speaking() {
@@ -335,7 +402,11 @@ export function createPiperProvider() {
     },
     /** Для тестов: фонемы текста, без модели голоса. */
     phonemize(text, voice = 'ru') {
-      return call({ type: 'phonemize', text, voice }).then((data) => data.ids);
+      return call(slots[0] ?? createSlot(), { type: 'phonemize', text, voice }).then((data) => data.ids);
+    },
+    /** Для тестов: сколько воркеров синтеза запущено. */
+    get workers() {
+      return slots.length;
     },
   };
 }

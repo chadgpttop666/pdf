@@ -14,6 +14,13 @@ import { createSleepTimer } from './sleep-timer.js';
 import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
+// Сколько синтезировать заранее: нейроголосу нужен запас, иначе длинная фраза
+// после короткой не успевает и чтение встаёт.
+const PREFETCH_PHRASES = 3;
+const PREFETCH_CHARS = 1500;
+// Через столько без звука показываем, что нейроголос готовит фразу.
+const BUSY_DELAY_MS = 350;
 
 export function createTts(app) {
   const bar = $('ttsBar');
@@ -33,6 +40,9 @@ export function createTts(app) {
   let position = { pageNumber: 1, sentenceIndex: 0 };
   let voicesLoaded = false;
   let cursorShown = false; // место старта выбрано щелчком, но чтение ещё не началось
+  let upcoming = null; // откуда продолжится чтение после текущей фразы
+  let prefetchToken = 0;
+  let busyTimer = 0;
 
   const PICK_HINT = 'Щёлкните по тексту — начну читать с этого места';
 
@@ -66,6 +76,7 @@ export function createTts(app) {
     if (state === 'paused') provider?.resume();
     provider?.cancel();
     provider = next;
+    syncUi();
   }
 
   function speechOptions() {
@@ -91,6 +102,7 @@ export function createTts(app) {
     $('ttsPitch').value = String(getSetting('ttsPitch'));
     $('ttsRateValue').textContent = `${Number(getSetting('ttsRate')).toFixed(1)}×`;
     $('ttsPitchValue').textContent = Number(getSetting('ttsPitch')).toFixed(1);
+    $('ttsEngine').hidden = provider?.id !== 'piper';
     app.el.classList.toggle('speaking', playing);
   }
 
@@ -168,27 +180,84 @@ export function createTts(app) {
     return (await app.ocr.looksScanned()) && app.ocr.isPageTextless(pageNumber);
   }
 
-  /** Синтезировать следующую фразу заранее, пока звучит текущая. */
-  async function prefetchNext(page, sentenceIndex) {
-    if (!provider.prepare) return;
-    let target = page;
-    let next = sentenceIndex + 1;
-    for (let guard = 0; guard < 6; guard += 1) {
-      if (next >= target.sentences.length) {
-        if (target.pageNumber >= index.numPages) return;
-        target = await index.page(target.pageNumber + 1);
-        if (!target) return;
-        next = 0;
+  function sentenceText(page, sentenceIndex) {
+    const sentence = page.sentences[sentenceIndex];
+    return cleanForSpeech(page.text.slice(sentence.start, sentence.end));
+  }
+
+  /**
+   * Что произнести с этого места. Обычно одно предложение; но если страница
+   * обрывается посреди фразы, а следующая продолжает её со строчной, — обе
+   * части вместе, одной фразой: иначе голос ставит точку посреди
+   * предложения («…которому была.» «Поручена разработка…»).
+   * @returns {Promise<{ parts: object[], text: string, next: { pageNumber: number, sentenceIndex: number } }>}
+   */
+  async function buildUtterance(page, sentenceIndex) {
+    const first = sentenceText(page, sentenceIndex);
+    const parts = [{ page, sentenceIndex, text: first.text, map: first.map, offset: 0 }];
+    let text = first.text;
+    let next = { pageNumber: page.pageNumber, sentenceIndex: sentenceIndex + 1 };
+    if (sentenceIndex === page.sentences.length - 1 && page.runsOn && page.pageNumber < index.numPages) {
+      const following = await index.page(page.pageNumber + 1);
+      if (following?.runsIn && following.sentences.length) {
+        const second = sentenceText(following, 0);
+        // Перенос по слогам на стыке страниц: «окку-» + «пационными».
+        const hyphenated = /\p{L}-$/u.test(text) && /^\p{L}/u.test(second.text);
+        if (hyphenated) text = text.slice(0, -1);
+        const joiner = hyphenated ? '' : ' ';
+        parts.push({ page: following, sentenceIndex: 0, text: second.text, map: second.map, offset: text.length + joiner.length });
+        text += joiner + second.text;
+        next = { pageNumber: following.pageNumber, sentenceIndex: 1 };
+      }
+    }
+    return { parts, text, next };
+  }
+
+  /** Синтезировать заранее несколько следующих фраз, пока звучит текущая. */
+  async function prefetchAhead(from) {
+    if (!provider.prepare || !from) return;
+    const token = (prefetchToken += 1);
+    let cursor = { ...from };
+    let phrases = 0;
+    let chars = 0;
+    for (let guard = 0; guard < 12 && phrases < PREFETCH_PHRASES && chars < PREFETCH_CHARS; guard += 1) {
+      const page = await index.page(cursor.pageNumber);
+      if (!page || token !== prefetchToken) return;
+      if (cursor.sentenceIndex >= page.sentences.length) {
+        if (cursor.pageNumber >= index.numPages) return;
+        cursor = { pageNumber: cursor.pageNumber + 1, sentenceIndex: 0 };
         continue;
       }
-      const sentence = target.sentences[next];
-      const { text } = cleanForSpeech(target.text.slice(sentence.start, sentence.end));
-      if (/[\p{L}\p{N}]/u.test(text)) {
-        provider.prepare(text, speechOptions());
-        return;
-      }
-      next += 1;
+      const utterance = await buildUtterance(page, cursor.sentenceIndex);
+      if (token !== prefetchToken) return;
+      cursor = utterance.next;
+      if (!isSpeakable(utterance.text)) continue;
+      provider.prepare(utterance.text, speechOptions());
+      phrases += 1;
+      chars += utterance.text.length;
     }
+  }
+
+  /** Нейроголос грузит модель или синтезирует — показываем это, а не молчим. */
+  function waitForVoice() {
+    clearTimeout(busyTimer);
+    if (provider.id !== 'piper') return;
+    const voice = $('ttsVoice').selectedOptions[0]?.textContent || 'нейроголос';
+    const show = (text) => {
+      bar.classList.add('tts-busy');
+      setStatus(text);
+    };
+    if (!provider.isVoiceReady(getSetting('ttsVoiceUri'))) {
+      show(`Загружаю нейроголос «${voice}» — первый раз это несколько секунд…`);
+    } else {
+      busyTimer = setTimeout(() => show('Нейроголос готовит фразу…'), BUSY_DELAY_MS);
+    }
+  }
+
+  function voiceStarted(status) {
+    clearTimeout(busyTimer);
+    bar.classList.remove('tts-busy');
+    if (status) setStatus(status);
   }
 
   /** Прокрутка за читаемым предложением: держим его в верхней трети экрана. */
@@ -209,20 +278,26 @@ export function createTts(app) {
    */
   const pdfView = {
     async ensurePage(pageNumber) {
-      if (app.pdfViewer.currentPageNumber === pageNumber) return;
-      app.pdfViewer.scrollPageIntoView({ pageNumber });
-      // Страница могла быть выгружена — ждём её отрисовки, но недолго.
+      const div = app.pdfViewer.getPageView(pageNumber - 1)?.div;
+      // Текстовый слой уже есть — подсветке этого хватает. Раньше здесь
+      // сравнивалась «текущая» страница pdf.js: у низа страницы ею уже
+      // считается следующая, и перед каждой фразой вид прыгал назад с паузой.
+      if (div?.querySelector('.textLayer span')) return;
+      const rect = div?.getBoundingClientRect();
+      const box = app.container.getBoundingClientRect();
+      const near = rect && rect.bottom > box.top - box.height && rect.top < box.bottom + box.height;
+      if (!near) app.pdfViewer.scrollPageIntoView({ pageNumber });
       await Promise.race([
         new Promise((resolve) => {
           const handler = (event) => {
             if (event.pageNumber === pageNumber) {
-              app.eventBus.off('pagerendered', handler);
+              app.eventBus.off('textlayerrendered', handler);
               resolve();
             }
           };
-          app.eventBus.on('pagerendered', handler);
+          app.eventBus.on('textlayerrendered', handler);
         }),
-        delay(600),
+        delay(1500),
       ]);
     },
     highlightSentence(page, sentenceIndex, { scroll = true } = {}) {
@@ -317,12 +392,11 @@ export function createTts(app) {
           continue;
         }
 
-        const sentence = page.sentences[position.sentenceIndex];
-        const raw = page.text.slice(sentence.start, sentence.end);
-        const { text, map } = cleanForSpeech(raw);
+        const utterance = await buildUtterance(page, position.sentenceIndex);
+        if (myGeneration !== generation) return;
         // «* * *» и прочие разделители читать вслух незачем.
-        if (!/[\p{L}\p{N}]/u.test(text)) {
-          position.sentenceIndex += 1;
+        if (!isSpeakable(utterance.text)) {
+          position = { ...utterance.next };
           continue;
         }
 
@@ -338,24 +412,55 @@ export function createTts(app) {
 
         const sentenceIndex = position.sentenceIndex;
         view().highlightSentence(page, sentenceIndex);
-        setStatus(`Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}`);
+        const status = `Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}`;
+        setStatus(status);
+        upcoming = utterance.next;
 
-        prefetchNext(page, sentenceIndex);
+        // Слова приходят в координатах всей фразы — находим, к какой части
+        // (странице) относится слово, и переносим подсветку туда.
+        let currentPart = utterance.parts[0];
+        const onBoundary = (event) => {
+          const part = utterance.parts.findLast((candidate) => candidate.offset <= event.charIndex);
+          if (!part) return;
+          if (part !== currentPart) {
+            view().clearWords(currentPart.page.pageNumber);
+            currentPart = part;
+            view().ensurePage(part.page.pageNumber);
+            view().highlightSentence(part.page, part.sentenceIndex);
+          }
+          const local = { ...event, charIndex: event.charIndex - part.offset };
+          highlightWord(part.page, part.sentenceIndex, part.map, local, part.text);
+        };
+
+        waitForVoice();
         const options = speechOptions();
-        const result = await provider.speak(text, {
+        const speaking = provider.speak(utterance.text, {
           ...options,
           volume: options.volume * sleepTimer.volumeFactor(),
-          onBoundary: (event) => highlightWord(page, sentenceIndex, map, event, text),
+          onStart: () => voiceStarted(status),
+          onBoundary,
         });
+        // Заготовки — после текущей фразы: в очереди синтеза она первая.
+        prefetchAhead(utterance.next);
+        const result = await speaking;
+        voiceStarted();
 
         if (myGeneration !== generation || state === 'idle') return;
         if (result === 'cancelled') return;
 
-        view().clearWords(page.pageNumber);
-        app.eventBus.dispatch('ttssentencespoken', { source: app, pageNumber: page.pageNumber, sentenceIndex, chars: text.length });
+        for (const part of utterance.parts) {
+          view().clearWords(part.page.pageNumber);
+          app.eventBus.dispatch('ttssentencespoken', {
+            source: app,
+            pageNumber: part.page.pageNumber,
+            sentenceIndex: part.sentenceIndex,
+            chars: part.text.length,
+          });
+        }
         const pause = getSetting('ttsSentencePauseMs');
         if (pause) await delay(pause);
-        position.sentenceIndex += 1;
+        if (myGeneration !== generation) return;
+        position = { ...utterance.next };
       }
     } catch (error) {
       console.error('Ошибка озвучки', error);
@@ -367,10 +472,15 @@ export function createTts(app) {
   function finish(message) {
     state = 'idle';
     cursorShown = false;
+    upcoming = null;
+    prefetchToken += 1;
+    voiceStarted();
     sleepTimer.disarm();
     generation += 1;
     provider?.cancel();
     clearHighlights();
+    // Плавная прокрутка за последней фразой не должна доезжать после стопа.
+    if (!app.autoScroll?.running) app.scroller?.cancel();
     if (!app.autoScroll?.running) app.wakeLock?.release();
     syncUi();
     // После остановки панель снова подсказывает, как выбрать место.
@@ -440,6 +550,7 @@ export function createTts(app) {
 
   function pause() {
     if (state !== 'speaking') return;
+    voiceStarted();
     provider.pause();
     state = 'paused';
     syncUi();
@@ -451,6 +562,21 @@ export function createTts(app) {
     provider.resume();
     state = 'speaking';
     syncUi();
+  }
+
+  /**
+   * Скорость поменяли во время чтения. Системный голос перечитывает фразу
+   * сразу — у него это мгновенно. Нейроголос фразу не прерывает: её пришлось
+   * бы синтезировать заново, и он замолкал бы на несколько секунд.
+   */
+  function rateChanged() {
+    if (state === 'idle') return;
+    if (provider.id !== 'piper') {
+      jump(0);
+      return;
+    }
+    setStatus(`Скорость ${Number(getSetting('ttsRate')).toFixed(1)}× — со следующей фразы`);
+    prefetchAhead(upcoming);
   }
 
   function jump(delta) {
@@ -469,7 +595,11 @@ export function createTts(app) {
   on($('ttsStop'), 'click', () => finish());
   on($('ttsNext'), 'click', () => jump(1));
   on($('ttsPrev'), 'click', () => jump(-1));
-  on($('ttsClose'), 'click', () => showBar(false));
+  // Закрыть панель — значит закончить: и чтение, и подсветку на тексте.
+  on($('ttsClose'), 'click', () => {
+    finish();
+    showBar(false);
+  });
   on($('ttsVoice'), 'change', async () => {
     const select = $('ttsVoice');
     const voiceId = select.value;
@@ -488,9 +618,7 @@ export function createTts(app) {
     await updateSettings({ ttsRate: Number($('ttsRate').value) });
     syncUi();
   });
-  on($('ttsRate'), 'change', () => {
-    if (state !== 'idle') jump(0);
-  });
+  on($('ttsRate'), 'change', () => rateChanged());
   on($('ttsPitch'), 'input', async () => {
     await updateSettings({ ttsPitch: Number($('ttsPitch').value) });
     syncUi();
@@ -611,7 +739,7 @@ export function createTts(app) {
       await updateSettings({ ttsRate: rate });
       syncUi();
       app.hud.show(`Скорость речи ${rate.toFixed(1)}×`);
-      if (state !== 'idle') jump(0);
+      rateChanged();
     },
     get isSpeaking() {
       return state === 'speaking';

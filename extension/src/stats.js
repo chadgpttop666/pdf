@@ -7,7 +7,7 @@
 // по скорости похоже на чтение, а не на пролистывание или переход по
 // оглавлению. Всё хранится только в браузере.
 
-import { $, clear, el, on } from './dom.js';
+import { $, clear, closeOnBackdropClick, el, on } from './dom.js';
 import * as library from './library.js';
 import { get as getSetting, onSettingsChanged } from './settings.js';
 import { pageOffsetRatio } from './visible-text.js';
@@ -47,6 +47,7 @@ const DAY_MONTH = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'sho
 
 export function createStats(app) {
   const dialog = $('statsDialog');
+  closeOnBackdropClick(dialog);
   const body = $('statsBody');
   const chip = $('readingEta');
   const chipText = $('readingEtaText');

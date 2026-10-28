@@ -254,7 +254,9 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 }
 
 .rf-p { margin: 0; text-indent: 1.5em; }
-.rf-p.rf-continued { text-indent: 0; }
+.rf-p.rf-continued { text-indent: 0; margin-top: 0; }
+/* Фраза перетекает на следующую страницу — стык не похож на конец абзаца. */
+.rf-p.rf-runs-on { margin-bottom: 0; }
 .rf-p.rf-heading { text-indent: 0; text-align: center; font-weight: 700; margin: 1.1em 0 0.5em; hyphens: manual; }
 .rf-empty { color: var(--rf-muted); font-style: italic; text-indent: 0; }
 .rf-s { border-radius: 4px; }
@@ -343,6 +345,33 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 /* Пока открыта панель озвучки, щелчок по тексту выбирает место старта. */
 #app.tts-picking .textLayer,
 #app.tts-picking .textLayer span { cursor: pointer; }
+
+/* ── Панель озвучки: нейроголос ───────────────────────────────────── */
+
+.tts-engine {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+/* Нейроголос загружает модель или готовит фразу — кольцо вокруг ▶. */
+#ttsBar.tts-busy #ttsPlay { position: relative; }
+#ttsBar.tts-busy #ttsPlay::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: tts-spin 0.9s linear infinite;
+}
+#ttsBar.tts-busy #ttsStatus { color: var(--accent); }
+@keyframes tts-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  #ttsBar.tts-busy #ttsPlay::after { animation: none; border-color: var(--accent); }
+}
 
 /* ── Распознавание сканов ────────────────────────────────────────── */
 
