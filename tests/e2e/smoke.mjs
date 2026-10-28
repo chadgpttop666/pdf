@@ -831,6 +831,26 @@ try {
     JSON.stringify(roundTrip)
   );
 
+  // ── Имя файла при скачивании: по адресу без имени ──
+  const savedName = async (path) => {
+    const [file, extra = ''] = path.split('&');
+    await page.goto(`${BASE}/viewer.html?file=${encodeURIComponent(file)}${extra ? `&${extra}` : ''}`);
+    await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });
+    await page.waitForTimeout(500);
+    await page.click('#btnDownload');
+    await page.waitForTimeout(300);
+    return page.evaluate(() => document.getElementById('hud').textContent);
+  };
+  const fromHeader = await savedName('/download/8f2a9c1e');
+  check('имя файла берётся из ответа сервера, а не из адреса', fromHeader.includes('«Как читать с экрана — книга.pdf»'), fromHeader);
+  const fromTitle = await savedName('/nameless/8f2a9c1e');
+  check('без имени от сервера — название из свойств PDF', fromTitle.includes('«Как читать с экрана.pdf»'), fromTitle);
+  const fromBackground = await savedName('/nameless/8f2a9c1e&name=' + encodeURIComponent('Свой отчёт.pdf'));
+  check('имя, переданное фоновой страницей, главнее остального', fromBackground.includes('«Свой отчёт.pdf»'), fromBackground);
+  await savedName('/nameless/8f2a9c1e');
+  const recentName = await page.evaluate(() => window.pdfReaderApp.readingState.record?.name);
+  check('то же имя — в списке недавних', recentName === 'Как читать с экрана', String(recentName));
+
   // ── Распознавание скана ──
   await page.goto(`${BASE}/viewer.html?file=/fixtures/scan.pdf`);
   await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });

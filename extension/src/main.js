@@ -227,10 +227,12 @@ function wireSteppers() {
   }
 }
 
-function documentUrlFromQuery() {
+/** Адрес документа и имя файла, которое фоновая страница узнала у сервера. */
+function documentFromQuery() {
   const params = new URLSearchParams(location.search);
   const file = params.get('file');
-  return file && isSafeDocumentUrl(file) ? file : null;
+  if (!file || !isSafeDocumentUrl(file)) return null;
+  return { url: file, name: params.get('name') || undefined };
 }
 
 async function main() {
@@ -327,8 +329,8 @@ async function main() {
   wireSteppers();
   wireAutoFit();
 
-  const initial = documentUrlFromQuery();
-  if (initial) await openUrl(initial);
+  const initial = documentFromQuery();
+  if (initial) await openUrl(initial.url, { name: initial.name });
 
   // Фоновая страница может попросить открыть документ уже после запуска.
   extensionApi?.runtime?.onMessage?.addListener((message) => {

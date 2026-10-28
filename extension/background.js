@@ -5,6 +5,8 @@
 // Если разрешение почему-то недоступно, остаётся запасной путь по адресу
 // страницы, а вручную документ всегда можно открыть из самого вьюера.
 
+import { filenameFromContentDisposition } from './src/file-name.js';
+
 const VIEWER_URL = browser.runtime.getURL('viewer.html');
 const SETTINGS_KEY = 'settings.v1';
 
@@ -25,8 +27,10 @@ browser.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-function viewerFor(url) {
-  return `${VIEWER_URL}?file=${encodeURIComponent(url)}`;
+/** name — имя файла от сервера: по адресу вида /download?id=7 его не угадать. */
+function viewerFor(url, name) {
+  const query = `?file=${encodeURIComponent(url)}`;
+  return `${VIEWER_URL}${query}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
 }
 
 function looksLikePdfUrl(url) {
@@ -63,7 +67,11 @@ function shouldIntercept(details) {
 let blockingRegistered = false;
 try {
   browser.webRequest.onHeadersReceived.addListener(
-    (details) => (shouldIntercept(details) ? { redirectUrl: viewerFor(details.url) } : {}),
+    (details) => {
+      if (!shouldIntercept(details)) return {};
+      const name = filenameFromContentDisposition(headerValue(details.responseHeaders, 'content-disposition'));
+      return { redirectUrl: viewerFor(details.url, name) };
+    },
     { urls: ['http://*/*', 'https://*/*'], types: ['main_frame'] },
     ['blocking', 'responseHeaders']
   );

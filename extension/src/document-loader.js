@@ -3,6 +3,7 @@
 // потом считается ключ документа и заголовок окна.
 
 import { safeFileName, saveBlob } from './dom.js';
+import { filenameFromUrl, pickDocumentName } from './file-name.js';
 import { documentResources, pdfjs } from './viewer-setup.js';
 
 /**
@@ -21,11 +22,13 @@ export class DocumentLoader {
     this.loadingTask = null;
   }
 
+  /** @param {{ name?: string }} options name — имя файла от сервера, если известно */
   async openUrl(url, { name } = {}) {
     const source = {
       kind: 'url',
       url,
-      name: name || decodeURIComponent(url.split('/').pop()?.split('?')[0] || 'документ.pdf'),
+      name: name || filenameFromUrl(url) || 'документ.pdf',
+      serverName: name || null,
     };
     return this.#open({ url, ...documentResources }, source);
   }
@@ -61,6 +64,18 @@ export class DocumentLoader {
 
     const info = await pdfDocument.getMetadata().catch(() => null);
     const title = info?.info?.Title?.trim();
+    // Хвост адреса часто не имя, а «download.php» или хеш: берём имя от
+    // сервера, а без него — название из свойств PDF. Своё имя локального
+    // файла не трогаем; старые записи библиотеки с таким мусором чиним.
+    if (source.kind === 'url') {
+      source.name = pickDocumentName({
+        disposition: source.serverName || info?.contentDispositionFilename,
+        urlName: filenameFromUrl(source.url),
+        title,
+      });
+    } else if (source.kind === 'bytes' && !/\.pdf$/i.test(source.name)) {
+      source.name = pickDocumentName({ urlName: source.name, title });
+    }
     this.eventBus.dispatch('documentopened', {
       source: this,
       pdfDocument,

@@ -35,6 +35,11 @@ const types = {
   '.icc': 'application/octet-stream',
 };
 
+// Адреса как у сайтов, где хвост ссылки — не имя файла: /download/8f2a9c.
+// По /download/ сервер называет файл в Content-Disposition, по /nameless/ — нет.
+const SERVER_NAME = 'Как читать с экрана — книга.pdf';
+const disguised = { download: true, nameless: false };
+
 // Фикстуры лежат вне extension/, поэтому маппим их на отдельный префикс.
 function resolvePath(urlPath) {
   const clean = normalize(decodeURIComponent(urlPath.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
@@ -45,7 +50,8 @@ function resolvePath(urlPath) {
 }
 
 const server = createServer(async (req, res) => {
-  const filePath = resolvePath(req.url || '/');
+  const route = /^\/(download|nameless)\//.exec(req.url || '')?.[1];
+  const filePath = route ? join(fixturesDir, 'russian.pdf') : resolvePath(req.url || '/');
   const allowed = filePath.startsWith(extensionDir) || filePath.startsWith(fixturesDir);
   if (!allowed) {
     res.writeHead(403).end('forbidden');
@@ -60,6 +66,7 @@ const server = createServer(async (req, res) => {
       'Content-Length': info.size,
       'Cache-Control': 'no-store',
       ...(csp && ['.html', '.js', '.mjs'].includes(type) ? { 'Content-Security-Policy': csp } : {}),
+      ...(disguised[route] ? { 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(SERVER_NAME)}` } : {}),
     });
     createReadStream(filePath).pipe(res);
   } catch {
