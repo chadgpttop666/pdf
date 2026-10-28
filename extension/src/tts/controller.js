@@ -258,6 +258,7 @@ export function createTts(app) {
         if (result === 'cancelled') return;
 
         view().clearWords(page.pageNumber);
+        app.eventBus.dispatch('ttssentencespoken', { source: app, pageNumber: page.pageNumber, sentenceIndex, chars: text.length });
         const pause = getSetting('ttsSentencePauseMs');
         if (pause) await delay(pause);
         position.sentenceIndex += 1;

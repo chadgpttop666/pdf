@@ -548,6 +548,78 @@ try {
   await page.evaluate(() => window.pdfReaderApp.toggleSidebar(false));
   await page.waitForTimeout(300);
 
+  // ── Статистика чтения ──
+  await page.waitForFunction(() => !document.getElementById('readingEta').hidden, null, { timeout: 10000 });
+  const eta = await page.evaluate(() => ({
+    text: document.getElementById('readingEtaText').textContent,
+    title: document.getElementById('readingEta').title,
+  }));
+  check('в тулбаре оценка «до конца главы · книги»', /^\d+ (мин|ч)( \d+ мин)? · \d+ (мин|ч)/.test(eta.text) && eta.title.includes('До конца главы'), eta.text);
+
+  const stats = () => page.evaluate(() => ({ ...window.pdfReaderApp.stats.today, docs: undefined }));
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.pdfReaderApp.stats.tick()); // точка отсчёта
+  const statsStart = await stats();
+  await page.mouse.move(640, 400);
+  for (let i = 0; i < 6; i += 1) {
+    await page.mouse.wheel(0, 0); // читатель жив, но не листает
+    await page.waitForTimeout(1000);
+  }
+  await page.evaluate(() => window.pdfReaderApp.container.scrollBy(0, 150));
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.pdfReaderApp.stats.tick());
+  const afterRead = await stats();
+  check(
+    'чтение засчитывается: время и пройденный текст',
+    afterRead.readMs - statsStart.readMs >= 5000 && afterRead.readChars > statsStart.readChars,
+    `+${Math.round((afterRead.readMs - statsStart.readMs) / 1000)} с, +${Math.round(afterRead.readChars - statsStart.readChars)} знаков`
+  );
+
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 6 }));
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.pdfReaderApp.stats.tick());
+  const afterJump = await stats();
+  check('переход на несколько страниц вперёд не считается прочитанным', afterJump.readChars === afterRead.readChars, `${Math.round(afterJump.readChars - afterRead.readChars)} знаков`);
+
+  await page.evaluate(() => window.pdfReaderApp.stats.markIdle());
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => window.pdfReaderApp.stats.tick());
+  const afterIdle = await stats();
+  check('простой дольше двух минут не считается', afterIdle.readMs === afterJump.readMs, `+${afterIdle.readMs - afterJump.readMs} мс`);
+  check('озвучка учтена как прослушанный текст', afterIdle.listenChars > 0, `${afterIdle.listenChars} знаков`);
+
+  await page.click('#readingEta');
+  await page.waitForTimeout(400);
+  const statsView = await page.evaluate(() => ({
+    open: document.getElementById('statsDialog').open,
+    tiles: document.querySelectorAll('.stats-tile').length,
+    columns: document.querySelectorAll('.stats-column').length,
+    todayCap: document.querySelector('.stats-column.today .stats-cap')?.textContent,
+    book: document.querySelector('.stats-book h3')?.textContent,
+  }));
+  check(
+    'окно статистики: плитки, неделя столбиками, книга',
+    statsView.open && statsView.tiles === 4 && statsView.columns === 7 && /мин/.test(statsView.todayCap || '') && Boolean(statsView.book),
+    JSON.stringify(statsView)
+  );
+  await page.hover('.stats-column.today');
+  await page.waitForTimeout(150);
+  const tip = await page.evaluate(() => {
+    const tooltip = document.querySelector('.stats-tooltip');
+    const dialog = document.getElementById('statsDialog').getBoundingClientRect();
+    const rect = tooltip.getBoundingClientRect();
+    return { hidden: tooltip.hidden, text: tooltip.textContent, inside: rect.left >= dialog.left && rect.right <= dialog.right };
+  });
+  check('подсказка у столбца — с разбивкой и в пределах окна', !tip.hidden && tip.text.includes('чтение') && tip.inside, JSON.stringify(tip));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  check('Esc закрывает статистику', !(await page.evaluate(() => document.getElementById('statsDialog').open)));
+
+  await page.evaluate(() => window.pdfReaderApp.stats.flush());
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
+  await page.waitForTimeout(300);
+
   // ── Режим «только текст» ──
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
   await page.waitForTimeout(700);

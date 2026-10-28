@@ -250,6 +250,13 @@ export const SETTINGS_SCHEMA = [
     label: 'Не хранить файлы крупнее',
   },
   {
+    key: 'statsEnabled',
+    type: 'bool',
+    def: true,
+    label: 'Вести статистику чтения',
+    hint: 'Время, скорость и оценка «сколько осталось» — только в этом браузере',
+  },
+  {
     key: 'keepScreenAwake',
     type: 'bool',
     def: true,

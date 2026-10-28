@@ -20,6 +20,7 @@ import { createSidebar } from './ui/sidebar.js';
 import { createReadingState } from './reading-state.js';
 import { createBookmarks } from './bookmarks.js';
 import { createHighlights } from './highlights.js';
+import { createStats } from './stats.js';
 import { createRecent } from './ui/recent.js';
 import { createSettingsDialog } from './ui/settings-dialog.js';
 import { bindKeyboard } from './keyboard.js';
@@ -267,6 +268,7 @@ async function main() {
   app.readingState = createReadingState(app);
   app.bookmarks = createBookmarks(app);
   app.highlights = createHighlights(app);
+  app.stats = createStats(app);
   app.recent = createRecent(app);
   app.settingsDialog = createSettingsDialog(app);
   await app.recent.render();
@@ -291,6 +293,10 @@ async function main() {
     }
     if (app.settingsDialog?.isOpen) {
       app.settingsDialog.close();
+      return;
+    }
+    if (app.stats?.isOpen) {
+      app.stats.close();
       return;
     }
     if (app.highlights?.toolbarOpen) {

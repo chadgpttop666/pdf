@@ -52,6 +52,7 @@
 
       <div class="spacer"></div>
       <div id="docTitle" title=""></div>
+      <button id="readingEta" class="eta-chip" data-icon="clock" hidden><span id="readingEtaText"></span></button>
       <div class="spacer"></div>
 
       <button id="btnFind" class="icon" data-icon="search" title="Поиск (Ctrl+F)" aria-label="Поиск"></button>
@@ -112,6 +113,7 @@
           <div class="welcome-actions">
             <button id="welcomeOpen" data-icon="open">Открыть файл</button>
             <button id="welcomeHelp" class="ghost" data-icon="help">Горячие клавиши</button>
+            <button id="welcomeStats" class="ghost" data-icon="chart">Статистика</button>
           </div>
           <ul id="welcomeRecent" class="recent-list"></ul>
         </div>
@@ -260,6 +262,17 @@
         <h2>Настройки</h2>
         <div class="settings-grid" id="settingsGrid"></div>
         <menu>
+          <button value="close">Закрыть</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="statsDialog">
+      <form method="dialog">
+        <h2>Статистика чтения</h2>
+        <div id="statsBody"></div>
+        <menu>
+          <button type="button" id="statsReset" class="ghost">Сбросить</button>
           <button value="close">Закрыть</button>
         </menu>
       </form>

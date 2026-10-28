@@ -1,10 +1,14 @@
-// Локальная библиотека: место чтения, закладки и сами файлы недавних
-// документов. Всё лежит в IndexedDB браузера и никуда не отправляется.
+// Локальная библиотека: место чтения, закладки, сами файлы недавних
+// документов и статистика чтения по дням. Всё лежит в IndexedDB браузера и
+// никуда не отправляется.
+
+import { emptyDay, mergeDays } from './stats-math.js';
 
 const DB_NAME = 'pdf-reader';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DOCUMENTS = 'documents';
 const FILES = 'files';
+const STATS = 'stats';
 
 let dbPromise = null;
 
@@ -19,6 +23,10 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains(FILES)) {
         db.createObjectStore(FILES, { keyPath: 'id' });
+      }
+      // Версия 2: статистика, одна запись на день («2026-10-28»).
+      if (!db.objectStoreNames.contains(STATS)) {
+        db.createObjectStore(STATS, { keyPath: 'day' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -139,4 +147,26 @@ export async function clearLibrary() {
     await request(documents.clear());
     await request(files.clear());
   });
+}
+
+/** Статистика за все дни — записей немного, по одной на день чтения. */
+export async function listStatsDays() {
+  return transaction(STATS, 'readonly', (store) => request(store.getAll()));
+}
+
+/**
+ * Прибавить приращение к записи дня. Чтение и запись — в одной транзакции,
+ * поэтому две открытые вкладки не затирают счёт друг друга.
+ */
+export async function addStatsDay(delta) {
+  return transaction(STATS, 'readwrite', async (store) => {
+    const existing = (await request(store.get(delta.day))) || emptyDay(delta.day);
+    const merged = mergeDays(existing, delta);
+    await request(store.put(merged));
+    return merged;
+  });
+}
+
+export async function clearStats() {
+  return transaction(STATS, 'readwrite', (store) => request(store.clear()));
 }

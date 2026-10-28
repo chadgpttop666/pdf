@@ -16,6 +16,8 @@
   --toolbar-h: 44px;
   --radius: 8px;
   --page-gap: 14px;
+  /* Столбцы диаграммы: шаг синего, проверенный по контрасту с фоном окна. */
+  --chart-bar: #1d9bd8;
 }
 
 #app[data-ui-theme='light'] {
@@ -28,6 +30,7 @@
   --fg-muted: #5d6673;
   --accent: #0b74c4;
   --accent-fg: #ffffff;
+  --chart-bar: #0b74c4;
   --shadow: 0 10px 24px rgb(15 23 42 / 18%);
 }
 
@@ -680,6 +683,86 @@ dialog {
 }
 
 dialog::backdrop { background: rgb(0 0 0 / 55%); }
+
+/* ── Статистика чтения ───────────────────────────────────────────── */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.eta-chip {
+  gap: 4px;
+  padding: 2px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.eta-chip .icon-svg { width: 15px; height: 15px; }
+.eta-chip:hover { color: var(--fg); }
+
+#statsDialog { width: min(660px, 92vw); }
+#statsReset { margin-right: auto; }
+.stats-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.stats-tile { padding: 10px 12px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 10px; }
+.stats-label { font-size: 12px; color: var(--fg-muted); }
+.stats-value { margin: 4px 0 3px; font-size: 21px; font-weight: 600; white-space: nowrap; }
+.stats-unit { font-size: 13px; font-weight: 500; color: var(--fg-muted); }
+.stats-note { font-size: 11.5px; line-height: 1.35; color: var(--fg-muted); }
+.stats-chart h3,
+.stats-book h3 { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: var(--fg-muted); }
+
+.stats-chart-body { position: relative; }
+.stats-columns { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.stats-column { border-radius: 6px; outline: none; }
+.stats-plot {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 150px;
+  padding-top: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.stats-column:hover .stats-plot,
+.stats-column:focus-visible .stats-plot { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+/* Ширина столбца ограничена — остаток полосы остаётся воздухом. */
+.stats-bar { width: 24px; max-width: 60%; background: var(--chart-bar); border-radius: 4px 4px 0 0; }
+.stats-cap { margin-bottom: 4px; font-size: 12px; color: var(--fg); white-space: nowrap; }
+.stats-day { margin-top: 6px; font-size: 11.5px; text-align: center; color: var(--fg-muted); }
+.stats-column.today .stats-day { font-weight: 600; color: var(--fg); }
+.stats-tooltip {
+  position: absolute;
+  top: 0;
+  transform: translate(-50%, -100%);
+  padding: 6px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.stats-progress { height: 6px; margin: 2px 0 8px; background: var(--bg-sunken); border-radius: 3px; overflow: hidden; }
+.stats-progress-fill { height: 100%; background: var(--chart-bar); }
+.stats-book ul { margin: 0; padding-left: 18px; line-height: 1.6; }
+.stats-footnote { margin: 16px 0 0; font-size: 12px; line-height: 1.45; color: var(--fg-muted); }
+.stats-off { margin: 0 0 12px; color: var(--danger); }
+
+@media (max-width: 640px) {
+  .stats-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 dialog h2 { margin: 0 0 14px; font-size: 18px; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0 0; padding: 0; }
 
