@@ -8,7 +8,7 @@ const INSTALLER = new TextEncoder().encode('установщик');
 const SHA = createHash('sha256').update(INSTALLER).digest('hex');
 
 /** Firefox, каким его видит расширение: разрешения, загрузки, native messaging. */
-function fakeBrowser({ granted = false, installedAfterRun = true } = {}) {
+function fakeBrowser({ granted = false, installedAfterRun = true, os = 'linux' } = {}) {
   const calls = [];
   let permission = granted;
   let installed = false;
@@ -16,7 +16,7 @@ function fakeBrowser({ granted = false, installedAfterRun = true } = {}) {
   const browser = {
     calls,
     runtime: {
-      getPlatformInfo: async () => ({ os: 'linux', arch: 'x86-64' }),
+      getPlatformInfo: async () => ({ os, arch: 'x86-64' }),
       connectNative() {
         const message = [];
         const disconnect = [];
@@ -102,7 +102,7 @@ afterEach(() => {
 
 describe('установка ускорителя из расширения (helper-install.js)', () => {
   it('сборки для системы нет — карточка честно говорит об этом', async () => {
-    globalThis.browser = fakeBrowser();
+    globalThis.browser = fakeBrowser({ os: 'mac' });
     const flow = createHelperFlow(fakeTera());
     flow.refresh();
     await waitFor(flow, 'unsupported');
