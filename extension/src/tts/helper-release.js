@@ -6,8 +6,8 @@
 export const HELPER_RELEASE = {
   version: '1.0.0',
   files: {
-    win: { name: 'pdf-reader-tts.exe', size: 0, sha256: '' },
-    linux: { name: 'pdf-reader-tts-linux', size: 0, sha256: '' },
+    win: { name: 'pdf-reader-tts.exe', size: 19011072, sha256: 'a0bafd10262801f9557c2c62781dc3e3c78c8159c1cf7064bcd44c90efdc38d3' },
+    linux: { name: 'pdf-reader-tts-linux', size: 30082544, sha256: 'eac7a3efaff2261aa84acce172c4bf542836c0f5c26525b23a0aaf6faf9058bb' },
   },
 };
 
