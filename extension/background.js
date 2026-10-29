@@ -1,5 +1,5 @@
 // Фоновая страница: перехватывает открытие PDF и уводит их в наш вьюер, а
-// выделенный на любой странице текст открывает в окне озвучки.
+// выделенный на любой странице текст читает вслух прямо там.
 //
 // Firefox, в отличие от Chrome, сохранил блокирующий webRequest — им можно
 // посмотреть на Content-Type ответа и подменить страницу до её отрисовки.
@@ -151,12 +151,52 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
 
 // ── Озвучка выделенного на любой странице ──────────────────────────────
 //
-// Выделение берём у самой страницы: в info.selectionText пропадают переносы
-// строк, а по ним окно озвучки делит текст на абзацы. Текст кладётся в
-// storage.session (живёт до закрытия браузера) и читается в маленьком окне
-// speak.html; если оно уже открыто, новое выделение приходит туда же.
+// Читаем прямо на сайте: content/speak-overlay.js подсвечивает читаемую
+// фразу и слово на самой странице и ставит в углу плашку управления
+// (speak-pill.html). Сочетание клавиш без нового выделения ставит идущее
+// чтение на паузу и продолжает его.
+//
+// Куда расширениям нельзя (about:, магазин дополнений, режим чтения), текст
+// открывается в маленьком окне speak.html: он кладётся в storage.session
+// (живёт до закрытия браузера), и если окно уже открыто — приходит туда же.
 
 const SPEAK_KEY_PREFIX = 'speak:';
+const SPEAK_CSS = `
+::highlight(pdf-reader-speak-sentence) { background-color: rgb(255 214 0 / 0.28); }
+::highlight(pdf-reader-speak-word) { background-color: rgb(255 170 0 / 0.65); color: inherit; }
+`;
+
+/** Читать на самой странице. false — нельзя или нечего (тогда — окно). */
+async function speakOnPage(tab, frameId) {
+  const target = frameId === undefined ? { tabId: tab.id, allFrames: true } : { tabId: tab.id, frameIds: [frameId] };
+  try {
+    // В каком кадре выделение и где уже читается: сам скрипт ставим только туда.
+    const probes = await browser.scripting.executeScript({
+      target,
+      func: () => ({
+        selected: /[\p{L}\p{N}]/u.test(String(globalThis.getSelection?.() ?? '')),
+        active: Boolean(globalThis.__pdfReaderSpeak?.active),
+      }),
+    });
+    const withSelection = probes.find((probe) => probe.result?.selected);
+    if (withSelection) {
+      const frame = { tabId: tab.id, frameIds: [withSelection.frameId] };
+      await browser.scripting.insertCSS({ target: frame, css: SPEAK_CSS });
+      await browser.scripting.executeScript({ target: frame, files: ['content/speak-overlay.js'] });
+      const [started] = await browser.scripting.executeScript({ target: frame, func: () => globalThis.__pdfReaderSpeak.fromSelection() });
+      return Boolean(started?.result);
+    }
+    const reading = probes.find((probe) => probe.result?.active);
+    if (!reading) return false;
+    await browser.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [reading.frameId] },
+      func: () => globalThis.__pdfReaderSpeak.toggle(),
+    });
+    return true;
+  } catch {
+    return false; // страница, куда расширениям нельзя (about:, магазин дополнений)
+  }
+}
 
 async function selectionOf(tab, frameId) {
   try {
@@ -166,11 +206,12 @@ async function selectionOf(tab, frameId) {
     });
     return results.map((result) => result?.result || '').find((text) => text.trim()) || '';
   } catch {
-    return ''; // страница, куда расширениям нельзя (about:, магазин дополнений)
+    return '';
   }
 }
 
 async function speakSelection(tab, info = {}) {
+  if (await speakOnPage(tab, info.frameId)) return;
   let text = await selectionOf(tab, info.frameId);
   if (!text.trim()) text = info.selectionText || '';
   if (!text.trim()) return;
@@ -199,6 +240,9 @@ async function speakSelection(tab, info = {}) {
   const window = await browser.windows.create({ url, type: 'popup', width: 580, height: 720 });
   await session.set({ speakWindowId: window.id });
 }
+
+// Для проверок: меню правой кнопки автотестом не нажать.
+globalThis.pdfReaderBackground = { speakSelection };
 
 browser.commands?.onCommand.addListener(async (command) => {
   if (command !== 'speak-selection') return;

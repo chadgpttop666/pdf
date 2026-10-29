@@ -1,0 +1,174 @@
+/* Плашка озвучки в углу сайта. Живёт в iframe поверх чужой страницы,
+   поэтому фон документа прозрачный, а размер плашка сообщает странице сама. */
+
+:root {
+  color-scheme: normal;
+  --bg: #1f2329;
+  --bg-raised: #2a2f36;
+  --fg: #e8eaed;
+  --fg-muted: #9aa0a6;
+  --accent: #8ab4f8;
+  --border: rgb(255 255 255 / 0.12);
+  --shadow: 0 6px 24px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+}
+.pill-app[data-ui-theme='light'] {
+  --bg: #ffffff;
+  --bg-raised: #f1f3f4;
+  --fg: #1f2329;
+  --fg-muted: #5f6368;
+  --accent: #1a73e8;
+  --border: rgb(0 0 0 / 0.12);
+  --shadow: 0 6px 24px rgb(0 0 0 / 0.18), 0 1px 3px rgb(0 0 0 / 0.15);
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  font: 13px/1.35 system-ui, sans-serif;
+}
+
+/* Прижата к правому нижнему углу iframe: растёт вверх и влево. */
+.pill-app {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: max-content;
+  max-width: 100vw;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  color: var(--fg);
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  padding: 0 6px 0 4px;
+  border-radius: 22px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  user-select: none;
+}
+
+.pill-grip {
+  width: 10px;
+  height: 24px;
+  margin-right: 2px;
+  cursor: grab;
+  touch-action: none;
+  background: radial-gradient(circle, var(--fg-muted) 1px, transparent 1.5px) 0 0 / 5px 5px;
+  opacity: 0.7;
+}
+.pill-grip:active { cursor: grabbing; }
+
+button {
+  font: inherit;
+  color: inherit;
+}
+button.icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+button.icon:hover { background: var(--bg-raised); }
+button.icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-svg { display: block; width: 18px; height: 18px; }
+button.stepper { width: 26px; height: 26px; }
+button.stepper .icon-svg { width: 14px; height: 14px; }
+button.play { position: relative; }
+button.play .icon-svg { width: 20px; height: 20px; }
+
+.pill-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 4px;
+  background: var(--border);
+}
+.pill-rate {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.pill-count {
+  min-width: 44px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Голос готовится — кольцо вокруг ▶; браузер ждёт нажатия — ▶ пульсирует. */
+.pill-app.busy button.play::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pill-spin 0.9s linear infinite;
+}
+.pill-app.waiting button.play {
+  background: var(--accent);
+  color: var(--bg);
+  animation: pill-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pill-spin { to { transform: rotate(360deg); } }
+@keyframes pill-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent); } }
+
+.pill-status,
+.pill-panel {
+  max-width: 340px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.pill-status { color: var(--fg-muted); }
+.pill-app.busy .pill-status,
+.pill-app.waiting .pill-status { color: var(--accent); }
+
+.pill-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pill-panel[hidden],
+.pill-status[hidden] { display: none; }
+.pill-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pill-field select {
+  flex: 1;
+  min-width: 0;
+  max-width: 250px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--fg);
+  font: inherit;
+}
+.pill-field input[type='range'] { flex: 1; accent-color: var(--accent); }
+.pill-value { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+.pill-muted { color: var(--fg-muted); font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-app.busy button.play::after,
+  .pill-app.waiting button.play { animation: none; }
+}

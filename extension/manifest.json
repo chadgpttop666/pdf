@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PDF-читалка",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Чтение PDF с автопрокруткой, озвучкой и перемоткой по экрану",
   "browser_specific_settings": {
     "gecko": {
@@ -56,7 +56,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "viewer.html"
+        "viewer.html",
+        "speak-pill.html"
       ],
       "matches": [
         "<all_urls>"

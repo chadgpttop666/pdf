@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Озвучка выделенного</title>
+  <link rel="stylesheet" href="styles/speak-pill.css">
+</head>
+<body>
+  <div id="app" class="pill-app">
+    <div id="pillPanel" class="pill-panel" hidden>
+      <label class="pill-field">Голос
+        <select id="ttsVoice" aria-label="Голос"></select>
+      </label>
+      <div class="pill-field">
+        <span>Громкость</span>
+        <input id="ttsVolume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Громкость">
+        <span id="ttsVolumeValue" class="pill-value">100 %</span>
+      </div>
+      <div id="pillBuffer" class="pill-muted" title="Сколько речи нейроголос уже подготовил вперёд" hidden></div>
+    </div>
+    <div id="pillStatus" class="pill-status" role="status" aria-live="polite" hidden></div>
+    <div id="pill" class="pill">
+      <span id="pillGrip" class="pill-grip" title="Перетащить"></span>
+      <button id="speakPlay" class="icon play" data-icon="play" title="Читать / пауза (пробел)" aria-label="Читать или пауза"></button>
+      <button id="speakPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (←)" aria-label="Предыдущее предложение"></button>
+      <button id="speakNext" class="icon" data-icon="skipForward" title="Следующее предложение (→)" aria-label="Следующее предложение"></button>
+      <span class="pill-sep"></span>
+      <button type="button" class="icon stepper" data-icon="minus" data-step-for="ttsRate" data-dir="-1" title="Медленнее" aria-label="Медленнее"></button>
+      <span id="ttsRateValue" class="pill-rate" title="Скорость речи">1.0×</span>
+      <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1" hidden>
+      <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsRate" data-dir="1" title="Быстрее" aria-label="Быстрее"></button>
+      <span class="pill-sep"></span>
+      <span id="pillCount" class="pill-count" title="Предложение"></span>
+      <button id="pillMore" class="icon" data-icon="settings" title="Голос и громкость" aria-label="Голос и громкость" aria-expanded="false"></button>
+      <button id="pillClose" class="icon" data-icon="close" title="Остановить и закрыть (Esc)" aria-label="Остановить и закрыть"></button>
+    </div>
+  </div>
+  <script type="module" src="src/speak-pill.js"></script>
+</body>
+</html>

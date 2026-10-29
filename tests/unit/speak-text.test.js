@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { paragraphsFromSelection, sentencesOf } from '../../extension/src/speak-text.js';
+import { paragraphsFromSelection, sentencesInText, sentencesOf } from '../../extension/src/speak-text.js';
 
 describe('выделенный на сайте текст → абзацы', () => {
   it('блоки страницы — отдельными абзацами', () => {
@@ -36,5 +36,21 @@ describe('выделенный на сайте текст → абзацы', () 
       ]
     );
     assert.equal('Первое предложение. Второе!'.slice(sentences[1].start, sentences[1].end), 'Второе!');
+  });
+});
+
+describe('предложения прямо в тексте со страницы', () => {
+  it('места предложений — в исходном тексте, через абзацы', () => {
+    const text = 'Заголовок\nПервое предложение. Второе!\nТретье, последнее.';
+    const sentences = sentencesInText(text, 'ru');
+    assert.deepEqual(
+      sentences.map(({ text: sentence }) => sentence),
+      ['Заголовок', 'Первое предложение.', 'Второе!', 'Третье, последнее.']
+    );
+    for (const sentence of sentences) assert.equal(text.slice(sentence.start, sentence.end), sentence.text);
+  });
+
+  it('пустые абзацы не дают пустых предложений', () => {
+    assert.deepEqual(sentencesInText('\n\nОдно.\n', 'ru').map((s) => s.text), ['Одно.']);
   });
 });

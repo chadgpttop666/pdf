@@ -1,5 +1,5 @@
-// Текст, выделенный на странице сайта, → абзацы и предложения для окна
-// озвучки. Без DOM — проверяется юнит-тестами.
+// Текст, выделенный на странице сайта, → абзацы и предложения для чтения
+// вслух. Без DOM — проверяется юнит-тестами.
 //
 // getSelection().toString() отдаёт блоки страницы отдельными строками, а
 // текст, скопированный из PDF или книги, — строками по ширине колонки, с
@@ -52,5 +52,23 @@ export function sentencesOf(paragraphs, lang = 'ru') {
       sentences.push({ text: paragraph.slice(start, end), paragraph: index, start, end });
     }
   });
+  return sentences;
+}
+
+/**
+ * Предложения прямо в тексте, собранном со страницы сайта: места совпадают
+ * с ним символ в символ — по ним фраза и слово подсвечиваются на самой
+ * странице. Абзацы в тексте разделены '\n', пробелы уже схлопнуты.
+ * @returns {{ text: string, start: number, end: number }[]}
+ */
+export function sentencesInText(text, lang = 'ru') {
+  const sentences = [];
+  let offset = 0;
+  for (const paragraph of String(text || '').split('\n')) {
+    for (const { start, end } of segmentSentences(paragraph, lang)) {
+      sentences.push({ text: paragraph.slice(start, end), start: offset + start, end: offset + end });
+    }
+    offset += paragraph.length + 1;
+  }
   return sentences;
 }

@@ -1221,6 +1221,86 @@ try {
   check('окно озвучки: текст можно поправить перед чтением', edited.sentences === 2 && edited.state === 'idle', JSON.stringify(edited));
   await speak.close();
 
+  // ── Озвучка прямо на сайте: подсветка на странице и плашка в углу ──
+  const site = await context.newPage();
+  await site.addInitScript(speechMock);
+  site.on('pageerror', (error) => consoleErrors.push(`сайт: ${error.message}`));
+  site.on('console', (message) => message.type() === 'error' && consoleErrors.push(`сайт: ${message.text()}`));
+  await site.goto(`${BASE}/fixtures/site.html`);
+  // В Firefox скрипт и стили ставит фоновая страница (scripting), плашка — страница расширения.
+  await site.evaluate(() => (window.__pdfReaderSpeakFrameUrl = '/speak-pill.html'));
+  await site.addScriptTag({ url: '/content/speak-overlay.js' });
+  await site.addStyleTag({ content: '::highlight(pdf-reader-speak-sentence) { background: yellow; }' });
+  await site.evaluate(() => {
+    const range = new Range();
+    range.setStart(document.getElementById('title').firstChild, 0);
+    range.setEnd(document.getElementById('p2').lastChild, document.getElementById('p2').lastChild.length);
+    getSelection().addRange(range);
+  });
+  const siteStarted = await site.evaluate(() => window.__pdfReaderSpeak.fromSelection());
+  const pillFrame = async () => {
+    for (let i = 0; i < 50; i += 1) {
+      const frame = site.frames().find((candidate) => candidate.url().includes('speak-pill'));
+      if (frame) return frame;
+      await site.waitForTimeout(100);
+    }
+    return null;
+  };
+  const pill = await pillFrame();
+  await pill.waitForFunction(() => (window.spokenSentences?.length ?? 0) >= 1, null, { timeout: 10000 });
+  await site.waitForFunction(() => CSS.highlights.has('pdf-reader-speak-word'), null, { timeout: 5000 }).catch(() => {});
+  const onSite = await site.evaluate(() => ({
+    sentence: [...(CSS.highlights.get('pdf-reader-speak-sentence') ?? [])].map(String).join(''),
+    word: [...(CSS.highlights.get('pdf-reader-speak-word') ?? [])].map(String).join(''),
+    selection: String(getSelection()),
+    pill: (() => {
+      const rect = document.querySelector('pdf-reader-speak')?.getBoundingClientRect();
+      return rect && { width: Math.round(rect.width), height: Math.round(rect.height), right: Math.round(innerWidth - rect.right), bottom: Math.round(innerHeight - rect.bottom) };
+    })(),
+  }));
+  const inPill = await pill.evaluate(() => ({ sentences: window.speakPill.sentences.map((sentence) => sentence.text), spoken: [...window.spokenSentences] }));
+  check(
+    'на сайте: читается ровно выделенное — без скрытого и без меню, абзацы и <br> — границы фраз',
+    siteStarted &&
+      JSON.stringify(inPill.sentences) ===
+        JSON.stringify(['Трансформация войны', 'Первое предложение статьи про войну.', 'Второе предложение!', 'Строка стихов', 'и вторая строка']),
+    JSON.stringify(inPill)
+  );
+  check(
+    'на сайте: фраза и слово подсвечены на самой странице, синее выделение снято, плашка — в углу по своему размеру',
+    onSite.sentence === inPill.spoken[0] &&
+      onSite.selection === '' &&
+      onSite.pill?.width > 200 &&
+      onSite.pill.height < 120 &&
+      onSite.pill.right === 16 &&
+      onSite.pill.bottom === 16,
+    JSON.stringify(onSite)
+  );
+  await pill.waitForFunction(() => window.spokenSentences.length >= 2, null, { timeout: 10000 });
+  await site.waitForFunction(() => [...(CSS.highlights.get('pdf-reader-speak-sentence') ?? [])].map(String).join('').includes('Первое'), null, { timeout: 5000 });
+  check('на сайте: подсветка идёт за чтением — фраза внутри абзаца с курсивом', true);
+  await site.evaluate(() => window.__pdfReaderSpeak.toggle());
+  const sitePaused = await pill.evaluate(() => window.speakPill.reader.state);
+  await site.evaluate(() => window.__pdfReaderSpeak.toggle());
+  const siteResumed = await pill.evaluate(() => window.speakPill.reader.state);
+  check('на сайте: сочетание клавиш без выделения — пауза и продолжение', sitePaused === 'paused' && siteResumed === 'speaking', `${sitePaused} → ${siteResumed}`);
+  await pill.click('[data-step-for="ttsRate"][data-dir="1"]');
+  const pillRate = await pill.evaluate(() => document.getElementById('ttsRateValue').textContent);
+  await pill.click('[data-step-for="ttsRate"][data-dir="-1"]');
+  await pill.click('#pillMore');
+  await site.waitForTimeout(300);
+  const withMenu = await site.evaluate(() => Math.round(document.querySelector('pdf-reader-speak').getBoundingClientRect().height));
+  check('на сайте: скорость на плашке, меню голоса — плашка растёт вверх', pillRate === '1.1×' && withMenu > onSite.pill.height + 40, `${pillRate}, ${onSite.pill.height} → ${withMenu}`);
+  await pill.click('#pillClose');
+  await site.waitForTimeout(300);
+  const closed = await site.evaluate(() => ({
+    host: Boolean(document.querySelector('pdf-reader-speak')),
+    highlights: CSS.highlights.has('pdf-reader-speak-sentence') || CSS.highlights.has('pdf-reader-speak-word'),
+    active: window.__pdfReaderSpeak.active,
+  }));
+  check('на сайте: ✕ убирает плашку и подсветку', !closed.host && !closed.highlights && !closed.active, JSON.stringify(closed));
+  await site.close();
+
   // ── Имя файла при скачивании: по адресу без имени ──
   const savedName = async (path) => {
     const [file, extra = ''] = path.split('&');
