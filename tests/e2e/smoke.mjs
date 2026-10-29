@@ -596,8 +596,28 @@ try {
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.pdfReaderApp.stats.tick());
   const afterIdle = await stats();
-  check('простой дольше двух минут не считается', afterIdle.readMs === afterJump.readMs, `+${afterIdle.readMs - afterJump.readMs} мс`);
+  // Тишина после последнего действия засчитывается не больше, чем нужно на экран текста.
+  check('простой дольше двух минут не считается', afterIdle.readMs - afterJump.readMs <= 3000, `+${afterIdle.readMs - afterJump.readMs} мс`);
   check('озвучка учтена как прослушанный текст', afterIdle.listenChars > 0, `${afterIdle.listenChars} знаков`);
+
+  // Озвучку слушают и со свёрнутым окном — время считается по звучанию фраз.
+  const beforeHidden = await stats();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    window.spokenSentences.length = 0;
+    window.pdfReaderApp.tts.start({ pageNumber: 2, sentenceIndex: 0 });
+  });
+  await page.waitForFunction(() => window.spokenSentences.length >= 3, null, { timeout: 10000 });
+  await page.evaluate(() => {
+    window.pdfReaderApp.tts.stop();
+    delete document.visibilityState;
+  });
+  const afterHidden = await stats();
+  check(
+    'озвучка в фоне учитывается: и время, и знаки',
+    afterHidden.listenMs - beforeHidden.listenMs >= 1200 && afterHidden.listenChars > beforeHidden.listenChars && afterHidden.listenRateMs > 0,
+    `+${Math.round(afterHidden.listenMs - beforeHidden.listenMs)} мс, +${afterHidden.listenChars - beforeHidden.listenChars} знаков`
+  );
 
   await page.click('#readingEta');
   await page.waitForTimeout(400);
@@ -702,9 +722,11 @@ try {
 
   // Скорость меняют на ходу — нейроголос не замолкает, новая скорость со следующей фразы.
   const rateBefore = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
+  await page.evaluate(() => (window.piperUi.statuses.length = 0));
   await page.click('[data-step-for="ttsRate"][data-dir="1"]');
   await page.waitForTimeout(150);
-  const rateStatus = await page.evaluate(() => document.getElementById('ttsStatus').textContent);
+  // Фразы тестового голоса короткие — статус успевает смениться; смотрим историю.
+  const rateStatus = await page.evaluate(() => window.piperUi.statuses.find((text) => /со следующей фразы/.test(text)) || document.getElementById('ttsStatus').textContent);
   await page.waitForFunction(
     (start) => {
       const now = window.pdfReaderApp.tts.position;
@@ -1028,7 +1050,7 @@ try {
   await page.click('.tera-voices button');
   await page.waitForFunction(() => /скачаны|Не скачалось/.test(document.querySelector('.tera-status')?.textContent || ''), null, { timeout: 30000 });
   // После загрузки список голосов и окно перестраиваются.
-  await page.waitForFunction(() => document.querySelector('.tera-voices button')?.textContent !== 'Отменить загрузку', null, { timeout: 10000 });
+  await page.waitForFunction(() => /Удалить|Скачать/.test(document.querySelector('.tera-voices button')?.textContent || ''), null, { timeout: 10000 });
   const teraListed = await page.evaluate(() => ({
     status: document.querySelector('.tera-status')?.textContent,
     voice: document.getElementById('ttsVoice').value,
@@ -1095,6 +1117,27 @@ try {
     teraRun.state === 'speaking' && teraWord && teraRun.badge,
     `${JSON.stringify(teraStart)} → ${JSON.stringify(teraRun.position)}, слово: ${teraWord}`
   );
+  // Громкость: нейроголос меняет её сразу, посреди фразы.
+  const volumeChange = await page.evaluate(async () => {
+    const { tera } = window.pdfReaderApp.tts;
+    const calls = [];
+    const original = tera.setVolume;
+    tera.setVolume = (volume) => {
+      calls.push(volume);
+      original(volume);
+    };
+    document.querySelector('[data-step-for="ttsVolume"][data-dir="-1"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    tera.setVolume = original;
+    return { calls, label: document.getElementById('ttsVolumeValue').textContent, buffer: document.getElementById('ttsBuffer').hidden ? null : document.getElementById('ttsBuffer').textContent };
+  });
+  check(
+    'громкость меняется на ходу; на панели виден запас подготовленной речи',
+    volumeChange.calls.length === 1 && Math.abs(volumeChange.calls[0] - 0.95) < 1e-6 && volumeChange.label === '95 %' && /^запас \d+:\d\d$/.test(volumeChange.buffer || ''),
+    JSON.stringify(volumeChange)
+  );
+  await page.click('[data-step-for="ttsVolume"][data-dir="1"]');
+  await page.focus('#viewerContainer');
   await page.keyboard.press('Space');
   const teraPaused = await page.evaluate(() => window.pdfReaderApp.tts.state);
   await page.keyboard.press('Space');

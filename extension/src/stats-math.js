@@ -34,8 +34,13 @@ export function lastDays(n, today = new Date()) {
   return days;
 }
 
+/**
+ * Запись дня. listenRateMs — время прослушанных до конца фраз, умноженное на
+ * скорость речи: по нему скорость озвучки приводится к 1× и пересчитывается
+ * на текущую скорость.
+ */
 export function emptyDay(day) {
-  return { day, readMs: 0, readChars: 0, listenMs: 0, listenChars: 0, noTextMs: 0, docs: {} };
+  return { day, readMs: 0, readChars: 0, listenMs: 0, listenChars: 0, listenRateMs: 0, noTextMs: 0, docs: {} };
 }
 
 /** Место чтения как {страница, доля страницы}; доля обрезается до 0…1. */
@@ -80,6 +85,30 @@ export function speedOf(days, { msKey, charsKey, minMs = 3 * MINUTE, minChars = 
   }
   if (ms < minMs || chars < minChars) return null;
   return chars / (ms / MINUTE);
+}
+
+/**
+ * Скорость озвучки при 1×: знаки прослушанных фраз на их время, умноженное
+ * на скорость речи. В старых записях дня поля listenRateMs нет — там время
+ * считаем как при 1×.
+ */
+export function listeningSpeedAt1x(days, options = {}) {
+  return speedOf(
+    days.map((day) => day && { ...day, listenRateMs: day.listenRateMs ?? day.listenMs }),
+    { msKey: 'listenRateMs', charsKey: 'listenChars', minMs: MINUTE, minChars: 500, ...options }
+  );
+}
+
+/**
+ * Сколько из «тихого» времени после последнего действия засчитать, когда
+ * читатель так и не вернулся: столько, сколько нужно, чтобы дочитать экран
+ * (с запасом в полтора раза), но не меньше 30 с и не больше предела простоя.
+ * @param screenChars знаков на экране
+ * @param speed своя скорость чтения, знаков в минуту
+ */
+export function idleTail({ screenChars, speed = DEFAULT_READING_SPEED }) {
+  const reading = ((screenChars || 0) / Math.max(1, speed)) * MINUTE * 1.5;
+  return Math.min(IDLE_LIMIT_MS, Math.max(30 * 1000, reading));
 }
 
 /** Сколько дней подряд, включая сегодня (или вчера, если сегодня ещё не читали). */
@@ -137,12 +166,14 @@ export function formatCount(value) {
   return rounded.toLocaleString('ru-RU');
 }
 
-const DAY_FIELDS = ['readMs', 'readChars', 'listenMs', 'listenChars', 'noTextMs'];
+const DAY_FIELDS = ['readMs', 'readChars', 'listenMs', 'listenChars', 'listenRateMs', 'noTextMs'];
 
 /** Сложить две записи одного дня — так вкладки дописывают свои приращения. */
 export function mergeDays(base, delta) {
   const merged = { ...emptyDay(base.day), ...base, docs: { ...base.docs } };
-  for (const key of DAY_FIELDS) merged[key] = (base[key] || 0) + (delta[key] || 0);
+  // В записях до версии 0.13 поля listenRateMs нет: их время — как при 1×.
+  const baseValue = (key) => (key === 'listenRateMs' ? (base.listenRateMs ?? base.listenMs ?? 0) : base[key] || 0);
+  for (const key of DAY_FIELDS) merged[key] = baseValue(key) + (delta[key] || 0);
   for (const [id, entry] of Object.entries(delta.docs || {})) {
     const target = merged.docs[id] || { ms: 0, chars: 0 };
     merged.docs[id] = {

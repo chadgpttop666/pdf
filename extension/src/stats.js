@@ -1,11 +1,14 @@
 // Статистика чтения: активное время и пройденный текст по дням, скорость,
 // оценка «сколько осталось до конца главы и книги».
 //
-// Время считается, только когда вкладка видна и читатель что-то делает
-// (листает, прокручивает, слушает озвучку); простой дольше двух минут не
-// считается. Прочитанный текст — продвижение места чтения вперёд, если оно
-// по скорости похоже на чтение, а не на пролистывание или переход по
-// оглавлению. Всё хранится только в браузере.
+// Чтение считается, только когда вкладка видна и читатель что-то делает
+// (листает, прокручивает). Время после последнего действия засчитывается,
+// когда читатель снова что-то сделал; если он так и не вернулся — только
+// столько, сколько нужно, чтобы дочитать экран. Озвучка считается по
+// фактическому звучанию фраз — и когда вкладка в фоне. Прочитанный текст —
+// продвижение места чтения вперёд, если оно по скорости похоже на чтение, а
+// не на пролистывание или переход по оглавлению. Всё хранится только в
+// браузере.
 
 import { $, clear, closeOnBackdropClick, el, on } from './dom.js';
 import * as library from './library.js';
@@ -24,7 +27,9 @@ import {
   formatDuration,
   formatEta,
   hasActivity,
+  idleTail,
   lastDays,
+  listeningSpeedAt1x,
   mergeDays,
   normalizePosition,
   plausibleReading,
@@ -57,6 +62,7 @@ export function createStats(app) {
   let lastTick = Date.now();
   let lastFlush = Date.now();
   let lastActivity = 0;
+  let quiet = { ms: 0, noTextMs: 0 }; // время после последнего действия — засчитаем, когда станет ясно, читали ли
   let counted = null; // место, до которого прочитанное уже учтено
   let bankMs = 0; // активное время чтения с тех пор
   let averageChars = null; // знаков на средней странице текущего документа
@@ -199,6 +205,29 @@ export function createStats(app) {
     }
   }
 
+  function addReading(ms, noTextMs = 0) {
+    if (!ms || !docId) return;
+    pending.readMs += ms;
+    pending.noTextMs += noTextMs;
+    docEntry().ms += ms;
+    bankMs += ms;
+  }
+
+  /** Тихое время засчитать: целиком или (читатель ушёл) не больше limit. */
+  function settleQuiet(limit = Infinity) {
+    const ms = Math.min(quiet.ms, limit);
+    addReading(ms, quiet.ms ? quiet.noTextMs * (ms / quiet.ms) : 0);
+    quiet = { ms: 0, noTextMs: 0 };
+  }
+
+  /** Сколько знаков на экране — чтобы понять, сколько тишины ушло на их чтение. */
+  async function screenChars(position) {
+    const chars = await charsOf(position.pageNumber);
+    const pageHeight = app.pdfViewer.getPageView?.(position.pageNumber - 1)?.div?.offsetHeight;
+    const share = !app.reflow?.active && pageHeight ? Math.min(1, app.container.clientHeight / pageHeight) : 1;
+    return chars * share;
+  }
+
   async function tick() {
     const now = Date.now();
     const elapsed = Math.min(now - lastTick, TICK_MS * 2);
@@ -207,20 +236,25 @@ export function createStats(app) {
     busy = true;
     try {
       rollover();
+      // Озвучку считает событие ttslistened — по звучанию, не по тактам.
       const listening = app.tts?.state === 'speaking';
-      const reading = !listening && (app.autoScroll?.running || now - lastActivity < IDLE_LIMIT_MS);
+      const position = normalizePosition(currentPosition());
+      // Скан или картинка: время есть, а текста нет — в скорость не берём.
+      const noText = position && (await charsOf(position.pageNumber)) === 0 ? elapsed : 0;
       if (listening) {
-        pending.listenMs += elapsed;
-        docEntry().ms += elapsed;
         counted = null; // за озвучкой вид едет сам — это не чтение глазами
-      } else if (reading) {
-        pending.readMs += elapsed;
-        docEntry().ms += elapsed;
-        bankMs += elapsed;
-        const position = normalizePosition(currentPosition());
-        // Скан или картинка: время есть, а текста нет — в скорость не берём.
-        if (position && (await charsOf(position.pageNumber)) === 0) pending.noTextMs += elapsed;
+        settleQuiet();
+      } else if (app.autoScroll?.running) {
+        settleQuiet();
+        addReading(elapsed, noText);
         await trackProgress();
+      } else if (now - lastActivity < IDLE_LIMIT_MS) {
+        quiet.ms += elapsed;
+        quiet.noTextMs += noText;
+        await trackProgress();
+      } else if (quiet.ms) {
+        // Читатель ушёл: засчитываем только время, нужное на экран текста.
+        settleQuiet(position ? idleTail({ screenChars: await screenChars(position), speed: readingSpeed() ?? undefined }) : 0);
       }
       if (now - lastFlush >= FLUSH_MS) await flush();
       await updateEta();
@@ -231,16 +265,25 @@ export function createStats(app) {
 
   const markActive = () => {
     lastActivity = Date.now();
+    settleQuiet(); // вернулся — значит, тишина была чтением
   };
   for (const type of ['wheel', 'keydown', 'pointerdown', 'touchstart']) {
     on(window, type, markActive, { capture: true, passive: true });
   }
   for (const container of [app.container, $('reflowContainer')]) on(container, 'scroll', markActive, { passive: true });
 
-  app.eventBus.on('ttssentencespoken', ({ chars }) => {
-    if (!enabled() || !docId) return;
-    pending.listenChars += chars;
-    docEntry().chars += chars;
+  // Озвучка: время — сколько фраза звучала (без пауз и ожидания синтеза),
+  // знаки — только у дослушанных фраз. Вкладка при этом может быть и в фоне.
+  app.eventBus.on('ttslistened', ({ ms, chars, rate }) => {
+    if (!enabled() || !docId || !(ms > 0)) return;
+    rollover();
+    pending.listenMs += ms;
+    docEntry().ms += ms;
+    if (chars > 0) {
+      pending.listenChars += chars;
+      pending.listenRateMs += ms * (rate || 1);
+      docEntry().chars += chars;
+    }
   });
 
   setInterval(tick, TICK_MS);
@@ -311,8 +354,10 @@ export function createStats(app) {
     return speedOf(recentDays(), { msKey: 'textMs', charsKey: 'readChars' });
   }
 
+  /** Скорость озвучки при текущей скорости речи. */
   function listeningSpeed() {
-    return speedOf(recentDays(), { msKey: 'listenMs', charsKey: 'listenChars', minMs: MINUTE, minChars: 500 });
+    const atOne = listeningSpeedAt1x(recentDays());
+    return atOne === null ? null : atOne * (getSetting('ttsRate') || 1);
   }
 
   async function ttsPosition() {

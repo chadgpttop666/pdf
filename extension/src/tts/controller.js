@@ -16,10 +16,13 @@ import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpans
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
-// Сколько синтезировать заранее: нейроголосу нужен запас, иначе длинная фраза
-// после короткой не успевает и чтение встаёт.
-const PREFETCH_PHRASES = 3;
-const PREFETCH_CHARS = 1500;
+// Сколько синтезировать заранее, задаёт настройка — минуты речи, как запас
+// подгрузки видео. Голос со скоростью 1× произносит примерно столько знаков
+// в минуту (как в stats-math.js).
+const SPEECH_CHARS_PER_MINUTE = 900;
+// Дальше стольких страниц вперёд не заглядываем: на нераспознанном скане
+// предложений нет, и поиск текста ушёл бы до конца книги.
+const PREFETCH_PAGES = 30;
 // Через столько без звука показываем, что нейроголос готовит фразу.
 const BUSY_DELAY_MS = 350;
 
@@ -45,7 +48,13 @@ export function createTts(app) {
   let upcoming = null; // откуда продолжится чтение после текущей фразы
   let prefetchToken = 0;
   let busyTimer = 0;
+  let buffer = []; // заготовки впереди по порядку: { seconds } — null, пока синтезируется
+  let sentenceStatus = ''; // «Стр. N, предложение…» — вернуть после паузы
+  let bufferTimer = 0;
   let spokenInRun = 0; // фраз прочитано с последнего старта
+  // Сколько текущая фраза звучала: от первого звука до конца, без пауз и
+  // ожидания синтеза — по этому статистика считает время озвучки.
+  let heard = { ms: 0, since: 0, started: false };
   let lags = 0; // сколько раз посреди чтения нейроголос не успел
   let lagHintShown = false;
 
@@ -115,6 +124,8 @@ export function createTts(app) {
     $('ttsRate').value = String(getSetting('ttsRate'));
     $('ttsPitch').value = String(getSetting('ttsPitch'));
     $('ttsRateValue').textContent = `${Number(getSetting('ttsRate')).toFixed(1)}×`;
+    $('ttsVolume').value = String(getSetting('ttsVolume'));
+    $('ttsVolumeValue').textContent = `${Math.round(Number(getSetting('ttsVolume')) * 100)} %`;
     $('ttsPitchValue').textContent = Number(getSetting('ttsPitch')).toFixed(1);
     $('ttsEngine').hidden = !provider?.neural;
     app.el.classList.toggle('speaking', playing);
@@ -249,18 +260,26 @@ export function createTts(app) {
     return { parts, text, next };
   }
 
-  /** Синтезировать заранее несколько следующих фраз, пока звучит текущая. */
+  /**
+   * Подготовить речь вперёд — на столько минут, сколько задано в настройках.
+   * Синтез идёт и пока звучит фраза, и на паузе: после паузы чтение
+   * продолжается без ожидания. Заготовки для других мест (читатель
+   * перескочил, сменил скорость) провайдер отпускает.
+   */
   async function prefetchAhead(from) {
     if (!provider.prepare || !from) return;
     const token = (prefetchToken += 1);
+    const options = speechOptions();
+    const budget = (Number(getSetting('ttsBufferMinutes')) || 2) * SPEECH_CHARS_PER_MINUTE * (options.rate || 1);
+    const planned = [];
+    const texts = [];
     let cursor = { ...from };
-    let phrases = 0;
     let chars = 0;
-    for (let guard = 0; guard < 12 && phrases < PREFETCH_PHRASES && chars < PREFETCH_CHARS; guard += 1) {
+    while (chars < budget && cursor.pageNumber - from.pageNumber <= PREFETCH_PAGES) {
       const page = await index.page(cursor.pageNumber);
       if (!page || token !== prefetchToken) return;
       if (cursor.sentenceIndex >= page.sentences.length) {
-        if (cursor.pageNumber >= index.numPages) return;
+        if (cursor.pageNumber >= index.numPages) break;
         cursor = { pageNumber: cursor.pageNumber + 1, sentenceIndex: 0 };
         continue;
       }
@@ -268,10 +287,44 @@ export function createTts(app) {
       if (token !== prefetchToken) return;
       cursor = utterance.next;
       if (!isSpeakable(utterance.text)) continue;
-      provider.prepare(utterance.text, speechOptions());
-      phrases += 1;
+      const ready = provider.prepare(utterance.text, options);
+      if (!ready) break; // голос ещё не скачан
+      const item = { seconds: null };
+      ready.then(
+        (seconds) => (item.seconds = seconds),
+        () => (item.failed = true)
+      );
+      planned.push(item);
+      texts.push(utterance.text);
       chars += utterance.text.length;
     }
+    if (token !== prefetchToken) return;
+    buffer = planned;
+    provider.retain?.(texts, options);
+  }
+
+  /** Сколько секунд речи впереди уже готово — подряд, без дыр. */
+  function bufferedSeconds() {
+    let total = 0;
+    for (const item of buffer) {
+      if (item.seconds === null || item.failed) break;
+      total += item.seconds;
+    }
+    return total;
+  }
+
+  const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  const spoken = (seconds) => (seconds < 60 ? `${Math.floor(seconds)} с` : `${Math.floor(seconds / 60)} мин ${Math.floor(seconds % 60)} с`);
+
+  /** Запас на панели — как полоса подгрузки у видео; на паузе — и в статусе. */
+  function showBuffer() {
+    const badge = $('ttsBuffer');
+    const visible = state !== 'idle' && provider?.neural && provider.prepare;
+    badge.hidden = !visible;
+    if (!visible) return;
+    const seconds = bufferedSeconds();
+    badge.textContent = `запас ${clock(seconds)}`;
+    if (state === 'paused') setStatus(`Пауза · вперёд готово ≈ ${spoken(seconds)}`);
   }
 
   /** Нейроголос грузит модель или синтезирует — показываем это, а не молчим. */
@@ -397,6 +450,8 @@ export function createTts(app) {
   async function loop() {
     const myGeneration = ++generation;
     spokenInRun = 0;
+    clearInterval(bufferTimer);
+    bufferTimer = setInterval(showBuffer, 1000);
     state = 'speaking';
     syncUi();
     app.wakeLock?.request();
@@ -461,6 +516,7 @@ export function createTts(app) {
         const sentenceIndex = position.sentenceIndex;
         view().highlightSentence(page, sentenceIndex);
         const status = `Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}`;
+        sentenceStatus = status;
         setStatus(status);
         upcoming = utterance.next;
 
@@ -482,10 +538,15 @@ export function createTts(app) {
 
         waitForVoice();
         const options = speechOptions();
+        heard = { ms: 0, since: 0, started: false };
         const speaking = provider.speak(utterance.text, {
           ...options,
           volume: options.volume * sleepTimer.volumeFactor(),
-          onStart: () => voiceStarted(status),
+          onStart: () => {
+            heard.started = true;
+            if (state === 'speaking') heard.since = performance.now();
+            voiceStarted(status);
+          },
           onBoundary,
         });
         // Заготовки — после текущей фразы: в очереди синтеза она первая.
@@ -493,19 +554,19 @@ export function createTts(app) {
         const result = await speaking;
         voiceStarted();
         spokenInRun += 1;
+        stopHeard();
+        app.eventBus.dispatch('ttslistened', {
+          source: app,
+          ms: heard.ms,
+          rate: options.rate,
+          // Знаки — только у дослушанной фразы: по ним и времени считается скорость.
+          chars: result === 'ended' ? utterance.parts.reduce((sum, part) => sum + part.text.length, 0) : 0,
+        });
 
         if (myGeneration !== generation || state === 'idle') return;
         if (result === 'cancelled') return;
 
-        for (const part of utterance.parts) {
-          view().clearWords(part.page.pageNumber);
-          app.eventBus.dispatch('ttssentencespoken', {
-            source: app,
-            pageNumber: part.page.pageNumber,
-            sentenceIndex: part.sentenceIndex,
-            chars: part.text.length,
-          });
-        }
+        for (const part of utterance.parts) view().clearWords(part.page.pageNumber);
         const pause = getSetting('ttsSentencePauseMs');
         if (pause) await delay(pause);
         if (myGeneration !== generation) return;
@@ -520,6 +581,9 @@ export function createTts(app) {
 
   function finish(message) {
     state = 'idle';
+    clearInterval(bufferTimer);
+    buffer = [];
+    $('ttsBuffer').hidden = true;
     cursorShown = false;
     upcoming = null;
     prefetchToken += 1;
@@ -597,19 +661,30 @@ export function createTts(app) {
     loop();
   }
 
+  function stopHeard() {
+    if (heard.since) heard.ms += performance.now() - heard.since;
+    heard.since = 0;
+  }
+
   function pause() {
     if (state !== 'speaking') return;
+    stopHeard();
     voiceStarted();
     provider.pause();
     state = 'paused';
     syncUi();
     setStatus('Пауза');
+    // На паузе синтез не останавливается — добираем запас до нужного.
+    prefetchAhead(upcoming);
+    showBuffer();
   }
 
   function resume() {
     if (state !== 'paused') return;
     provider.resume();
+    if (heard.started) heard.since = performance.now();
     state = 'speaking';
+    if (sentenceStatus) setStatus(sentenceStatus);
     syncUi();
   }
 
@@ -670,6 +745,16 @@ export function createTts(app) {
     syncUi();
   });
   on($('ttsRate'), 'change', () => rateChanged());
+  // Громкость: нейроголос меняет её сразу, посреди фразы; системный голос —
+  // со следующей фразы (громкость у него задаётся фразе целиком).
+  on($('ttsVolume'), 'input', async () => {
+    const volume = Number($('ttsVolume').value);
+    await updateSettings({ ttsVolume: volume });
+    syncUi();
+    if (state === 'idle') return;
+    if (provider.setVolume) provider.setVolume(volume * sleepTimer.volumeFactor());
+    else setStatus(`Громкость ${Math.round(volume * 100)} % — со следующей фразы`);
+  });
   on($('ttsPitch'), 'input', async () => {
     await updateSettings({ ttsPitch: Number($('ttsPitch').value) });
     syncUi();
@@ -749,6 +834,7 @@ export function createTts(app) {
       finish();
       index = buildIndex(index.pdfDocument);
     }
+    if ('ttsBufferMinutes' in changed && state !== 'idle') prefetchAhead(upcoming);
     if ('ttsProvider' in changed || 'ttsHttpUrl' in changed) {
       finish();
       systemProvider = systemEngine();

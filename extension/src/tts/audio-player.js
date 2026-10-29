@@ -9,7 +9,7 @@ const BOUNDARY_POLL_MS = 40;
 
 export function createAudioPlayer() {
   let context = null;
-  let current = null; // { source, timer, resolve }
+  let current = null; // { source, timer, resolve, gain }
   let paused = false;
 
   function audioContext() {
@@ -62,7 +62,7 @@ export function createAudioPlayer() {
           onBoundary?.({ charIndex, charLength, name: 'word' });
         }
       }, BOUNDARY_POLL_MS);
-      current = { source, timer, resolve };
+      current = { source, timer, resolve, gain };
       source.onended = () => {
         if (current?.source !== source) return;
         current = null;
@@ -77,6 +77,10 @@ export function createAudioPlayer() {
   return {
     play,
     stop,
+    /** Громкость звучащей фразы — сразу, не дожидаясь следующей. */
+    setVolume(volume) {
+      if (current) current.gain.gain.value = volume;
+    },
     /**
      * Создать и запустить AudioContext. Вызывается прямо в обработчике
      * щелчка или клавиши: без жеста пользователя браузер может не дать

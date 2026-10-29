@@ -23,7 +23,8 @@ export const PIPER_CATALOG = [
   { key: 'en_US-lessac-medium', name: 'Lessac (английский)', lang: 'en-US', path: 'en/en_US/lessac/medium/', sizeMb: 61 },
 ];
 
-const CACHE_SIZE = 8;
+// Предохранитель: запас подготовки задаёт контроллер (и отпускает лишнее через retain).
+const CACHE_SIZE = 1000;
 // Второй воркер — ещё одна копия модели в памяти (~150 МБ), поэтому только
 // там, где ядер хватает на параллельный синтез.
 const POOL_SIZE = (globalThis.navigator?.hardwareConcurrency || 2) >= 4 ? 2 : 1;
@@ -45,6 +46,7 @@ export function createPiperProvider() {
   const waiting = new Map();
   const cache = new Map(); // голос|скорость|текст → промис со звуком
   const player = createAudioPlayer();
+  let speakingKey = null; // заготовка звучащей фразы — её retain не отпускает
   let token = 0; // растёт при каждой отмене — старые фразы узнают, что они не нужны
   let epoch = 0; // то же для очередей воркеров: задания старой эпохи пропускаются
   let download = null; // { key, controller }
@@ -126,8 +128,10 @@ export function createPiperProvider() {
     ensureVoice(createSlot(), voiceId).catch(() => {});
   }
 
+  const keyFor = (spoken, { voiceId, rate = 1 }) => `${keyOf(voiceId)}|${rate}|${spoken}`;
+
   function synthesize(spoken, { voiceId, rate = 1 }) {
-    const cacheKey = `${keyOf(voiceId)}|${rate}|${spoken}`;
+    const cacheKey = keyFor(spoken, { voiceId, rate });
     if (!cache.has(cacheKey)) {
       const slot = pickSlot(voiceId);
       slot.pending += 1;
@@ -287,6 +291,8 @@ export function createPiperProvider() {
     async speak(text, options = {}) {
       const myToken = token;
       const { text: spoken, segments } = spokenForm(text, options.voiceId);
+      const key = keyFor(spoken, options);
+      speakingKey = key;
       let audio;
       try {
         audio = await synthesize(spoken, options);
@@ -296,13 +302,28 @@ export function createPiperProvider() {
         audio = await synthesize(spoken, options); // задание отменили по ошибке эпохи — ещё раз
       }
       if (myToken !== token) return 'cancelled';
-      return player.play(audio.pcm, audio.sampleRate, {
+      const result = await player.play(audio.pcm, audio.sampleRate, {
         volume: options.volume,
         timings: options.onBoundary ? estimateWordTimings(text, segments) : [],
         onBoundary: options.onBoundary,
         onStart: options.onStart,
         isCancelled: () => myToken !== token,
       });
+      // Прозвучала — заготовка больше не нужна.
+      if (result === 'ended') cache.delete(key);
+      if (speakingKey === key) speakingKey = null;
+      return result;
+    },
+
+    /** Громкость звучащей фразы — сразу. */
+    setVolume(volume) {
+      player.setVolume(volume);
+    },
+
+    /** Отпустить заготовки, которых нет среди нужных впереди. */
+    retain(texts, options = {}) {
+      const keep = new Set(texts.map((text) => keyFor(spokenForm(text, options.voiceId).text, options)));
+      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
     },
 
     /** Голос уже в памяти воркера — первая фраза пойдёт без загрузки модели. */
@@ -319,9 +340,12 @@ export function createPiperProvider() {
       player.unlock();
     },
 
-    /** Синтезировать заранее — пока звучит текущая фраза. */
+    /**
+     * Синтезировать заранее — пока звучит текущая фраза и на паузе.
+     * @returns {Promise<number>} секунды готового звука
+     */
     prepare(text, options = {}) {
-      synthesize(spokenForm(text, options.voiceId).text, options).catch(() => {});
+      return synthesize(spokenForm(text, options.voiceId).text, options).then((audio) => audio.pcm.length / audio.sampleRate);
     },
 
     pause() {

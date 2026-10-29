@@ -25,6 +25,48 @@ export function isTextless(items) {
   return textLength(items) < TEXTLESS_CHARS;
 }
 
+/** Короткое или неуверенное — пометка, а не текст: настоящий текст на полях бывает, но это длинные уверенные слова. */
+const looksLikeMark = (word) => (word.text.match(/[\p{L}\p{N}]/gu) || []).length <= 4 || (word.confidence ?? 100) < 75;
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/**
+ * Колонка текста страницы: где обычно начинаются и кончаются строки. По ней
+ * узнаются пометки на полях — рукописный номер, штамп, вертикальная надпись:
+ * tesseract читает их как «слова» в начале строк («А} Одним…», «fo в том»).
+ * @returns {{ left: number, right: number, tolerance: number }|null} null — колонку не понять (мало строк, две колонки)
+ */
+export function textColumn(lines) {
+  const full = lines.map((line) => (line.words || []).filter((word) => word.text?.trim())).filter((words) => words.length >= 4);
+  if (full.length < 3) return null;
+  const lineHeight = median(full.flat().map((word) => word.bbox.y1 - word.bbox.y0));
+  // Край строки — без пометки, отделённой от текста широким зазором: такие
+  // пометки бывают в половине строк и сдвинули бы медиану.
+  const gap = (a, b) => b.bbox.x0 - a.bbox.x1;
+  const edgeWord = (words, step) => {
+    let i = step > 0 ? 0 : words.length - 1;
+    const next = () => words[i + step];
+    while (next() && looksLikeMark(words[i]) && (step > 0 ? gap(words[i], next()) : gap(next(), words[i])) > lineHeight * 1.5) i += step;
+    return words[i];
+  };
+  const lefts = full.map((words) => edgeWord(words, 1).bbox.x0);
+  const rights = full.map((words) => edgeWord(words, -1).bbox.x1);
+  const left = median(lefts);
+  const right = median(rights);
+  // Две колонки или вёрстка вразнобой: начала строк не собираются у одного края.
+  const aligned = lefts.filter((x) => Math.abs(x - left) <= lineHeight * 2).length / lefts.length;
+  if (aligned < 0.6) return null;
+  return { left, right, tolerance: lineHeight * 0.3 };
+}
+
+/** Слово на поле страницы, а не в колонке текста. */
+const inMargin = (word, column) => column && (word.bbox.x1 < column.left - column.tolerance || word.bbox.x0 > column.right + column.tolerance);
+const PUNCTUATION_ONLY = /^[,.;:]+$/;
+
 /**
  * Строки распознавания → элементы текстового слоя.
  * @param lines [{ bbox: {x0,y0,x1,y1}, words: [{ text, confidence, bbox }] }] в пикселях картинки
@@ -32,12 +74,15 @@ export function isTextless(items) {
  */
 export function ocrLinesToItems(lines, toPdf, { minConfidence = 20 } = {}) {
   const items = [];
+  const column = textColumn(lines);
   for (const line of lines) {
     const lineHeight = Math.max(1, ...(line.words || []).map((word) => word.bbox.y1 - word.bbox.y0));
     // Широкий пробел в строке «по ширине» tesseract порой читает как «—».
     // Настоящее тире почти во всю высоту строки, ложное — узкая чёрточка.
     const isGapDash = (word) => /^[—–-]$/.test(word.text.trim()) && word.bbox.x1 - word.bbox.x0 < lineHeight * 0.6;
-    const all = fixHomoglyphs((line.words || []).filter((word) => word.text?.trim() && !isGapDash(word)));
+    const all = fixHomoglyphs(
+      (line.words || []).filter((word) => word.text?.trim() && !isGapDash(word) && !(inMargin(word, column) && looksLikeMark(word)))
+    );
     // Неуверенные слова отбрасываем только в «шумных» строках (обрывки
     // картинок). В нормальной строке слово с переносом или на краю скана
     // часто распознано неуверенно, но оно есть — без него фраза рвётся.
@@ -45,7 +90,10 @@ export function ocrLinesToItems(lines, toPdf, { minConfidence = 20 } = {}) {
     // Неуверенный «знак» без букв и цифр — это широкий пробел выключки или
     // пятно, его не оставляем и в хорошей строке.
     const confident = (word) => (word.confidence ?? 100) >= minConfidence;
-    const words = lineConfidence >= TRUSTED_LINE ? all.filter((word) => confident(word) || /[\p{L}\p{N}]/u.test(word.text)) : all.filter(confident);
+    const kept = lineConfidence >= TRUSTED_LINE ? all.filter((word) => confident(word) || /[\p{L}\p{N}]/u.test(word.text)) : all.filter(confident);
+    // Знак сам по себе в начале строки или после слова, уже кончающегося
+    // знаком («например, : развитие»), — соринка, а не пунктуация.
+    const words = kept.filter((word, i) => !PUNCTUATION_ONLY.test(word.text.trim()) || (i > 0 && !/[,.;:]$/.test(kept[i - 1].text.trim())));
     if (!words.length) continue;
     // Все слова строки — на одной базовой линии и одного кегля: так строка
     // текста остаётся строкой и для выделения, и для разбора на предложения.
@@ -104,6 +152,9 @@ const LOOKALIKE_WORD = new RegExp(`^[^\\p{L}]*[${Object.keys(HOMOGLYPHS).join(''
 const hasCyrillic = (text) => /\p{Script=Cyrillic}/u.test(text);
 // Настоящее английское слово: есть буква, которой нет в кириллице.
 const isEnglishWord = (text) => /\p{Script=Latin}/u.test(text) && !LOOKALIKE_WORD.test(text) && !hasCyrillic(text);
+// Сосед, ради которого «двойников» не трогаем, — уверенное слово хотя бы из
+// трёх букв: огрызок вроде «fo» с пометки на полях английским не считается.
+const isEnglishNeighbour = (word) => isEnglishWord(word.text) && (word.text.match(/\p{L}/gu) || []).length >= 3 && (word.confidence ?? 100) >= 60;
 const toCyrillic = (text) => text.replace(/[A-Za-z]/g, (char) => HOMOGLYPHS[char] ?? char);
 
 /**
@@ -127,13 +178,14 @@ export function fixHomoglyphs(words) {
     const mixed = hasCyrillic(text) && !/[^А-Яа-яЁё\p{P}\p{N}A-Za-z]/u.test(text) && LOOKALIKE_WORD.test(text.replace(/\p{Script=Cyrillic}/gu, ''));
     if (mixed) return { ...word, text: toCyrillic(text) };
     if (!LOOKALIKE_WORD.test(text)) return word;
-    const neighbours = [words[i - 1], words[i + 1]].filter(Boolean).map((other) => other.text);
-    if (!neighbours.some(hasCyrillic) || neighbours.some(isEnglishWord)) return word;
+    const neighbours = [words[i - 1], words[i + 1]].filter(Boolean);
+    if (!neighbours.some((other) => hasCyrillic(other.text)) || neighbours.some(isEnglishNeighbour)) return word;
     let fixed = toCyrillic(text);
     // «TO» посреди строчных слов — это «то»: заглавные здесь — ошибка распознавания.
     const previous = words[i - 1]?.text || '';
     const midSentence = previous && !/[.!?…]$/.test(previous);
-    if (midSentence && /\p{Lu}/u.test(fixed) && fixed.length <= 3) fixed = fixed.toLowerCase();
+    // Длина — по буквам: «TOM,» с запятой — тоже короткое слово.
+    if (midSentence && /\p{Lu}/u.test(fixed) && fixed.replace(/[^\p{L}]/gu, '').length <= 3) fixed = fixed.toLowerCase();
     return { ...word, text: fixed };
   });
 }

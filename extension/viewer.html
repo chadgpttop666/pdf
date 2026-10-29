@@ -127,7 +127,8 @@
       <button id="ttsStop" class="icon" data-icon="stop" title="Остановить (Shift+S)" aria-label="Остановить"></button>
       <label class="field">Голос
         <select id="ttsVoice" aria-label="Голос"></select>
-        <span id="ttsEngine" class="tts-engine" title="Нейроголос Piper: синтез прямо в браузере, без интернета. Перед первой фразой голос загружается — пара секунд" hidden>нейро</span>
+        <span id="ttsEngine" class="tts-engine" title="Нейроголос: синтез прямо в браузере, без интернета. Перед первой фразой голос загружается" hidden>нейро</span>
+        <span id="ttsBuffer" class="tts-buffer" title="Сколько речи нейроголос уже подготовил вперёд. Запас задаётся в настройках" hidden></span>
       </label>
       <div class="field">
         <span>Скорость</span>
@@ -135,6 +136,13 @@
         <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1" aria-label="Скорость речи">
         <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsRate" data-dir="1" title="Быстрее (Shift+.)" aria-label="Быстрее"></button>
         <span id="ttsRateValue" class="value">1.0×</span>
+      </div>
+      <div class="field">
+        <span>Громкость</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="ttsVolume" data-dir="-1" title="Тише" aria-label="Тише"></button>
+        <input id="ttsVolume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Громкость">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsVolume" data-dir="1" title="Громче" aria-label="Громче"></button>
+        <span id="ttsVolumeValue" class="value">100 %</span>
       </div>
       <label class="field">Тон <span id="ttsPitchValue" class="value">1.0</span>
         <input id="ttsPitch" type="range" min="0.5" max="1.5" step="0.05" value="1">

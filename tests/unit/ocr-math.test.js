@@ -107,3 +107,70 @@ describe('ложные тире в строке по ширине', () => {
     assert.deepEqual(ocrLinesToItems([line], unrotated).map((item) => item.str.trim()), ['поручена', 'разработка', '—', 'это']);
   });
 });
+
+describe('пометки на полях скана', () => {
+  // Колонка текста — x от 100 до 900; на левом поле рукописный номер,
+  // который tesseract читает кусками в начале строк (как на скриншоте).
+  const row = (y, parts) => {
+    const words = [];
+    for (const [text, x0, x1, confidence = 92] of parts) words.push(word(text, x0, x1, y, y + 30, confidence));
+    return { words };
+  };
+  const spread = (y, text, from = 100, to = 900) => {
+    const tokens = text.split(' ');
+    const step = (to - from) / tokens.length;
+    return tokens.map((token, i) => [token, Math.round(from + i * step), Math.round(from + (i + 1) * step - 12)]);
+  };
+  const page = [
+    row(100, [['А}', 10, 40, 41], ...spread(100, 'Одним из поводов для написания этой книги стала моя убеждённость', 150)]),
+    row(140, [['fo', 15, 35, 52], ['в', 100, 115], ['TOM,', 125, 185], ...spread(140, 'что в данной области ведётся масштабная, интересная и важная', 200)]),
+    row(180, [['Го', 12, 38, 47], ...spread(180, 'работа. Проще говоря, интеллектуальный ландшафт в политической')]),
+    row(220, spread(220, 'философии сегодня очень отличается от того, каким он был 20 или даже')),
+    row(260, [['(например,', 100, 250], [':', 262, 268, 70], ...spread(260, 'развитие Р. Нозиком теории естественных прав Дж. Локка), но', 280)]),
+  ];
+
+  it('колонка текста — по краям строк', async () => {
+    const { textColumn } = await import('../../extension/src/ocr-math.js');
+    const column = textColumn(page);
+    assert.ok(Math.abs(column.left - 100) < 20 && Math.abs(column.right - 888) < 20, JSON.stringify(column));
+    // Две колонки: начала строк не у одного края — не трогаем ничего.
+    const twoColumns = [0, 1, 2, 3, 4, 5].map((i) => row(100 + i * 40, spread(0, 'раз два три четыре пять', i % 2 ? 520 : 100, i % 2 ? 900 : 480)));
+    assert.equal(textColumn(twoColumns), null);
+  });
+
+  it('мусор с полей уходит, абзац не рвётся, «TOM» становится «том», соринка-знак исчезает', () => {
+    const { text } = buildPageText(ocrLinesToItems(page, unrotated, { minConfidence: 40 }));
+    assert.ok(!/А\}|fo|Го /.test(text), text);
+    assert.ok(text.startsWith('Одним из поводов'), text);
+    assert.ok(text.includes('убеждённость в том, что'), text);
+    assert.ok(text.includes('важная работа. Проще говоря'), text);
+    assert.ok(text.includes('(например, развитие'), text);
+    assert.ok(!text.includes('\n'), 'один абзац, без ложных разрывов');
+  });
+
+  it('длинное уверенное слово на поле — текст, а не пометка', () => {
+    const withNote = [...page, row(300, [['Примечание', 10, 90, 95], ...spread(300, 'дальше идёт обычная строка текста книги', 100)])];
+    const { text } = buildPageText(ocrLinesToItems(withNote, unrotated));
+    assert.ok(text.includes('Примечание'), text);
+  });
+
+  it('огрызок из двух латинских букв не мешает исправить «двойников»', async () => {
+    const { fixHomoglyphs } = await import('../../extension/src/ocr-math.js');
+    const words = ['fo', 'в', 'TOM,', 'что'].map((text) => ({ text, confidence: 90, bbox: {} }));
+    assert.deepEqual(fixHomoglyphs(words).map((w) => w.text), ['fo', 'в', 'том,', 'что']);
+  });
+});
+
+describe('пометки на полях: короткие слова в начале строк', () => {
+  it('строки, начинающиеся с «в», «и», не сдвигают край колонки', async () => {
+    const { textColumn } = await import('../../extension/src/ocr-math.js');
+    const line = (y, first) => ({
+      words: [word(first, 100, 112, y, y + 30), word('длинное', 130, 300, y, y + 30), word('слово', 320, 450, y, y + 30), word('строки', 470, 900, y, y + 30)],
+    });
+    const lines = [line(100, 'в'), line(140, 'и'), line(180, 'на'), line(220, 'Абзац'), line(260, 'к')];
+    const column = textColumn(lines);
+    assert.equal(column.left, 100);
+    const { text } = buildPageText(ocrLinesToItems(lines, unrotated));
+    assert.ok(text.startsWith('в длинное слово строки и длинное'), text);
+  });
+});

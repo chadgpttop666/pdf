@@ -7,7 +7,9 @@ import {
   formatDuration,
   formatEta,
   hasActivity,
+  idleTail,
   lastDays,
+  listeningSpeedAt1x,
   mergeDays,
   plausibleReading,
   remainingChars,
@@ -57,6 +59,23 @@ describe('скорость и остаток', () => {
     assert.equal(speedOf([{ readMs: MINUTE, readChars: 900 }], { msKey: 'readMs', charsKey: 'readChars' }), null);
   });
 
+  it('скорость озвучки приводится к 1×: при 2× она вдвое выше', () => {
+    // 10 минут на скорости 2× = 20 «минут при 1×», за них 18 000 знаков → 900 при 1×.
+    const days = [{ listenMs: 10 * MINUTE, listenRateMs: 20 * MINUTE, listenChars: 18000 }];
+    assert.equal(listeningSpeedAt1x(days), 900);
+    // Старая запись без listenRateMs — время как при 1×.
+    assert.equal(listeningSpeedAt1x([{ listenMs: 10 * MINUTE, listenChars: 9000 }]), 900);
+    assert.equal(listeningSpeedAt1x([{ listenMs: 0.5 * MINUTE, listenChars: 9000 }]), null, 'данных мало');
+  });
+
+  it('тишина после последнего действия: столько, сколько нужно на экран', () => {
+    // 1300 знаков на экране при 1300 зн/мин — минута, с запасом полторы.
+    assert.equal(idleTail({ screenChars: 1300, speed: 1300 }), 1.5 * MINUTE);
+    assert.equal(idleTail({ screenChars: 100, speed: 1300 }), 30 * 1000, 'не меньше 30 с');
+    assert.equal(idleTail({ screenChars: 10000, speed: 1300 }), 2 * MINUTE, 'не больше предела простоя');
+    assert.equal(idleTail({ screenChars: 0 }), 30 * 1000);
+  });
+
   it('остаток: точный остаток страницы плюс средние страницы', () => {
     assert.equal(remainingChars({ pageNumber: 10, offsetRatio: 0.5, currentChars: 1800, endPage: 12, averageChars: 2000 }), 900 + 4000);
     assert.equal(remainingChars({ pageNumber: 10, offsetRatio: 0, currentChars: 1800, endPage: 9, averageChars: 2000 }), 0);
@@ -89,6 +108,13 @@ describe('записи дней', () => {
     assert.deepEqual(merged.docs.a, { ms: 65000, chars: 1300, title: 'Книга' });
     assert.deepEqual(merged.docs.b, { ms: 30000, chars: 400, title: 'Другая' });
     assert.equal(stored.readMs, 60000, 'исходная запись не меняется');
+  });
+
+  it('время озвучки «при 1×» складывается; у старых записей берётся время как есть', () => {
+    const old = { day: '2026-10-28', listenMs: 60000, listenChars: 900 };
+    const merged = mergeDays(old, { day: '2026-10-28', listenMs: 30000, listenRateMs: 60000, listenChars: 900 });
+    assert.equal(merged.listenMs, 90000);
+    assert.equal(merged.listenRateMs, 120000);
   });
 
   it('пустое приращение сохранять незачем', () => {

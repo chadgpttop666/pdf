@@ -31,7 +31,9 @@ import {
 } from './tera-pack.js';
 
 export const TERA_PREFIX = 'tera:';
-const CACHE_SIZE = 6;
+// Заготовки фраз впрок: их число ограничивает запас подготовки из настроек
+// (контроллер сам отпускает лишние через retain), здесь — только предохранитель.
+const CACHE_SIZE = 1000;
 // Модели занимают гигабайты памяти — после долгого простоя выгружаем их;
 // следующая фраза загрузит снова (около десяти секунд).
 const IDLE_UNLOAD_MS = 10 * 60 * 1000;
@@ -62,6 +64,8 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
   let pack = null;
   let download = null;
   let deferred = []; // фразы, которые просили подготовить, пока модели грузились
+  let speakingKey = null; // заготовка звучащей фразы — её retain не отпускает
+  let liveVolume = 1; // громкость, поменянная посреди фразы, — для её следующих кусков
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
 
@@ -113,6 +117,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     workers.accent = null;
     ready = false;
     loading = null;
+    for (const item of deferred) item.reject(error);
     deferred = [];
     cache.clear();
   }
@@ -212,8 +217,16 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     return { pieces, fastStart };
   }
 
+  const keyFor = (text, options) => `${keyOf(options.voiceId)}|${options.rate}|${text}`;
+
+  /** Сколько секунд звука в заготовке, когда она готова целиком. */
+  const readySeconds = (entry) =>
+    Promise.all(entry.pieces.map((piece) => piece.audio)).then((audios) =>
+      audios.reduce((sum, audio, i) => sum + audio.pcm.length / audio.sampleRate + entry.pieces[i].pause, 0)
+    );
+
   function job(text, options, { forSpeak = false } = {}) {
-    const key = `${keyOf(options.voiceId)}|${options.rate}|${text}`;
+    const key = keyFor(text, options);
     let entry = cache.get(key);
     if (!entry) {
       // Фразу просят сразу сказать, а заранее она не готовилась — первый
@@ -316,9 +329,15 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
         if (myToken !== token) return 'cancelled';
       }
       adjustThreads();
+      const key = keyFor(text, options);
       let entry = job(text, options, { forSpeak: true });
+      speakingKey = key;
+      liveVolume = options.volume ?? 1;
       // Заготовки, отложенные на время загрузки, — после текущей фразы.
-      for (const item of deferred.splice(0)) if (item.epoch === epoch) job(item.text, item.options);
+      for (const item of deferred.splice(0)) {
+        if (item.epoch === epoch) readySeconds(job(item.text, item.options)).then(item.resolve, item.reject);
+        else item.reject(Object.assign(new Error('Фраза больше не нужна'), { dropped: true }));
+      }
       let retried = false;
       for (let i = 0; i < entry.pieces.length; i += 1) {
         const piece = entry.pieces[i];
@@ -337,7 +356,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
         if (myToken !== token) return 'cancelled';
         const { pcm, timings } = playable(piece, audio, options.onBoundary);
         const result = await player.play(pcm, audio.sampleRate, {
-          volume: options.volume,
+          volume: liveVolume,
           timings,
           onBoundary: options.onBoundary,
           onStart: i === 0 ? options.onStart : undefined,
@@ -345,8 +364,26 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
         });
         if (result === 'cancelled') return 'cancelled';
       }
+      // Прозвучала — заготовка больше не нужна, память освобождаем.
+      if (cache.get(key) === entry) cache.delete(key);
+      if (speakingKey === key) speakingKey = null;
       touch();
       return 'ended';
+    },
+
+    /** Громкость — сразу, и для оставшихся кусков звучащей фразы. */
+    setVolume(volume) {
+      liveVolume = volume;
+      player.setVolume(volume);
+    },
+
+    /**
+     * Отпустить заготовки, которых нет среди нужных впереди (читатель ушёл
+     * в другое место, сменилась скорость): запас не копится без предела.
+     */
+    retain(texts, options = {}) {
+      const keep = new Set(texts.map((text) => keyFor(text, options)));
+      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
     },
 
     /** Модели уже в памяти воркеров — первая фраза пойдёт без загрузки. */
@@ -369,11 +406,15 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       player.unlock();
     },
 
-    /** Синтезировать заранее — пока звучит текущая фраза. */
+    /**
+     * Синтезировать заранее — пока звучит текущая фраза и на паузе.
+     * @returns {Promise<number>|null} секунды готового звука; null — модели не скачаны
+     */
     prepare(text, options = {}) {
       touch();
-      if (ready) job(text, options);
-      else if (loading) deferred.push({ text, options, epoch });
+      if (ready) return readySeconds(job(text, options));
+      if (!loading) return null;
+      return new Promise((resolve, reject) => deferred.push({ text, options, epoch, resolve, reject }));
     },
 
     /** Вся фраза одним звуком — для проверок и сохранения в файл. */
