@@ -128,16 +128,18 @@ export function createPiperProvider() {
     ensureVoice(createSlot(), voiceId).catch(() => {});
   }
 
-  const keyFor = (spoken, { voiceId, rate = 1 }) => `${keyOf(voiceId)}|${rate}|${spoken}`;
+  // Синтез всегда на обычной скорости — ускоряет проигрыватель (audio-player.js),
+  // поэтому скорость в ключ заготовки не входит.
+  const keyFor = (spoken, { voiceId }) => `${keyOf(voiceId)}|${spoken}`;
 
-  function synthesize(spoken, { voiceId, rate = 1 }) {
-    const cacheKey = keyFor(spoken, { voiceId, rate });
+  function synthesize(spoken, { voiceId }) {
+    const cacheKey = keyFor(spoken, { voiceId });
     if (!cache.has(cacheKey)) {
       const slot = pickSlot(voiceId);
       slot.pending += 1;
       const promise = ensureVoice(slot, voiceId).then(() => {
         warmUp(voiceId);
-        return call(slot, { type: 'synthesize', text: spoken, rate, epoch });
+        return call(slot, { type: 'synthesize', text: spoken, rate: 1, epoch });
       });
       promise.then(
         () => (slot.pending -= 1),
@@ -304,6 +306,7 @@ export function createPiperProvider() {
       if (myToken !== token) return 'cancelled';
       const result = await player.play(audio.pcm, audio.sampleRate, {
         volume: options.volume,
+        rate: options.rate || 1,
         timings: options.onBoundary ? estimateWordTimings(text, segments) : [],
         onBoundary: options.onBoundary,
         onStart: options.onStart,
@@ -313,6 +316,15 @@ export function createPiperProvider() {
       if (result === 'ended') cache.delete(key);
       if (speakingKey === key) speakingKey = null;
       return result;
+    },
+
+    /** Скорость — сразу, посреди фразы, без повторного синтеза. */
+    setRate(rate) {
+      player.setRate(rate);
+    },
+    /** Для проверок: скорость, с которой сейчас играет звук. */
+    get playbackRate() {
+      return player.rate;
     },
 
     /** Громкость звучащей фразы — сразу. */

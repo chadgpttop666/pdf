@@ -720,13 +720,17 @@ try {
     JSON.stringify({ busy: piperUi.busy, badge: piperUi.badge, statuses: [...new Set(piperUi.statuses)].slice(0, 4) })
   );
 
-  // Скорость меняют на ходу — нейроголос не замолкает, новая скорость со следующей фразы.
+  // Скорость меняют на ходу — нейроголос не замолкает и ускоряется сразу, посреди фразы:
+  // речь синтезирована на 1×, ускоряет проигрыватель.
   const rateBefore = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
   await page.evaluate(() => (window.piperUi.statuses.length = 0));
   await page.click('[data-step-for="ttsRate"][data-dir="1"]');
   await page.waitForTimeout(150);
   // Фразы тестового голоса короткие — статус успевает смениться; смотрим историю.
-  const rateStatus = await page.evaluate(() => window.piperUi.statuses.find((text) => /со следующей фразы/.test(text)) || document.getElementById('ttsStatus').textContent);
+  const rateNow = await page.evaluate(() => ({
+    status: window.piperUi.statuses.find((text) => /Скорость \d/.test(text)) || document.getElementById('ttsStatus').textContent,
+    playback: window.pdfReaderApp.tts.piper.playbackRate,
+  }));
   await page.waitForFunction(
     (start) => {
       const now = window.pdfReaderApp.tts.position;
@@ -737,9 +741,9 @@ try {
   );
   const rateAfter = await page.evaluate(() => ({ state: window.pdfReaderApp.tts.state, focus: document.activeElement?.id }));
   check(
-    'смена скорости не останавливает нейроголос',
-    rateAfter.state === 'speaking' && /со следующей фразы/.test(rateStatus),
-    `${rateStatus}; ${JSON.stringify(rateAfter)}`
+    'смена скорости не останавливает нейроголос и действует сразу',
+    rateAfter.state === 'speaking' && /Скорость 1\.1×/.test(rateNow.status) && Math.abs(rateNow.playback - 1.1) < 0.01,
+    `${JSON.stringify(rateNow)}; ${JSON.stringify(rateAfter)}`
   );
   check('после щелчка по кнопке фокус вернулся в документ', rateAfter.focus === 'viewerContainer', String(rateAfter.focus));
   await page.evaluate(() => window.pdfReaderApp.tts.stop());

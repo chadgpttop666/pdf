@@ -183,11 +183,20 @@ export function createTextReader(engines, hooks = {}) {
       provider.setVolume?.(volume);
       return Boolean(provider.setVolume);
     },
-    /** Скорость поменяли — заготовки с прежней скоростью не нужны. */
+    /**
+     * Скорость поменяли. Нейроголос — сразу, посреди фразы (ускоряет
+     * проигрыватель); системный голос перечитывает фразу.
+     */
     rateChanged() {
       if (state === 'idle') return;
-      if (provider.neural) prefetch(index + 1);
-      else restartAt(index);
+      if (provider.neural) {
+        provider.setRate?.(getSetting('ttsRate'));
+        prefetch(index + 1);
+      } else restartAt(index);
+    },
+    /** Пока тянут ползунок — нейроголос сразу на новой скорости. */
+    previewRate() {
+      if (state !== 'idle' && provider.neural) provider.setRate?.(getSetting('ttsRate'));
     },
     get provider() {
       return provider;

@@ -242,6 +242,7 @@ function syncControls() {
 on($('ttsRate'), 'input', async () => {
   await updateSettings({ ttsRate: Number($('ttsRate').value) });
   syncControls();
+  reader.previewRate();
 });
 on($('ttsRate'), 'change', () => reader.rateChanged());
 on($('ttsVolume'), 'input', async () => {
@@ -257,7 +258,8 @@ function showBuffer() {
   const visible = reader.state !== 'idle' && reader.provider.neural && Boolean(reader.provider.prepare);
   badge.hidden = !visible;
   if (!visible) return;
-  const seconds = reader.bufferedSeconds();
+  // Заготовки — на обычной скорости; звучать они будут быстрее или медленнее.
+  const seconds = reader.bufferedSeconds() / (getSetting('ttsRate') || 1);
   badge.textContent = `запас ${formatClock(seconds)}`;
   if (reader.state === 'paused') setStatus(`Пауза · вперёд готово ≈ ${formatSpoken(seconds)}`);
 }

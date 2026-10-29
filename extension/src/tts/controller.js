@@ -216,7 +216,8 @@ export function createTts(app) {
     const visible = state !== 'idle' && provider?.neural && provider.prepare;
     badge.hidden = !visible;
     if (!visible) return;
-    const seconds = bufferedSeconds(buffer);
+    // Заготовки — на обычной скорости; звучать они будут быстрее или медленнее.
+    const seconds = bufferedSeconds(buffer) / (getSetting('ttsRate') || 1);
     badge.textContent = `запас ${formatClock(seconds)}`;
     if (state === 'paused') setStatus(`Пауза · вперёд готово ≈ ${formatSpoken(seconds)}`);
   }
@@ -242,7 +243,9 @@ export function createTts(app) {
         // Посреди чтения фраза не готова — синтез не успевает за речью.
         if (provider === tera && spokenInRun > 1 && !getSetting('teraSecondThread') && (lags += 1) >= 2 && !lagHintShown) {
           lagHintShown = true;
-          app.hud.show('TeraTTS не успевает на этом компьютере — включите «TeraTTS: второй поток синтеза» в настройках', { duration: 8000 });
+          // Звук синтезируется на 1×: на 2× синтез должен успевать вдвое быстрее.
+          const slower = getSetting('ttsRate') > 1.3 ? ' или уменьшите скорость' : '';
+          app.hud.show(`TeraTTS не успевает на этом компьютере — включите «TeraTTS: второй поток синтеза» в настройках${slower}`, { duration: 8000 });
         }
       }, BUSY_DELAY_MS);
     }
@@ -583,9 +586,9 @@ export function createTts(app) {
   }
 
   /**
-   * Скорость поменяли во время чтения. Системный голос перечитывает фразу
-   * сразу — у него это мгновенно. Нейроголос фразу не прерывает: её пришлось
-   * бы синтезировать заново, и он замолкал бы на несколько секунд.
+   * Скорость поменяли во время чтения. Нейроголос меняет её сразу, посреди
+   * фразы: речь синтезирована на обычной скорости, ускоряет её проигрыватель.
+   * Системный голос перечитывает фразу заново — у него это мгновенно.
    */
   function rateChanged() {
     if (state === 'idle') return;
@@ -593,8 +596,9 @@ export function createTts(app) {
       jump(0);
       return;
     }
-    setStatus(`Скорость ${Number(getSetting('ttsRate')).toFixed(1)}× — со следующей фразы`);
-    prefetchAhead(upcoming);
+    provider.setRate?.(getSetting('ttsRate'));
+    setStatus(`Скорость ${Number(getSetting('ttsRate')).toFixed(1)}×`);
+    prefetchAhead(upcoming); // на большей скорости запас нужен длиннее
   }
 
   function jump(delta) {
@@ -637,6 +641,8 @@ export function createTts(app) {
   on($('ttsRate'), 'input', async () => {
     await updateSettings({ ttsRate: Number($('ttsRate').value) });
     syncUi();
+    // Нейроголос слышно на новой скорости, пока ползунок ещё тянут.
+    if (state !== 'idle' && provider.neural) provider.setRate?.(getSetting('ttsRate'));
   });
   on($('ttsRate'), 'change', () => rateChanged());
   // Громкость: нейроголос меняет её сразу, посреди фразы; системный голос —

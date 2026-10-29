@@ -53,7 +53,7 @@ function withPause(pcm, sampleRate, seconds) {
  */
 export function createTeraProvider({ secondThread = () => false } = {}) {
   const player = createAudioPlayer();
-  const cache = new Map(); // голос|скорость|текст → { pieces, fastStart }
+  const cache = new Map(); // голос|текст → { pieces, fastStart }
   const waiting = new Map();
   const workers = { samplers: [], vocoder: null, accent: null };
   let seq = 0;
@@ -175,7 +175,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
 
   // ── Куски фразы ──────────────────────────────────────────────────────
 
-  function synthesizePiece(piece, style, rate, jobEpoch) {
+  function synthesizePiece(piece, style, jobEpoch) {
     const spoken = piece.lang === 'ru' ? normalizeRussian(piece.text) : { text: piece.text, segments: [] };
     piece.segments = spoken.segments;
     const accented =
@@ -193,7 +193,9 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
         text,
         ttl: style.ttl,
         dp: style.dp,
-        durationScale: 1 / Math.max(0.3, rate || 1),
+        // Всегда обычная скорость: ускоряет проигрыватель (audio-player.js),
+        // сжатую речь модель «зажёвывает».
+        durationScale: 1,
         maxSeconds: piece.maxSeconds,
         epoch: jobEpoch,
       });
@@ -210,14 +212,15 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     return piece;
   }
 
-  function createJob(text, { voiceId, rate = 1 }, fastStart) {
+  function createJob(text, { voiceId }, fastStart) {
     const style = pack.styles[keyOf(voiceId)] ?? pack.styles[TERA_VOICES[0].key];
     const measure = (part, lang) => (lang === 'ru' ? normalizeRussian(part).text.length : part.length);
-    const pieces = planPieces(text, { fastStart, measure }).map((piece) => synthesizePiece(piece, style, rate, epoch));
+    const pieces = planPieces(text, { fastStart, measure }).map((piece) => synthesizePiece(piece, style, epoch));
     return { pieces, fastStart };
   }
 
-  const keyFor = (text, options) => `${keyOf(options.voiceId)}|${options.rate}|${text}`;
+  // Скорость в ключ не входит: заготовка одна на любую скорость.
+  const keyFor = (text, options) => `${keyOf(options.voiceId)}|${text}`;
 
   /** Сколько секунд звука в заготовке, когда она готова целиком. */
   const readySeconds = (entry) =>
@@ -333,6 +336,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       let entry = job(text, options, { forSpeak: true });
       speakingKey = key;
       liveVolume = options.volume ?? 1;
+      player.setRate(options.rate || 1);
       // Заготовки, отложенные на время загрузки, — после текущей фразы.
       for (const item of deferred.splice(0)) {
         if (item.epoch === epoch) readySeconds(job(item.text, item.options)).then(item.resolve, item.reject);
@@ -371,6 +375,15 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       return 'ended';
     },
 
+    /** Скорость — сразу, посреди фразы, без повторного синтеза. */
+    setRate(rate) {
+      player.setRate(rate);
+    },
+    /** Для проверок: скорость, с которой сейчас играет звук. */
+    get playbackRate() {
+      return player.rate;
+    },
+
     /** Громкость — сразу, и для оставшихся кусков звучащей фразы. */
     setVolume(volume) {
       liveVolume = volume;
@@ -379,7 +392,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
 
     /**
      * Отпустить заготовки, которых нет среди нужных впереди (читатель ушёл
-     * в другое место, сменилась скорость): запас не копится без предела.
+     * в другое место): запас не копится без предела.
      */
     retain(texts, options = {}) {
       const keep = new Set(texts.map((text) => keyFor(text, options)));
