@@ -3,23 +3,18 @@
 // системному, внешнему по HTTP или нейроголосу (TeraTTS, Piper), интерфейс
 // у них одинаковый. Какой из них работает, решает выбранный голос.
 
-import { $, clear, el, formatBytes, on } from '../dom.js';
+import { $, on } from '../dom.js';
 import { get as getSetting, onSettingsChanged, updateSettings } from '../settings.js';
 import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
+import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead } from './buffer.js';
+import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
 import { createHighlighter } from './highlighter.js';
-import { createHttpProvider } from './http-provider.js';
-import { PIPER_PREFIX, createPiperProvider } from './piper-provider.js';
-import { TERA_PREFIX, createTeraProvider } from './tera-provider.js';
-import { createWebSpeechProvider } from './web-speech.js';
 import { createSleepTimer } from './sleep-timer.js';
 import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
-// Сколько синтезировать заранее, задаёт настройка — минуты речи, как запас
-// подгрузки видео. Голос со скоростью 1× произносит примерно столько знаков
-// в минуту (как в stats-math.js).
-const SPEECH_CHARS_PER_MINUTE = 900;
+// Сколько синтезировать заранее, задаёт настройка — минуты речи (buffer.js).
 // Дальше стольких страниц вперёд не заглядываем: на нераспознанном скане
 // предложений нет, и поиск текста ушёл бы до конца книги.
 const PREFETCH_PAGES = 30;
@@ -36,9 +31,8 @@ export function createTts(app) {
   });
 
   let index = null;
-  let systemProvider = null; // голоса системы или внешний движок — по настройке
-  const piper = createPiperProvider();
-  const tera = createTeraProvider({ secondThread: () => getSetting('teraSecondThread') });
+  const engines = createEngines();
+  const { piper, tera } = engines;
   let provider = null; // тот, что сейчас говорит
   let state = 'idle'; // idle | speaking | paused
   let generation = 0;
@@ -63,7 +57,7 @@ export function createTts(app) {
   /** Пока панель озвучки открыта, щелчок по тексту выбирает место старта. */
   function showBar(visible) {
     // Нейроголос грузит модели, пока читатель выбирает, откуда читать.
-    if (visible && bar.hidden) neuralFor()?.preload?.();
+    if (visible && bar.hidden) engines.neuralFor()?.preload?.();
     bar.hidden = !visible;
     app.el.classList.toggle('tts-picking', visible);
     if (visible && state === 'idle' && !cursorShown) setStatus(PICK_HINT);
@@ -76,20 +70,7 @@ export function createTts(app) {
     clearHighlights();
   }
 
-  function systemEngine() {
-    const kind = getSetting('ttsProvider');
-    if (kind === 'http') return createHttpProvider({ url: getSetting('ttsHttpUrl') });
-    return createWebSpeechProvider();
-  }
-
-  /** Нейроголос, которому принадлежит голос, или null — голос системы. */
-  function neuralFor(voiceId = getSetting('ttsVoiceUri')) {
-    const id = String(voiceId || '');
-    if (id.startsWith(TERA_PREFIX)) return tera.available ? tera : null;
-    if (id.startsWith(PIPER_PREFIX)) return piper.available ? piper : null;
-    return null;
-  }
-  const pickProvider = () => neuralFor() ?? systemProvider;
+  const pickProvider = () => engines.pick();
 
   /** Выбран голос другого движка — прерываем старый и говорим новым. */
   function switchProvider() {
@@ -133,90 +114,26 @@ export function createTts(app) {
 
   async function fillVoices() {
     const select = $('ttsVoice');
-    const [system, best, neural] = await Promise.all([
-      systemProvider.voices(),
-      tera.available ? tera.voices() : [],
-      piper.available ? piper.voices() : [],
-    ]);
+    const voices = await engines.voices();
     voicesLoaded = true;
-    clear(select);
-
     // Голоса языка документа показываем первыми — их обычно и выбирают.
-    const documentLang = index?.language || 'ru';
-    const rank = (voice) => ((voice.lang || '').toLowerCase().startsWith(documentLang) ? 0 : 1);
-    const sortedSystem = [...system].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-    const sortedNeural = [...neural].sort((a, b) => rank(a) - rank(b));
-
-    // Скачать TeraTTS — один пакет на все его голоса: предлагаем первый.
-    const offered = best.some((voice) => voice.installed) ? best : best.slice(0, 1);
-    if (offered.length) {
-      const group = el('optgroup', { label: 'Нейроголоса TeraTTS — лучшее качество, без интернета' });
-      for (const voice of offered) {
-        group.append(el('option', { value: voice.id }, voice.installed ? voice.name : `TeraTTS — скачать ≈${voice.sizeMb} МБ`));
-      }
-      select.append(group);
-    }
-    if (sortedNeural.length) {
-      const group = el('optgroup', { label: 'Нейроголоса Piper — работают без интернета' });
-      for (const voice of sortedNeural) {
-        group.append(el('option', { value: voice.id }, voice.installed ? voice.name : `${voice.name} — скачать ≈${voice.sizeMb} МБ`));
-      }
-      select.append(group);
-    }
-    if (sortedSystem.length) {
-      const group = el('optgroup', { label: getSetting('ttsProvider') === 'http' ? 'Внешний движок' : 'Голоса системы' });
-      for (const voice of sortedSystem) {
-        group.append(el('option', { value: voice.id }, `${voice.name}${voice.lang ? ` (${voice.lang})` : ''}`));
-      }
-      select.append(group);
-    } else {
+    const stored = getSetting('ttsVoiceUri');
+    const { chosen, empty } = fillVoiceSelect(select, voices, { documentLang: index?.language || 'ru', stored });
+    if (empty) {
       setStatus(
         getSetting('ttsProvider') === 'http'
           ? 'Внешний движок не вернул список голосов'
           : 'Система не предоставила голоса синтеза — выберите нейроголос'
       );
     }
-    if (!select.options.length) {
-      select.append(el('option', { value: '' }, 'голосов не найдено'));
-      return;
-    }
-
-    const stored = getSetting('ttsVoiceUri');
-    const usable = [...sortedSystem, ...best.filter((voice) => voice.installed), ...sortedNeural.filter((voice) => voice.installed)];
-    const chosen = usable.find((voice) => voice.id === stored) || usable[0];
-    if (chosen) {
-      select.value = chosen.id;
-      if (chosen.id !== stored) await updateSettings({ ttsVoiceUri: chosen.id });
-    }
+    if (!chosen) return;
+    if (chosen.id !== stored) await updateSettings({ ttsVoiceUri: chosen.id });
     switchProvider();
   }
 
   /** Нейроголос ещё не скачан: спросить и скачать с прогрессом в строке панели. */
   async function offerDownload(voiceId) {
-    const engine = neuralFor(voiceId);
-    const voice = (await engine?.voices())?.find((item) => item.id === voiceId);
-    if (!voice) return false;
-    const question =
-      engine === tera
-        ? `Скачать голоса TeraTTS (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
-          'Это нужно один раз: четыре голоса и словари ударений сохранятся в браузере и дальше будут работать без интернета. ' +
-          'Во время чтения TeraTTS занимает около 1,5 ГБ памяти.'
-        : `Скачать нейроголос «${voice.name}» (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
-          'Это нужно один раз: голос сохранится в браузере и дальше будет работать без интернета.';
-    if (!window.confirm(question)) return false;
-    try {
-      await engine.downloadVoice(voiceId, (loaded, total, stage) => {
-        setStatus(
-          stage === 'index'
-            ? 'Готовлю словарь ударений — это меньше минуты…'
-            : `Скачиваю голос «${voice.name}»: ${formatBytes(loaded)} из ${formatBytes(total)}`
-        );
-      });
-    } catch (error) {
-      setStatus(`Голос не скачался: ${error.message}. Его можно загрузить из файла: Настройки → Нейроголоса.`);
-      return false;
-    }
-    setStatus(`Голос «${voice.name}» скачан и работает без интернета`);
+    if (!(await downloadWithConsent(engines, voiceId, setStatus))) return false;
     await updateSettings({ ttsVoiceUri: voiceId });
     await fillVoices();
     return true;
@@ -270,8 +187,7 @@ export function createTts(app) {
     if (!provider.prepare || !from) return;
     const token = (prefetchToken += 1);
     const options = speechOptions();
-    const budget = (Number(getSetting('ttsBufferMinutes')) || 2) * SPEECH_CHARS_PER_MINUTE * (options.rate || 1);
-    const planned = [];
+    const budget = bufferBudget(getSetting('ttsBufferMinutes'), options.rate);
     const texts = [];
     let cursor = { ...from };
     let chars = 0;
@@ -287,34 +203,12 @@ export function createTts(app) {
       if (token !== prefetchToken) return;
       cursor = utterance.next;
       if (!isSpeakable(utterance.text)) continue;
-      const ready = provider.prepare(utterance.text, options);
-      if (!ready) break; // голос ещё не скачан
-      const item = { seconds: null };
-      ready.then(
-        (seconds) => (item.seconds = seconds),
-        () => (item.failed = true)
-      );
-      planned.push(item);
       texts.push(utterance.text);
       chars += utterance.text.length;
     }
     if (token !== prefetchToken) return;
-    buffer = planned;
-    provider.retain?.(texts, options);
+    buffer = prepareAhead(provider, texts, options);
   }
-
-  /** Сколько секунд речи впереди уже готово — подряд, без дыр. */
-  function bufferedSeconds() {
-    let total = 0;
-    for (const item of buffer) {
-      if (item.seconds === null || item.failed) break;
-      total += item.seconds;
-    }
-    return total;
-  }
-
-  const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-  const spoken = (seconds) => (seconds < 60 ? `${Math.floor(seconds)} с` : `${Math.floor(seconds / 60)} мин ${Math.floor(seconds % 60)} с`);
 
   /** Запас на панели — как полоса подгрузки у видео; на паузе — и в статусе. */
   function showBuffer() {
@@ -322,9 +216,9 @@ export function createTts(app) {
     const visible = state !== 'idle' && provider?.neural && provider.prepare;
     badge.hidden = !visible;
     if (!visible) return;
-    const seconds = bufferedSeconds();
-    badge.textContent = `запас ${clock(seconds)}`;
-    if (state === 'paused') setStatus(`Пауза · вперёд готово ≈ ${spoken(seconds)}`);
+    const seconds = bufferedSeconds(buffer);
+    badge.textContent = `запас ${formatClock(seconds)}`;
+    if (state === 'paused') setStatus(`Пауза · вперёд готово ≈ ${formatSpoken(seconds)}`);
   }
 
   /** Нейроголос грузит модель или синтезирует — показываем это, а не молчим. */
@@ -643,7 +537,7 @@ export function createTts(app) {
       return;
     }
     // Пока идёт щелчок или нажатие клавиши — разрешаем звук нейроголосу.
-    neuralFor()?.unlock();
+    engines.neuralFor()?.unlock();
     showBar(true);
     if (!voicesLoaded) await fillVoices();
     const picked = cursorShown ? position : null;
@@ -727,7 +621,7 @@ export function createTts(app) {
   on($('ttsVoice'), 'change', async () => {
     const select = $('ttsVoice');
     const voiceId = select.value;
-    const engine = neuralFor(voiceId);
+    const engine = engines.neuralFor(voiceId);
     if (engine) {
       engine.unlock();
       if (!(await engine.isInstalled(voiceId)) && !(await offerDownload(voiceId))) {
@@ -837,7 +731,7 @@ export function createTts(app) {
     if ('ttsBufferMinutes' in changed && state !== 'idle') prefetchAhead(upcoming);
     if ('ttsProvider' in changed || 'ttsHttpUrl' in changed) {
       finish();
-      systemProvider = systemEngine();
+      engines.resetSystem();
       provider = pickProvider();
       voicesLoaded = false;
       await fillVoices();
@@ -850,7 +744,6 @@ export function createTts(app) {
     else start();
   }
 
-  systemProvider = systemEngine();
   provider = pickProvider();
   syncUi();
 

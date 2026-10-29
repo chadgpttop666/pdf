@@ -104,3 +104,21 @@ export function saveBlob(blob, filename) {
   // Сразу отзывать нельзя: загрузка стартует уже после щелчка.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/**
+ * Кнопки «−» и «+» у ползунков: сдвигают значение на шаг ползунка и
+ * рассылают те же события, что и перетаскивание, — модули их уже слушают.
+ */
+export function wireSteppers(root = document) {
+  for (const button of root.querySelectorAll('[data-step-for]')) {
+    on(button, 'click', () => {
+      const input = $(button.dataset.stepFor);
+      const step = Number(input.step) || 1;
+      const next = Number(input.value) + Number(button.dataset.dir) * step;
+      const clamped = Math.min(Number(input.max), Math.max(Number(input.min), next));
+      input.value = String(Number(clamped.toFixed(4)));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+}

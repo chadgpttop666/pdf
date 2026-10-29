@@ -101,6 +101,10 @@ export function createAudioPlayer() {
     get paused() {
       return paused;
     },
+    /** Звук есть, но браузер не дал ему начаться без нажатия пользователя. */
+    get blocked() {
+      return Boolean(context) && context.state === 'suspended' && !paused;
+    },
     get speaking() {
       return Boolean(current);
     },

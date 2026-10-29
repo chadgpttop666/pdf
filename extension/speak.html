@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Озвучка текста</title>
+  <link rel="icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="styles/viewer.css">
+  <link rel="stylesheet" href="styles/speak.css">
+</head>
+<body>
+  <div id="app" class="speak-app">
+    <header class="speak-head">
+      <strong id="speakTitle">Озвучка текста</strong>
+      <a id="speakSource" target="_blank" rel="noopener noreferrer" hidden></a>
+    </header>
+
+    <div id="speakBar" class="bar">
+      <button id="speakPlay" class="icon" data-icon="play" title="Читать / пауза (пробел)" aria-label="Читать или пауза"></button>
+      <button id="speakPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (←)" aria-label="Предыдущее предложение"></button>
+      <button id="speakNext" class="icon" data-icon="skipForward" title="Следующее предложение (→)" aria-label="Следующее предложение"></button>
+      <button id="speakStop" class="icon" data-icon="stop" title="Остановить (Esc)" aria-label="Остановить"></button>
+      <label class="field">Голос
+        <select id="ttsVoice" aria-label="Голос"></select>
+        <span id="speakBuffer" class="tts-buffer" title="Сколько речи нейроголос уже подготовил вперёд" hidden></span>
+      </label>
+      <div class="field">
+        <span>Скорость</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="ttsRate" data-dir="-1" title="Медленнее" aria-label="Медленнее"></button>
+        <input id="ttsRate" type="range" min="0.5" max="3" step="0.1" value="1" aria-label="Скорость речи">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsRate" data-dir="1" title="Быстрее" aria-label="Быстрее"></button>
+        <span id="ttsRateValue" class="value">1.0×</span>
+      </div>
+      <div class="field">
+        <span>Громкость</span>
+        <button type="button" class="icon stepper" data-icon="minus" data-step-for="ttsVolume" data-dir="-1" title="Тише" aria-label="Тише"></button>
+        <input id="ttsVolume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Громкость">
+        <button type="button" class="icon stepper" data-icon="plus" data-step-for="ttsVolume" data-dir="1" title="Громче" aria-label="Громче"></button>
+        <span id="ttsVolumeValue" class="value">100 %</span>
+      </div>
+      <button id="speakEdit" type="button" title="Убрать лишнее или вставить свой текст">Править текст</button>
+    </div>
+
+    <div id="speakStatus" class="speak-status" role="status" aria-live="polite"></div>
+
+    <main id="speakText" class="speak-text" tabindex="-1">
+      <p class="speak-empty">Выделите текст на любой странице, нажмите правой кнопкой и выберите «Озвучить выделенное».</p>
+    </main>
+
+    <div id="speakEditor" class="speak-editor" hidden>
+      <textarea id="speakEditorText" aria-label="Текст для чтения" spellcheck="false"></textarea>
+      <div class="speak-editor-actions">
+        <button id="speakEditDone" type="button" class="primary">Готово</button>
+        <button id="speakEditCancel" type="button">Отмена</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="src/speak-page.js"></script>
+</body>
+</html>

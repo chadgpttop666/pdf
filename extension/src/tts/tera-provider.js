@@ -465,6 +465,9 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     get paused() {
       return player.paused;
     },
+    get audioBlocked() {
+      return player.blocked;
+    },
     /** Для тестов: сколько воркеров запущено. */
     get workers() {
       return workers.samplers.length + (workers.vocoder ? 1 : 0) + (workers.accent ? 1 : 0);

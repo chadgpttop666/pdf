@@ -1,4 +1,5 @@
-// Фоновая страница: перехватывает открытие PDF и уводит их в наш вьюер.
+// Фоновая страница: перехватывает открытие PDF и уводит их в наш вьюер, а
+// выделенный на любой странице текст открывает в окне озвучки.
 //
 // Firefox, в отличие от Chrome, сохранил блокирующий webRequest — им можно
 // посмотреть на Content-Type ответа и подменить страницу до её отрисовки.
@@ -8,6 +9,7 @@
 import { filenameFromContentDisposition } from './src/file-name.js';
 
 const VIEWER_URL = browser.runtime.getURL('viewer.html');
+const SPEAK_URL = browser.runtime.getURL('speak.html');
 const SETTINGS_KEY = 'settings.v1';
 
 let interceptEnabled = true;
@@ -124,6 +126,11 @@ browser.runtime.onInstalled.addListener(() => {
     documentUrlPatterns: ['*://*/*'],
   });
   browser.contextMenus.create({
+    id: 'speak-selection',
+    title: 'Озвучить выделенное',
+    contexts: ['selection'],
+  });
+  browser.contextMenus.create({
     id: 'open-reader',
     title: 'Открыть PDF-читалку',
     contexts: ['browser_action', 'action'],
@@ -137,7 +144,66 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
     browser.tabs.update(tab.id, { url: viewerFor(info.pageUrl) });
   } else if (info.menuItemId === 'open-reader') {
     browser.tabs.create({ url: VIEWER_URL });
+  } else if (info.menuItemId === 'speak-selection' && tab) {
+    speakSelection(tab, info);
   }
+});
+
+// ── Озвучка выделенного на любой странице ──────────────────────────────
+//
+// Выделение берём у самой страницы: в info.selectionText пропадают переносы
+// строк, а по ним окно озвучки делит текст на абзацы. Текст кладётся в
+// storage.session (живёт до закрытия браузера) и читается в маленьком окне
+// speak.html; если оно уже открыто, новое выделение приходит туда же.
+
+const SPEAK_KEY_PREFIX = 'speak:';
+
+async function selectionOf(tab, frameId) {
+  try {
+    const results = await browser.scripting.executeScript({
+      target: frameId === undefined ? { tabId: tab.id, allFrames: true } : { tabId: tab.id, frameIds: [frameId] },
+      func: () => String(globalThis.getSelection?.() ?? ''),
+    });
+    return results.map((result) => result?.result || '').find((text) => text.trim()) || '';
+  } catch {
+    return ''; // страница, куда расширениям нельзя (about:, магазин дополнений)
+  }
+}
+
+async function speakSelection(tab, info = {}) {
+  let text = await selectionOf(tab, info.frameId);
+  if (!text.trim()) text = info.selectionText || '';
+  if (!text.trim()) return;
+
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const session = browser.storage.session;
+  const stored = await session.get(null);
+  const stale = Object.keys(stored).filter((key) => key.startsWith(SPEAK_KEY_PREFIX));
+  if (stale.length) await session.remove(stale);
+  await session.set({ [`${SPEAK_KEY_PREFIX}${id}`]: { text, title: tab.title || '', url: tab.url || '' } });
+
+  const url = `${SPEAK_URL}#${id}`;
+  if (stored.speakWindowId) {
+    try {
+      const window = await browser.windows.get(stored.speakWindowId, { populate: true });
+      const speakTab = window.tabs?.find((candidate) => candidate.url?.startsWith(SPEAK_URL));
+      if (speakTab) {
+        await browser.tabs.update(speakTab.id, { url });
+        await browser.windows.update(window.id, { focused: true });
+        return;
+      }
+    } catch {
+      /* окно уже закрыли */
+    }
+  }
+  const window = await browser.windows.create({ url, type: 'popup', width: 580, height: 720 });
+  await session.set({ speakWindowId: window.id });
+}
+
+browser.commands?.onCommand.addListener(async (command) => {
+  if (command !== 'speak-selection') return;
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (tab) speakSelection(tab);
 });
 
 loadSettings();

@@ -773,14 +773,27 @@ try {
     JSON.stringify(downloadResult)
   );
   // Если HuggingFace доступен, голос скачался и выбрался — дальше нужен подменённый.
-  const useMockVoice = () =>
-    page.evaluate(() => {
+  // Сначала ждём, пока список голосов перестроится после скачивания: иначе
+  // он вернёт скачанный голос уже после переключения.
+  await page.waitForFunction(
+    () => document.getElementById('ttsVoice').value === 'piper:ru_RU-irina-medium' || /загрузить из файла/.test(document.getElementById('ttsStatus').textContent),
+    null,
+    { timeout: 10000 }
+  );
+  await page.waitForTimeout(300);
+  const useMockVoice = async () => {
+    await page.evaluate(() => {
       const select = document.getElementById('ttsVoice');
       select.value = 'mock-ru';
       select.dispatchEvent(new Event('change'));
     });
+    await page.waitForFunction(
+      () => window.pdfReaderApp.tts.engine === 'web-speech' && document.getElementById('ttsVoice').value === 'mock-ru',
+      null,
+      { timeout: 5000 }
+    );
+  };
   await useMockVoice();
-  await page.waitForTimeout(200);
 
   // ── Панель озвучки и клавиши ──
   await page.evaluate(() => {
@@ -1162,7 +1175,47 @@ try {
   await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
   await page.unroute('https://huggingface.co/**');
   await useMockVoice();
-  await page.waitForTimeout(200);
+
+  // ── Окно озвучки текста, выделенного на сайте ──
+  const speak = await context.newPage();
+  await speak.addInitScript(speechMock);
+  speak.on('pageerror', (error) => consoleErrors.push(`окно озвучки: ${error.message}`));
+  speak.on('console', (message) => message.type() === 'error' && consoleErrors.push(`окно озвучки: ${message.text()}`));
+  const selectionText = 'Озвучка выделенного\nПервое предложение текста. Второе предложение текста!\n\nТретье предложение, пере-\nнесённое через строку. Четвёртое.';
+  await speak.goto(`${BASE}/speak.html?text=${encodeURIComponent(selectionText)}&title=${encodeURIComponent('Статья')}`);
+  await speak.waitForFunction(() => (window.spokenSentences?.length ?? 0) >= 2, null, { timeout: 10000 });
+  await speak.waitForFunction(() => CSS.highlights?.has('speak-word'), null, { timeout: 3000 }).catch(() => {});
+  const speakStart = await speak.evaluate(() => ({
+    paragraphs: [...document.querySelectorAll('#speakText p')].map((p) => p.textContent),
+    sentences: document.querySelectorAll('.speak-sentence').length,
+    spoken: [...window.spokenSentences],
+    word: Boolean(CSS.highlights?.has('speak-word')),
+    title: document.title,
+  }));
+  check(
+    'окно озвучки: выделение абзацами, перенос склеен, чтение начинается само, слово подсвечено',
+    speakStart.paragraphs.length === 3 &&
+      speakStart.paragraphs[2].startsWith('Третье предложение, перенесённое через строку.') &&
+      speakStart.sentences === 5 &&
+      speakStart.spoken[0] === 'Озвучка выделенного' &&
+      speakStart.word &&
+      speakStart.title === 'Озвучка — Статья',
+    JSON.stringify(speakStart)
+  );
+  await speak.keyboard.press('Space');
+  const speakPaused = await speak.evaluate(() => window.speakPage.reader.state);
+  await speak.keyboard.press('Space');
+  const speakResumed = await speak.evaluate(() => window.speakPage.reader.state);
+  check('окно озвучки: пробел — пауза и продолжение', speakPaused === 'paused' && speakResumed === 'speaking', `${speakPaused} → ${speakResumed}`);
+  await speak.click('.speak-sentence[data-index="3"]');
+  await speak.waitForFunction(() => window.spokenSentences.at(-1)?.startsWith('Третье'), null, { timeout: 5000 });
+  check('окно озвучки: щелчок по фразе — читать с неё', true);
+  await speak.click('#speakEdit');
+  await speak.fill('#speakEditorText', 'Свой текст без мусора. Ещё одна фраза.');
+  await speak.click('#speakEditDone');
+  const edited = await speak.evaluate(() => ({ sentences: document.querySelectorAll('.speak-sentence').length, state: window.speakPage.reader.state }));
+  check('окно озвучки: текст можно поправить перед чтением', edited.sentences === 2 && edited.state === 'idle', JSON.stringify(edited));
+  await speak.close();
 
   // ── Имя файла при скачивании: по адресу без имени ──
   const savedName = async (path) => {

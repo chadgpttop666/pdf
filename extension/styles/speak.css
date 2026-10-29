@@ -1,0 +1,91 @@
+/* Окно озвучки выделенного текста. Цвета, кнопки и панели — из viewer.css. */
+
+.speak-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px 0;
+  min-width: 0;
+}
+#speakTitle {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#speakSource {
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#speakBar { border-bottom: 1px solid var(--border); }
+#speakBar select { max-width: 220px; }
+
+.speak-status {
+  min-height: 22px;
+  padding: 4px 16px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.speak-app.busy .speak-status { color: var(--accent); }
+.speak-app.busy #speakPlay { position: relative; }
+.speak-app.busy #speakPlay::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: tts-spin 0.9s linear infinite;
+}
+
+.speak-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 20px 40vh;
+  font: 17px/1.6 Georgia, 'Times New Roman', serif;
+  outline: none;
+}
+.speak-text p {
+  max-width: 68ch;
+  margin: 0 auto 0.8em;
+}
+.speak-empty { color: var(--fg-muted); font: 14px/1.5 system-ui, sans-serif; }
+
+.speak-sentence {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 120ms;
+}
+.speak-sentence:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.speak-sentence.current { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+::highlight(speak-word) {
+  background-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: inherit;
+}
+
+.speak-editor {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 16px 16px;
+  min-height: 0;
+}
+.speak-editor textarea {
+  flex: 1 1 auto;
+  resize: none;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  color: var(--fg);
+  font: 15px/1.5 Georgia, 'Times New Roman', serif;
+}
+.speak-editor-actions { display: flex; gap: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .speak-app.busy #speakPlay::after { animation: none; }
+}

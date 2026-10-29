@@ -1,7 +1,7 @@
 // Точка входа вьюера: собирает ядро pdf.js, поднимает интерфейс и связывает
 // между собой независимые модули (прокрутка, озвучка, библиотека и прочее).
 
-import { $, formatBytes, on } from './dom.js';
+import { $, formatBytes, on, wireSteppers } from './dom.js';
 import { createWakeLock, extensionApi } from './platform.js';
 import { getSettings, get as getSetting, loadSettings, onSettingsChanged, updateSettings } from './settings.js';
 import { DocumentLoader } from './document-loader.js';
@@ -230,24 +230,6 @@ function wireAutoFit() {
     }, 80);
   });
   observer.observe(app.container);
-}
-
-/**
- * Кнопки «−» и «+» у ползунков: сдвигают значение на шаг ползунка и
- * рассылают те же события, что и перетаскивание, — модули их уже слушают.
- */
-function wireSteppers() {
-  for (const button of document.querySelectorAll('[data-step-for]')) {
-    on(button, 'click', () => {
-      const input = $(button.dataset.stepFor);
-      const step = Number(input.step) || 1;
-      const next = Number(input.value) + Number(button.dataset.dir) * step;
-      const clamped = Math.min(Number(input.max), Math.max(Number(input.min), next));
-      input.value = String(Number(clamped.toFixed(4)));
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-  }
 }
 
 /** Адрес документа и имя файла, которое фоновая страница узнала у сервера. */

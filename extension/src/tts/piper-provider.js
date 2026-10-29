@@ -367,6 +367,9 @@ export function createPiperProvider() {
     get paused() {
       return player.paused;
     },
+    get audioBlocked() {
+      return player.blocked;
+    },
     /** Для тестов: фонемы текста, без модели голоса. */
     phonemize(text, voice = 'ru') {
       return call(slots[0] ?? createSlot(), { type: 'phonemize', text, voice }).then((data) => data.ids);

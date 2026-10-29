@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PDF-читалка",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Чтение PDF с автопрокруткой, озвучкой и перемоткой по экрану",
   "browser_specific_settings": {
     "gecko": {
@@ -30,6 +30,7 @@
     "webRequest",
     "webRequestBlocking",
     "contextMenus",
+    "scripting",
     "tabs"
   ],
   "background": {
@@ -41,6 +42,14 @@
   "host_permissions": [
     "<all_urls>"
   ],
+  "commands": {
+    "speak-selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Озвучить выделенный текст"
+    }
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'"
   },
