@@ -224,10 +224,11 @@ fn bytes(message: &Value, key: &str) -> Result<Vec<u8>, String> {
 
 fn floats(message: &Value, key: &str) -> Result<Vec<f32>, String> {
     let raw = bytes(message, key)?;
-    if raw.len() % 4 != 0 {
+    let (chunks, rest) = raw.as_chunks::<4>();
+    if !rest.is_empty() {
         return Err(format!("{key}: не float32"));
     }
-    Ok(raw.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    Ok(chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect())
 }
 
 fn integers(message: &Value, key: &str) -> Result<Vec<i64>, String> {
