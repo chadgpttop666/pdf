@@ -759,8 +759,8 @@ export function createTts(app) {
       index = buildIndex(index.pdfDocument);
     }
     if ('ttsBufferMinutes' in changed && state !== 'idle') prefetchAhead(upcoming);
-    // Другая версия моделей TeraTTS: выгружаем, следующая фраза загрузит нужную.
-    if ('teraQuality' in changed) {
+    // Другая версия моделей TeraTTS или другой синтез: выгружаем, следующая фраза загрузит нужное.
+    if ('teraQuality' in changed || 'teraUseHelper' in changed) {
       if (provider === tera) finish();
       tera.unload();
     }

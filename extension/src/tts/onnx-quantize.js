@@ -225,10 +225,16 @@ function transpose(values, rows, cols) {
  * @param options.int8Weights только оставить int8-веса int8 (см. начало файла);
  *   float-веса при этом не трогаются
  * @param options.dynamic переводить float-веса в uint8; false — только число шагов
+ * @param options.hoist вынести веса из тела цикла в основной граф (см. ниже)
  * @returns {{ model: Uint8Array, quantized: number }}
  */
-export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false, dynamic = true } = {}) {
+export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false, dynamic = true, hoist = false } = {}) {
   let quantized = 0;
+  // Веса сэмплера лежат в теле цикла (Loop), и onnxruntime держит такие в
+  // памяти трижды: 244 МБ файла — 750 МБ памяти. Вынесенные в основной граф
+  // (тело цикла видит его имена) — 280 МБ, а считается всё то же.
+  const hoisted = [];
+  const topNames = new Set();
 
   function rewriteGraph(buf, start, end, isTop) {
     const graphFields = fields(buf, start, end);
@@ -240,6 +246,13 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
       }
     }
     const nodes = graphFields.filter((f) => f.field === 1).map((f) => parseNode(buf, f));
+    // Входы графа: инициализатор с тем же именем — значение по умолчанию, его не выносим.
+    const inputNames = new Set(graphFields.filter((f) => f.field === 11).map((f) => text(buf, fields(buf, f.start, f.end).find((v) => v.field === 1))));
+    if (isTop) {
+      for (const name of [...tensors.keys(), ...inputNames]) topNames.add(name);
+      for (const node of nodes) for (const name of [...node.inputs, ...node.outputs]) topNames.add(name);
+    }
+    const canHoist = (name) => hoist && !isTop && !inputNames.has(name) && !topNames.has(name);
 
     // Сколько узлов этого графа (и вложенных) читают каждый тензор.
     const uses = new Map();
@@ -476,12 +489,18 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
           out.push(lengthField(5, tensorProto(tensor.name, INT64, tensor.dims, int64Bytes(steps))));
           continue;
         }
+        if (canHoist(tensor.name)) {
+          topNames.add(tensor.name);
+          hoisted.push(raw(buf, f));
+          continue;
+        }
         out.push(raw(buf, f));
       } else {
         out.push(raw(buf, f));
       }
     }
-    out.push(...newTensors.map((bytes) => lengthField(5, bytes)));
+    for (const bytes of newTensors) (hoist && !isTop ? hoisted : out).push(lengthField(5, bytes));
+    if (isTop) out.push(...hoisted.splice(0));
     return concat(out);
   }
 

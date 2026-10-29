@@ -181,6 +181,22 @@ describe('быстрая версия ONNX-модели (onnx-quantize.js)', () 
     assert.deepEqual([third.n_final[0], Math.round(third.x_final[0] * 1e5) / 1e5], [3, 1]);
   });
 
+  it('веса из тела цикла выносятся в основной граф — результат тот же', async () => {
+    const source = loopNet();
+    const feeds = { x: new ort.Tensor('float32', Float32Array.of(0), [1]), n: new ort.Tensor('float32', Float32Array.of(0), [1]) };
+    const { model: hoisted, quantized } = quantizeModel(new Uint8Array(source), { hoist: true, dynamic: false });
+    assert.equal(quantized, 0);
+    const text = new TextDecoder().decode(hoisted);
+    // Инициализаторы основного графа идут после его выходов: «one» теперь там.
+    assert.ok(text.lastIndexOf('one_shape') > text.lastIndexOf('n_final'), 'вес остался в теле цикла');
+    assert.equal(hoisted.length, source.length);
+    const result = await run(hoisted, feeds);
+    assert.deepEqual([result.n_final[0], Math.round(result.x_final[0] * 1e5) / 1e5], [8, 1]);
+    // И вместе с числом шагов.
+    const six = await run(quantizeModel(new Uint8Array(source), { hoist: true, steps: 6, dynamic: false }).model, feeds);
+    assert.deepEqual([six.n_final[0], Math.round(six.x_final[0] * 1e5) / 1e5], [6, 1]);
+  });
+
   it('int8-веса остаются int8: MatMul и Gather — по целым, результат почти тот же', async () => {
     const source = int8Net();
     const { model: fast, quantized } = quantizeModel(new Uint8Array(source), { int8Weights: true });

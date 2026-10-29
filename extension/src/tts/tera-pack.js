@@ -76,19 +76,22 @@ export const ACCENT_PARTS = [
 //
 // Вокодер не облегчаем: в 8 битах он добавлял шум, слышный в паузах (на 21 дБ
 // громче, чем у исходного).
-export const DERIVED_VERSION = 2;
+export const DERIVED_VERSION = 3;
 export const DERIVED_PARTS = {
   // Омографы: веса уже int8, но onnxruntime разворачивал их в fp32 (воркер
   // ударений — 1,1 ГБ, вдвое больше нужного). На звук не влияет — нужна
   // всегда. Внимание оставляем во float: целочисленное меняло спорные решения.
   omographLight: { from: 'omographModel', int8Weights: true, exclude: ['attention'] },
+  // Исходный сэмплер, только веса вынесены из тела цикла: звук тот же до
+  // бита, а памяти onnxruntime берёт в 2,5 раза меньше (750 МБ → 280 МБ).
+  samplerLight: { from: 'sampler', hoist: true, dynamic: false },
   // Сэмплер на 6 шагов вместо 8 — на четверть меньше его работы.
-  samplerSteps6: { from: 'sampler', steps: 6, dynamic: false },
+  samplerSteps6: { from: 'sampler', steps: 6, dynamic: false, hoist: true },
   // То же и веса в 8 бит: ещё легче и втрое меньше памяти, но в паузах — шипение.
-  samplerFast: { from: 'sampler', steps: 6 },
+  samplerFast: { from: 'sampler', steps: 6, hoist: true },
 };
 /** Сэмплер для настройки «TeraTTS: модель». */
-export const SAMPLER_PARTS = { max: 'sampler', steps6: 'samplerSteps6', fast: 'samplerFast' };
+export const SAMPLER_PARTS = { max: 'samplerLight', steps6: 'samplerSteps6', fast: 'samplerFast' };
 // Что оставила версия 0.16.0 («быстрая версия» одним набором).
 const LEGACY_PARTS = ['samplerFast', 'vocoderFast', 'omographFast'];
 

@@ -171,6 +171,20 @@ button.play .icon-svg { width: 20px; height: 20px; }
 .pill-field input[type='range'] { flex: 1; accent-color: var(--accent); }
 .pill-value { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
 .pill-muted { color: var(--fg-muted); font-size: 12px; }
+/* Ускоритель TeraTTS: строка состояния и кнопка установки. */
+.pill-helper { display: flex; align-items: center; gap: 8px; }
+.pill-helper[hidden] { display: none; }
+.pill-helper .pill-muted { flex: 1; }
+.pill-button {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  cursor: pointer;
+}
+.pill-button:hover { border-color: var(--accent); }
+.pill-button[hidden] { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .pill-app.busy button.play::after,

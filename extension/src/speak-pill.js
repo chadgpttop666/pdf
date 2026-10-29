@@ -15,6 +15,7 @@ import { sentencesInText } from './speak-text.js';
 import { detectLanguage } from './text-index.js';
 import { formatClock } from './tts/buffer.js';
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './tts/engines.js';
+import { createHelperFlow, describeHelper, helperButton } from './tts/helper-install.js';
 import { createTextReader } from './tts/text-reader.js';
 import { hydrateIcons, setIcon } from './ui/icons.js';
 
@@ -143,6 +144,7 @@ on($('pillMore'), 'click', () => {
   panel.hidden = !panel.hidden;
   $('pillMore').setAttribute('aria-expanded', String(!panel.hidden));
   showBuffer();
+  if (!panel.hidden) helperFlow?.refresh();
 });
 
 on(document, 'keydown', (event) => {
@@ -187,6 +189,7 @@ on($('ttsVoice'), 'change', async () => {
   }
   await updateSettings({ ttsVoiceUri: voiceId });
   await fillVoices();
+  showHelper();
 });
 
 function syncControls() {
@@ -209,6 +212,28 @@ on($('ttsVolume'), 'input', async () => {
   if (reader.state !== 'idle' && !reader.setVolume(volume)) setStatus(`Громкость ${Math.round(volume * 100)} % — со следующей фразы`);
 });
 
+// ── Ускоритель TeraTTS ────────────────────────────────────────────────
+
+let helperFlow = null;
+
+/** Строка ускорителя в меню: только для голосов TeraTTS и пока он не установлен (или ставится). */
+function showHelper() {
+  const state = helperFlow?.state;
+  const tera = String(getSetting('ttsVoiceUri') || '').startsWith('tera:');
+  const row = $('pillHelper');
+  row.hidden = !state || !tera || ['checking', 'unsupported'].includes(state.step);
+  if (row.hidden) return;
+  $('pillHelperText').textContent = `Ускоритель: ${describeHelper(state)}`;
+  const button = state.step === 'working' ? null : helperButton(state);
+  $('pillHelperAction').hidden = !button;
+  if (button) $('pillHelperAction').textContent = button.label;
+}
+
+on($('pillHelperAction'), 'click', () => {
+  const button = helperButton(helperFlow.state);
+  if (button) helperFlow[button.act]();
+});
+
 /** Запас подготовленной речи — в меню плашки. */
 function showBuffer() {
   const badge = $('pillBuffer');
@@ -223,6 +248,10 @@ async function main() {
   syncControls();
   setInterval(showBuffer, 1000);
   await fillVoices();
+  if (engines.tera.available) {
+    helperFlow = createHelperFlow(engines.tera);
+    helperFlow.onChange(showHelper);
+  }
   ready = true;
   for (const message of pending.splice(0)) add(message.text, message.offset);
   // Для проверок.

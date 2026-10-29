@@ -16,6 +16,7 @@ export function createEngines() {
     threads: () => getSetting('teraThreads'),
     rate: () => getSetting('ttsRate'),
     quality: () => getSetting('teraQuality'),
+    useHelper: () => getSetting('teraUseHelper'),
   });
   let system = null;
 
@@ -118,7 +119,7 @@ export async function downloadWithConsent(engines, voiceId, setStatus) {
     engine === engines.tera
       ? `Скачать голоса TeraTTS (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
         'Это нужно один раз: четыре голоса и словари ударений сохранятся в браузере и дальше будут работать без интернета. ' +
-        'Во время чтения TeraTTS занимает 2–3 ГБ памяти.'
+        'Во время чтения TeraTTS занимает 1,5–2 ГБ памяти; с ускорителем (Настройки → Озвучка) — меньше и в несколько раз быстрее.'
       : `Скачать нейроголос «${voice.name}» (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
         'Это нужно один раз: голос сохранится в браузере и дальше будет работать без интернета.';
   if (!window.confirm(question)) return false;

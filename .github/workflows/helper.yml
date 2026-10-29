@@ -1,0 +1,179 @@
+# Ускоритель озвучки (native/): сборка для Windows и Linux, проверка на
+# настоящей системе и настоящих моделях, релиз helper-v<версия>.
+#
+# Расширение ставит ускоритель из этого релиза и сверяет SHA-256 с записанным
+# в extension/src/tts/helper-release.js. Поэтому выпущенный релиз не
+# перезаписывается: изменили программу — поднимите версию в native/Cargo.toml.
+# Релиз помечен предварительным, чтобы не стать «последним»: по последнему
+# релизу Firefox ищет обновления самого расширения (updates.json).
+# Ключи AMO здесь не нужны.
+
+name: Ускоритель озвучки
+
+on:
+  push:
+    branches: [main, claude/pdf-reader-app-lm05nj]
+    paths:
+      - 'native/**'
+      - 'scripts/helper-check.mjs'
+      - 'extension/src/tts/tera-native.js'
+      - 'extension/src/tts/tera-text.js'
+      - 'extension/src/tts/tera-noise.js'
+      - 'extension/src/tts/onnx-quantize.js'
+      - '.github/workflows/helper.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: helper
+  cancel-in-progress: false
+
+env:
+  ORT_VERSION: 1.31.1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            ort_archive: onnxruntime-win-x64-1.31.1.zip
+            ort_sha256: 5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c
+            ort_lib: onnxruntime-win-x64-1.31.1/lib/onnxruntime.dll
+            binary: pdf-reader-tts.exe
+            asset: pdf-reader-tts.exe
+          # Linux-сборка — на системе постарше: пойдёт и на свежих.
+          - os: ubuntu-22.04
+            ort_archive: onnxruntime-linux-x64-1.31.1.tgz
+            ort_sha256: c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9
+            ort_lib: onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1
+            binary: pdf-reader-tts
+            asset: pdf-reader-tts-linux
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Зависимости
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: ONNX Runtime
+        run: |
+          curl -sSLf -o ort-archive "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/${{ matrix.ort_archive }}"
+          echo "${{ matrix.ort_sha256 }}  ort-archive" | sha256sum -c -
+          mkdir ort
+          if [[ "${{ matrix.ort_archive }}" == *.zip ]]; then unzip -q ort-archive -d ort; else tar xzf ort-archive -C ort; fi
+
+      # ONNX Runtime для Windows нужны DLL Visual C++ — кладём их рядом с ним,
+      # чтобы ничего не пришлось ставить отдельно (их разрешено так распространять).
+      - name: DLL Visual C++
+        if: runner.os == 'Windows'
+        run: |
+          mkdir vcrt
+          for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do cp "/c/Windows/System32/$dll" vcrt/; done
+          echo "PDF_TTS_EXTRA_LIBS=$(cygpath -w "$PWD/vcrt/msvcp140.dll");$(cygpath -w "$PWD/vcrt/msvcp140_1.dll");$(cygpath -w "$PWD/vcrt/vcruntime140.dll");$(cygpath -w "$PWD/vcrt/vcruntime140_1.dll")" >> "$GITHUB_ENV"
+
+      - name: Тесты
+        working-directory: native
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+      - name: Сборка
+        working-directory: native
+        run: |
+          export PDF_TTS_ORT_LIB="$GITHUB_WORKSPACE/ort/${{ matrix.ort_lib }}"
+          export PDF_TTS_ORT_VERSION="$ORT_VERSION"
+          cargo build --release --locked
+          cp "target/release/${{ matrix.binary }}" "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+
+      - name: Установка (как двойным щелчком, только без окна)
+        run: |
+          ./${{ matrix.asset }} --install --quiet
+          if [ "$RUNNER_OS" = Windows ]; then
+            # C:/… — такой путь понимают и bash, и Node.
+            installed="$(cygpath -m "$LOCALAPPDATA")/PdfReaderTTS/pdf-reader-tts.exe"
+            reg query 'HKCU\Software\Mozilla\NativeMessagingHosts\pdf_reader_tts' //ve
+            reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PdfReaderTTS' //v DisplayName
+          else
+            installed="$HOME/.local/share/pdf-reader-tts/pdf-reader-tts"
+            cat "$HOME/.mozilla/native-messaging-hosts/pdf_reader_tts.json"
+          fi
+          ls -la "$(dirname "$installed")"
+          "$installed" --check --quiet
+          echo "INSTALLED=$installed" >> "$GITHUB_ENV"
+
+      - name: Модели TeraTTS
+        uses: actions/cache@v4
+        with:
+          path: teratts
+          key: teratts-75983ac96062591d06ecd2ddb2aefb894104bc9e
+
+      - name: Синтез через установленный ускоритель
+        run: node scripts/helper-check.mjs --helper "$INSTALLED" --models teratts --download --hoist --compare --wav check-${{ runner.os }}.wav
+
+      - name: Удаление
+        run: |
+          "$INSTALLED" --uninstall --quiet
+          sleep 8
+          if [ "$RUNNER_OS" = Windows ]; then
+            if reg query 'HKCU\Software\Mozilla\NativeMessagingHosts\pdf_reader_tts' > /dev/null 2>&1; then echo 'ключ остался'; exit 1; fi
+            if reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PdfReaderTTS' > /dev/null 2>&1; then echo 'запись в «Приложениях» осталась'; exit 1; fi
+          elif [ -e "$HOME/.mozilla/native-messaging-hosts/pdf_reader_tts.json" ]; then echo 'манифест остался'; exit 1; fi
+          if [ -e "$INSTALLED" ]; then echo 'программа осталась'; exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            check-${{ runner.os }}.wav
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: built
+
+      - name: Релиз
+        run: |
+          version="$(grep -m1 '^version' native/Cargo.toml | cut -d'"' -f2)"
+          tag="helper-v$version"
+          cp built/pdf-reader-tts.exe/pdf-reader-tts.exe built/pdf-reader-tts-linux/pdf-reader-tts-linux .
+          {
+            echo "### Ускоритель $version"
+            echo
+            echo '| файл | размер | SHA-256 |'
+            echo '|---|---|---|'
+            for file in pdf-reader-tts.exe pdf-reader-tts-linux; do
+              echo "| $file | $(stat -c %s "$file") | $(sha256sum "$file" | cut -d' ' -f1) |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Релиз $tag уже есть — не перезаписываю: расширение сверяет его хэш. Изменили программу — поднимите версию в native/Cargo.toml."
+            exit 0
+          fi
+          gh release create "$tag" pdf-reader-tts.exe pdf-reader-tts-linux \
+            --target "$GITHUB_SHA" \
+            --title "Ускоритель озвучки $version" \
+            --notes "Программа-помощник PDF-читалки: синтезирует голоса TeraTTS вне браузера. Ставится из расширения (Настройки → Озвучка → Ускоритель TeraTTS); вручную скачивать не нужно." \
+            --prerelease

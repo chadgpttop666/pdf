@@ -1,0 +1,4 @@
+# Программа для Windows — без зависимости от Visual C++ Redistributable:
+# библиотека C вшита. (ONNX Runtime она нужна — её DLL кладутся рядом, см. build.rs.)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -12,11 +12,18 @@
 //   4. куски играют по очереди: первый звучит, пока синтезируются остальные.
 // Контроллер заранее просит подготовить несколько следующих фраз — к тому
 // времени, как до них дойдёт чтение, их звук уже готов.
+//
+// Если установлен ускоритель (tera-native.js, программа native/), шаг 3
+// делает он — в несколько раз быстрее и почти без памяти браузера; воркеры
+// синтеза тогда не запускаются вовсе.
 
 import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
+import { fetchHelper } from './helper-install.js';
+import { HELPER_RELEASE } from './helper-release.js';
 import { estimateWordTimings } from './piper-math.js';
-import { planPieces } from './tera-text.js';
+import { HELPER_PROTOCOL, compareVersions, connectHelper, missingModels, syncModels } from './tera-native.js';
+import { encodeText, keepSupported, modelText, planPieces, voicedRange } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
 import {
   ACCENT_PARTS,
@@ -59,8 +66,9 @@ function withPause(pcm, sampleRate, seconds) {
  * @param options.rate () => скорость чтения: от неё зависит, сколько нужно
  * @param options.quality () => 'max' | 'steps6' | 'fast' — какой сэмплер: исходный,
  *   на 6 шагов или ещё и в 8 бит (tera-pack.js, DERIVED_PARTS)
+ * @param options.useHelper () => boolean — синтезировать ускорителем, если он установлен
  */
-export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'max' } = {}) {
+export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'max', useHelper = () => true } = {}) {
   const player = createAudioPlayer();
   const cache = new Map(); // голос|текст → { pieces, fastStart }
   const waiting = new Map();
@@ -78,9 +86,12 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
   let lagging = false; // синтез уже не успевал за речью — нужен ещё сэмплер
-  let variant = 'max'; // какой сэмплер в памяти — ключ SAMPLER_PARTS
+  let samplerPart = 'sampler'; // какой сэмплер в памяти — часть пакета
   let omographPart = 'omographModel'; // какая модель омографов в памяти
   let lastEnded = 0; // когда договорила предыдущая фраза
+  let helper = null; // { client, hello } — синтез идёт через ускоритель
+  let helperLosses = 0; // ускоритель отключался посреди работы
+  let table = null; // символ → номер: с ускорителем текст для модели готовит страница
 
   function touch() {
     clearTimeout(idleTimer);
@@ -121,6 +132,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
 
   function shutdown(error = new Error('Голоса TeraTTS выгружены')) {
     for (const slot of [...workers.samplers, workers.vocoder, workers.accent]) slot?.worker.terminate();
+    helper?.client.close(); // помощник завершится сам и освободит память
+    helper = null;
+    table = null;
     for (const [id, entry] of waiting) {
       waiting.delete(id);
       entry.reject(error);
@@ -137,7 +151,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   }
 
   async function loadSampler(slot) {
-    const sampler = SAMPLER_PARTS[variant];
+    const sampler = samplerPart;
     const parts = await loadParts(['textEncoder', 'duration', sampler, 'indexer']);
     const models = {
       textEncoder: await parts.textEncoder.arrayBuffer(),
@@ -168,9 +182,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     if (pack.derived?.[name] === DERIVED_VERSION) return true;
     const slot = spawn('synth');
     try {
-      const { from, steps, exclude, int8Weights, dynamic } = DERIVED_PARTS[name];
+      const { from, steps, exclude, int8Weights, dynamic, hoist } = DERIVED_PARTS[name];
       const model = await (await loadParts([from]))[from].arrayBuffer();
-      const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights, dynamic }, [model]);
+      const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights, dynamic, hoist }, [model]);
       await storeDerivedPart(name, new Blob([reply.model]));
       pack = await getPack();
       return true;
@@ -182,26 +196,82 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     }
   }
 
+  // ── Ускоритель ───────────────────────────────────────────────────────
+
+  /** Модели для ускорителя: сэмплер — с вынесенными весами, если собрался. */
+  async function helperBlobs() {
+    const sampler = (await ensureDerived(SAMPLER_PARTS.max)) ? SAMPLER_PARTS.max : 'sampler';
+    const parts = await loadParts(['textEncoder', 'duration', sampler, 'vocoder']);
+    return { textEncoder: parts.textEncoder, duration: parts.duration, sampler: parts[sampler], vocoder: parts.vocoder };
+  }
+
+  /** Помощник старее, чем ждёт расширение, — он поставит новую версию себе сам. */
+  async function updateIfOld(connection) {
+    if (compareVersions(connection.hello.version, HELPER_RELEASE.version) >= 0) return connection;
+    try {
+      const { blob, sha256 } = await fetchHelper();
+      await connection.client.update(blob, sha256);
+    } catch (error) {
+      console.warn('TeraTTS: ускоритель не обновился', error);
+      return connection;
+    }
+    connection.client.close();
+    const fresh = await connectHelper();
+    if (!fresh) throw new Error('После обновления ускоритель не запустился');
+    return fresh;
+  }
+
+  /** Подключиться к ускорителю и передать ему модели; null — синтез в браузере. */
+  async function attachHelper(onProgress) {
+    if (!useHelper() || helperLosses >= 2) return null;
+    let connection = await connectHelper();
+    if (!connection) return null;
+    try {
+      connection = await updateIfOld(connection);
+      const { hello, client } = connection;
+      if (hello.protocol !== HELPER_PROTOCOL) throw new Error(`ускоритель другой версии (${hello.version})`);
+      if (hello.ortError) throw new Error(hello.ortError);
+      if ((await syncModels(client, hello.files, await helperBlobs(), onProgress)).length) connection.hello = await client.hello();
+      table = Int32Array.from(JSON.parse(await (await loadParts(['indexer'])).indexer.text()));
+      await client.load();
+      client.onClose(() => {
+        if (helper !== connection) return;
+        // Упал посреди чтения — следующая фраза подключит заново, а после
+        // второго раза читаем в браузере до перезагрузки страницы.
+        helperLosses += 1;
+        shutdown(new Error('Ускоритель отключился'));
+      });
+      return connection;
+    } catch (error) {
+      console.warn('TeraTTS: ускоритель не подключился — синтез в браузере', error);
+      connection.client.close();
+      return null;
+    }
+  }
+
   async function ensureLoaded() {
     if (ready) return;
     loading ||= (async () => {
       pack = await dropLegacyParts(await getPack());
       // Облегчённая модель омографов на звук не влияет — она всегда; сэмплер — по настройке.
       omographPart = (await ensureDerived('omographLight')) ? 'omographLight' : 'omographModel';
-      const wanted = SAMPLER_PARTS[quality()] ? quality() : 'max';
-      variant = wanted === 'max' || (await ensureDerived(SAMPLER_PARTS[wanted])) ? wanted : 'max';
       workers.accent = spawn('accent');
-      workers.vocoder = spawn('synth');
-      const first = addSampler();
-      // На большой скорости нужен и второй сэмплер — грузим его вместе с
-      // первым, чтобы и первая фраза синтезировалась в два потока.
-      for (let i = 1; i < wantedSamplers(); i += 1) addSampler();
-      const vocoder = await (await loadParts(['vocoder'])).vocoder.arrayBuffer();
-      await Promise.all([
-        first,
-        call(workers.vocoder, { type: 'load', models: { vocoder } }, [vocoder]),
-        loadAccentParts().then((files) => call(workers.accent, { type: 'load', files })),
-      ]);
+      const accent = loadAccentParts().then((files) => call(workers.accent, { type: 'load', files }));
+      accent.catch(() => {}); // ошибку разберём ниже, когда дождёмся
+      helper = await attachHelper();
+      if (!helper) {
+        const wanted = SAMPLER_PARTS[quality()] ?? SAMPLER_PARTS.max;
+        // Не собралась — исходный с вынесенными весами, а нет и его — как скачан.
+        samplerPart = (await ensureDerived(wanted)) ? wanted : (await ensureDerived(SAMPLER_PARTS.max)) ? SAMPLER_PARTS.max : 'sampler';
+        workers.vocoder = spawn('synth');
+        const first = addSampler();
+        // На большой скорости нужен и второй сэмплер — грузим его вместе с
+        // первым, чтобы и первая фраза синтезировалась в два потока.
+        for (let i = 1; i < wantedSamplers(); i += 1) addSampler();
+        const vocoder = await (await loadParts(['vocoder'])).vocoder.arrayBuffer();
+        await Promise.all([first, call(workers.vocoder, { type: 'load', models: { vocoder } }, [vocoder])]);
+      }
+      await accent;
       ready = true;
     })();
     const current = loading;
@@ -228,7 +298,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
 
   /** Сколько сэмплеров нужно — по настройке и скорости; первый уже работает. */
   function adjustThreads() {
-    if (!ready) return;
+    if (!ready || helper) return;
     const wanted = wantedSamplers();
     while (workers.samplers.length < wanted) addSampler();
     // Лишний гасим, только когда ему нечего доделывать: иначе его куски не
@@ -264,7 +334,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
 
   /** Звук понадобился, а куска ещё нет — синтез не успевает за речью. */
   function noteLag() {
-    if (lagging) return;
+    if (lagging || helper) return;
     lagging = true;
     adjustThreads();
   }
@@ -281,6 +351,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     // В сэмплер куски уходят строго в порядке создания: английскому куску
     // следующей фразы ударения не нужны, и иначе он обгонял бы русский кусок
     // текущей — а читатель ждал бы звука.
+    if (helper) return synthesizeWithHelper(piece, accented, style, jobEpoch);
     const posting = lane.then(async () => {
       const text = await accented;
       const sampler = pickSampler();
@@ -305,6 +376,30 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     piece.audio = posting.then(async ({ request }) => {
       const { latent: data, frames, samples } = await request;
       return call(workers.vocoder, { type: 'vocode', latent: data, frames, samples, epoch: jobEpoch }, [data.buffer]);
+    });
+    piece.audio.then(
+      (audio) => {
+        piece.done = true;
+        piece.seconds = audio.pcm.length / audio.sampleRate + (piece.pause || 0);
+      },
+      () => {}
+    );
+    return piece;
+  }
+
+  /** То же через ускоритель: текст в номера символов — здесь, звук — у него. */
+  function synthesizeWithHelper(piece, accented, style, jobEpoch) {
+    const { client } = helper;
+    const posting = lane.then(async () => {
+      const { withStress, plain } = encodeText(modelText(piece.lang, keepSupported(await accented, table)), table);
+      const request = client.synth({ ids: withStress, plain, ttl: style.ttl, dp: style.dp, maxSeconds: piece.maxSeconds, epoch: jobEpoch });
+      return { request }; // в обёртке: очередь ждёт отправки, а не синтеза
+    });
+    lane = posting.catch(() => {});
+    piece.audio = posting.then(async ({ request }) => {
+      const { pcm, sampleRate } = await request;
+      const [start, end] = voicedRange(pcm, sampleRate);
+      return { pcm: pcm.slice(start, end), sampleRate };
     });
     piece.audio.then(
       (audio) => {
@@ -581,6 +676,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       token += 1;
       epoch += 1;
       for (const slot of [...workers.samplers, workers.vocoder, workers.accent]) slot?.worker.postMessage({ type: 'epoch', epoch });
+      helper?.client.setEpoch(epoch);
       player.stop('cancelled');
     },
     /** Освободить память: выгрузить модели из воркеров. */
@@ -601,9 +697,55 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     unload() {
       shutdown();
     },
-    /** Для проверок: какие модели в памяти. */
+    /** Для проверок: какие модели в памяти; sampler: 'helper' — синтез у ускорителя. */
     get models() {
-      return ready ? { sampler: SAMPLER_PARTS[variant], omograph: omographPart } : null;
+      return ready ? { sampler: helper ? 'helper' : samplerPart, omograph: omographPart } : null;
+    },
+
+    /**
+     * Что с ускорителем — для настроек.
+     * @returns {Promise<{ installed: boolean, version?, active?, packInstalled?, modelsReady? }>}
+     */
+    async helperStatus() {
+      const connection = helper ?? (await connectHelper());
+      if (!connection) return { installed: false };
+      try {
+        // У работающего — свежий ответ: модели могли передать после подключения.
+        const hello = connection === helper ? await helper.client.hello() : connection.hello;
+        const packInstalled = await isPackInstalled();
+        let modelsReady = false;
+        // Сэмплер для ускорителя ещё не собран — значит, и не передан.
+        pack = packInstalled ? await getPack() : pack;
+        if (packInstalled && pack.derived?.[SAMPLER_PARTS.max] === DERIVED_VERSION) {
+          const blobs = await helperBlobs();
+          modelsReady = !missingModels(hello.files, Object.fromEntries(Object.entries(blobs).map(([name, blob]) => [name, blob.size]))).length;
+        }
+        return { installed: true, version: hello.version, active: connection === helper, packInstalled, modelsReady };
+      } finally {
+        if (connection !== helper) connection.client.close();
+      }
+    },
+
+    /** Обновить ускоритель и передать ему модели заранее — сразу после установки. */
+    async prepareHelper(onProgress) {
+      pack = await dropLegacyParts(await getPack());
+      let connection = helper ?? (await connectHelper());
+      if (!connection) throw new Error('Ускоритель не отвечает');
+      try {
+        if (connection !== helper) connection = await updateIfOld(connection);
+        await syncModels(connection.client, connection.hello.files, await helperBlobs(), onProgress);
+      } finally {
+        if (connection !== helper) connection.client.close();
+      }
+    },
+
+    /** Удалить ускоритель: он сотрёт себя и свои модели сам. */
+    async removeHelper() {
+      if (helper) shutdown();
+      const connection = await connectHelper();
+      if (!connection) return;
+      await connection.client.uninstall().catch(() => {}); // отвечает и сразу завершается
+      connection.client.close();
     },
     /** Сколько сэмплеров сейчас работает или грузится. */
     get samplers() {

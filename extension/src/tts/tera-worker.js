@@ -6,6 +6,7 @@
 
 import * as ort from '../../vendor/ort/ort.wasm.min.mjs';
 import { quantizeModel } from './onnx-quantize.js';
+import { noise } from './tera-noise.js';
 import { encodeText, keepSupported, modelText, voicedRange } from './tera-text.js';
 
 ort.env.wasm.wasmPaths = new URL('../../vendor/ort/', import.meta.url).href;
@@ -18,32 +19,11 @@ const LATENT_CHANNELS = 144;
 // Множитель длительности, с которым модель обучена звучать естественно.
 const SPEED = 1.05;
 const GUIDANCE = 3;
-const SEED = 1234;
 
 const sessions = {};
 let table = null;
 let queue = Promise.resolve();
 let currentEpoch = 0;
-
-/** Повторяемый шум: одна и та же фраза звучит одинаково при каждом синтезе. */
-function noise(count, seed = SEED) {
-  let state = seed >>> 0;
-  const uniform = () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i += 2) {
-    const radius = Math.sqrt(-2 * Math.log(uniform() || 1e-12));
-    const angle = 2 * Math.PI * uniform();
-    out[i] = radius * Math.cos(angle);
-    if (i + 1 < count) out[i + 1] = radius * Math.sin(angle);
-  }
-  return out;
-}
 
 async function load({ models, indexer }) {
   const options = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' };
@@ -125,6 +105,7 @@ self.onmessage = ({ data: message }) => {
           steps: message.steps ?? null,
           int8Weights: Boolean(message.int8Weights),
           dynamic: message.dynamic ?? true,
+          hoist: Boolean(message.hoist),
           exclude: (name) => exclude.some((part) => name.includes(part)),
         });
         self.postMessage({ id: message.id, type: 'quantized', model: model.buffer }, [model.buffer]);

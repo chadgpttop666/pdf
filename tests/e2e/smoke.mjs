@@ -1137,8 +1137,8 @@ try {
   );
   const omographLight = await page.evaluate(async () => Boolean((await (await import('/src/library.js')).getVoice('teratts-v2:omographLight'))?.blob));
   check(
-    'TeraTTS: облегчённая модель ударений собрана из скачанной, сэмплер — исходный',
-    omographLight && teraRun.models?.omograph === 'omographLight' && teraRun.models?.sampler === 'sampler',
+    'TeraTTS: облегчённая модель ударений собрана из скачанной, сэмплер — исходный с вынесенными весами',
+    omographLight && teraRun.models?.omograph === 'omographLight' && teraRun.models?.sampler === 'samplerLight',
     JSON.stringify({ omographLight, models: teraRun.models })
   );
   // Громкость: нейроголос меняет её сразу, посреди фразы.
@@ -1175,7 +1175,7 @@ try {
   await page.waitForFunction(() => /Скачать/.test(document.querySelector('.tera-voices button')?.textContent || ''), null, { timeout: 10000 });
   const teraRemoved = await page.evaluate(async () => ({
     installed: await window.pdfReaderApp.tts.tera.isInstalled(),
-    fastLeft: (await Promise.all(['omographLight', 'samplerSteps6', 'samplerFast'].map(async (name) => (await import('/src/library.js')).getVoice(`teratts-v2:${name}`)))).filter(Boolean).length,
+    fastLeft: (await Promise.all(['omographLight', 'samplerLight', 'samplerSteps6', 'samplerFast'].map(async (name) => (await import('/src/library.js')).getVoice(`teratts-v2:${name}`)))).filter(Boolean).length,
     workers: window.pdfReaderApp.tts.tera.workers,
     offered: [...document.querySelectorAll('#ttsVoice option')].map((option) => option.textContent).filter((label) => label.includes('TeraTTS')),
   }));

@@ -4,6 +4,7 @@
 import { $, clear, closeOnBackdropClick, el, formatBytes, on } from '../dom.js';
 import { SETTINGS_SCHEMA, get as getSetting, updateSettings } from '../settings.js';
 import * as library from '../library.js';
+import { createHelperFlow, describeHelper, helperButton } from '../tts/helper-install.js';
 
 export function createSettingsDialog(app) {
   const dialog = $('settingsDialog');
@@ -160,6 +161,34 @@ export function createSettingsDialog(app) {
     );
   }
 
+  let helperFlow = null; // переживает перерисовку: установка идёт и при закрытом окне
+
+  /** Ускоритель TeraTTS: установить, запустить установщик, удалить. */
+  function renderTeraHelper(section) {
+    const state = helperFlow.state;
+    if (state.step === 'unsupported') {
+      section.hidden = true;
+      return;
+    }
+    const button = helperButton(state);
+    section.replaceChildren(
+      el('span', { class: 'label' }, [
+        el('span', {}, `Ускоритель TeraTTS${state.step === 'working' ? ' · работает' : ''}`),
+        el(
+          'span',
+          { class: 'hint' },
+          'Небольшая программа синтезирует речь вне браузера: в 4–5 раз быстрее, процессор почти свободен, памяти — на гигабайт меньше. ' +
+            'Ставится отсюда: «Установить» → разрешить → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. ' +
+            'Без неё TeraTTS работает в браузере, как раньше.'
+        ),
+      ]),
+      el('div', { class: 'piper-actions' }, [
+        button ? el('button', { type: 'button', onclick: () => helperFlow[button.act]() }, button.label) : null,
+        el('span', { class: 'hint' }, describeHelper(state)),
+      ])
+    );
+  }
+
   /** Нейроголоса Piper: скачать, удалить, загрузить из файлов. */
   async function renderPiperVoices(container) {
     const piper = app.tts?.piper;
@@ -267,6 +296,18 @@ export function createSettingsDialog(app) {
         renderTeraVoices(section);
         continue;
       }
+      if (item.custom === 'teraHelper') {
+        const tera = app.tts?.tera;
+        if (!tera?.available) continue;
+        if (!helperFlow) {
+          helperFlow = createHelperFlow(tera);
+          helperFlow.onChange(() => document.querySelectorAll('.tera-helper').forEach(renderTeraHelper));
+        }
+        const section = el('div', { class: 'setting piper-voices tera-helper' });
+        grid.append(section);
+        renderTeraHelper(section);
+        continue;
+      }
       if (item.custom === 'piperVoices') {
         const section = el('div', { class: 'setting piper-voices' });
         grid.append(section);
@@ -288,18 +329,17 @@ export function createSettingsDialog(app) {
     renderLibrarySection();
   }
 
-  on($('btnSettings'), 'click', () => {
+  function open() {
     piperMessage = '';
     render();
+    helperFlow?.refresh();
     dialog.showModal();
-  });
+  }
+
+  on($('btnSettings'), 'click', open);
 
   return {
-    open() {
-      piperMessage = '';
-      render();
-      dialog.showModal();
-    },
+    open,
     close() {
       dialog.close();
     },
