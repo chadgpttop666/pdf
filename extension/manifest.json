@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PDF-читалка",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "Чтение PDF с автопрокруткой, озвучкой и перемоткой по экрану",
   "browser_specific_settings": {
     "gecko": {

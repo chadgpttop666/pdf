@@ -70,20 +70,27 @@ export const ACCENT_PARTS = [
   'yoTokenizerConfig', 'yoConfig', 'omographModel', 'omographTokenizer', 'omographTokenizerConfig', 'stressIndex',
 ];
 
-// Быстрая версия сэмплера и вокодера (onnx-quantize.js): делается из
-// скачанных моделей в браузере один раз и лежит рядом с ними. Версия растёт,
-// когда меняется способ — тогда быстрые модели пересобираются.
-export const FAST_VERSION = 1;
-export const FAST_RECIPES = {
-  sampler: { part: 'samplerFast', steps: 6 },
-  // Последние слои вокодера отвечают за мелкие детали звука — их не трогаем.
-  vocoder: { part: 'vocoderFast', exclude: ['head'] },
+// Производные модели (onnx-quantize.js): делаются в браузере из скачанных,
+// по мере надобности, и лежат рядом с ними. Версия растёт, когда меняется
+// способ, — тогда они пересобираются.
+//
+// Вокодер не облегчаем: в 8 битах он добавлял шум, слышный в паузах (на 21 дБ
+// громче, чем у исходного).
+export const DERIVED_VERSION = 2;
+export const DERIVED_PARTS = {
   // Омографы: веса уже int8, но onnxruntime разворачивал их в fp32 (воркер
-  // ударений — 1,1 ГБ). Внимание оставляем во float: целочисленное меняло
-  // спорные решения чаще, а памяти почти не добавляет.
-  omographModel: { part: 'omographFast', int8Weights: true, exclude: ['attention'] },
+  // ударений — 1,1 ГБ, вдвое больше нужного). На звук не влияет — нужна
+  // всегда. Внимание оставляем во float: целочисленное меняло спорные решения.
+  omographLight: { from: 'omographModel', int8Weights: true, exclude: ['attention'] },
+  // Сэмплер на 6 шагов вместо 8 — на четверть меньше его работы.
+  samplerSteps6: { from: 'sampler', steps: 6, dynamic: false },
+  // То же и веса в 8 бит: ещё легче и втрое меньше памяти, но в паузах — шипение.
+  samplerFast: { from: 'sampler', steps: 6 },
 };
-const FAST_PART_NAMES = Object.values(FAST_RECIPES).map(({ part }) => part);
+/** Сэмплер для настройки «TeraTTS: модель». */
+export const SAMPLER_PARTS = { max: 'sampler', steps6: 'samplerSteps6', fast: 'samplerFast' };
+// Что оставила версия 0.16.0 («быстрая версия» одним набором).
+const LEGACY_PARTS = ['samplerFast', 'vocoderFast', 'omographFast'];
 
 const totalBytes = FILES.reduce((sum, [, , size]) => sum + size, 0) + Object.values(OMOGRAPH_SOURCES[0].sizes).reduce((a, b) => a + b, 0);
 export const PACK_SIZE_MB = Math.round(totalBytes / 1024 / 1024);
@@ -190,15 +197,26 @@ export async function loadParts(names) {
   return Object.fromEntries(entries);
 }
 
-/** Сохранить быструю версию моделей и отметить её в пакете. */
-export async function storeFastParts(blobs) {
-  for (const [name, blob] of Object.entries(blobs)) await library.putVoice({ id: PART(name), engine: 'tera-part', blob });
+/** Сохранить производную модель и отметить её версию в пакете. */
+export async function storeDerivedPart(name, blob) {
+  await library.putVoice({ id: PART(name), engine: 'tera-part', blob });
   const record = await library.getVoice(TERA_PACK_ID);
-  await library.putVoice({ ...record, fast: FAST_VERSION });
+  await library.putVoice({ ...record, derived: { ...record.derived, [name]: DERIVED_VERSION } });
+}
+
+/** Убрать модели, оставшиеся от 0.16.0, — они собирались иначе. */
+export async function dropLegacyParts(pack) {
+  if (!pack.fast) return pack;
+  await Promise.all(LEGACY_PARTS.map((name) => library.deleteVoice(PART(name)).catch(() => {})));
+  const { fast, ...record } = pack;
+  await library.putVoice(record);
+  return record;
 }
 
 export async function removePack() {
-  const names = [...new Set([...FILES.map(([name]) => name), ...OMOGRAPH_FILES.map(([name]) => name), 'stressIndex', ...FAST_PART_NAMES])];
+  const names = [
+    ...new Set([...FILES.map(([name]) => name), ...OMOGRAPH_FILES.map(([name]) => name), 'stressIndex', ...Object.keys(DERIVED_PARTS), ...LEGACY_PARTS]),
+  ];
   await library.deleteVoice(TERA_PACK_ID);
   await Promise.all(names.map((name) => library.deleteVoice(PART(name)).catch(() => {})));
 }

@@ -155,6 +155,13 @@ describe('быстрая версия ONNX-модели (onnx-quantize.js)', () 
     assert.ok(snr(reference, test) > 25, `SNR ${snr(reference, test).toFixed(1)} дБ`);
   });
 
+  it('dynamic: false — веса не трогаются (только шаги цикла)', () => {
+    const source = new Uint8Array(convNet());
+    const { model: same, quantized } = quantizeModel(source, { dynamic: false });
+    assert.equal(quantized, 0);
+    assert.equal(same.length, source.length);
+  });
+
   it('узлы из исключений не трогаются', () => {
     const { quantized } = quantizeModel(new Uint8Array(convNet()), { exclude: (name) => name === '' });
     assert.equal(quantized, 0);
@@ -167,6 +174,11 @@ describe('быстрая версия ONNX-модели (onnx-quantize.js)', () 
     assert.deepEqual([before.n_final[0], Math.round(before.x_final[0] * 1e5) / 1e5], [8, 1]);
     const after = await run(quantizeModel(new Uint8Array(source), { steps: 6 }).model, feeds);
     assert.deepEqual([after.n_final[0], Math.round(after.x_final[0] * 1e5) / 1e5], [6, 1]);
+    // Только шаги, без перевода весов в 8 бит.
+    const stepsOnly = quantizeModel(new Uint8Array(source), { steps: 3, dynamic: false });
+    assert.equal(stepsOnly.quantized, 0);
+    const third = await run(stepsOnly.model, feeds);
+    assert.deepEqual([third.n_final[0], Math.round(third.x_final[0] * 1e5) / 1e5], [3, 1]);
   });
 
   it('int8-веса остаются int8: MatMul и Gather — по целым, результат почти тот же', async () => {

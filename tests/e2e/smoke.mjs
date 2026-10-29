@@ -1128,18 +1128,19 @@ try {
     state: window.pdfReaderApp.tts.state,
     position: window.pdfReaderApp.tts.position,
     badge: !document.getElementById('ttsEngine').hidden,
-    fast: window.pdfReaderApp.tts.tera.fast,
+    models: window.pdfReaderApp.tts.tera.models,
   }));
   check(
     'TeraTTS читает фразу за фразой с подсветкой слов',
     teraRun.state === 'speaking' && teraWord && teraRun.badge,
     `${JSON.stringify(teraStart)} → ${JSON.stringify(teraRun.position)}, слово: ${teraWord}`
   );
-  const fastParts = await page.evaluate(async () => {
-    const library = await import('/src/library.js');
-    return Promise.all(['samplerFast', 'vocoderFast', 'omographFast'].map(async (name) => Boolean((await library.getVoice(`teratts-v2:${name}`))?.blob)));
-  });
-  check('TeraTTS: быстрая версия моделей собрана из скачанных и загружена', teraRun.fast && fastParts.every(Boolean), JSON.stringify({ fast: teraRun.fast, fastParts }));
+  const omographLight = await page.evaluate(async () => Boolean((await (await import('/src/library.js')).getVoice('teratts-v2:omographLight'))?.blob));
+  check(
+    'TeraTTS: облегчённая модель ударений собрана из скачанной, сэмплер — исходный',
+    omographLight && teraRun.models?.omograph === 'omographLight' && teraRun.models?.sampler === 'sampler',
+    JSON.stringify({ omographLight, models: teraRun.models })
+  );
   // Громкость: нейроголос меняет её сразу, посреди фразы.
   const volumeChange = await page.evaluate(async () => {
     const { tera } = window.pdfReaderApp.tts;
@@ -1174,7 +1175,7 @@ try {
   await page.waitForFunction(() => /Скачать/.test(document.querySelector('.tera-voices button')?.textContent || ''), null, { timeout: 10000 });
   const teraRemoved = await page.evaluate(async () => ({
     installed: await window.pdfReaderApp.tts.tera.isInstalled(),
-    fastLeft: (await Promise.all(['samplerFast', 'vocoderFast', 'omographFast'].map(async (name) => (await import('/src/library.js')).getVoice(`teratts-v2:${name}`)))).filter(Boolean).length,
+    fastLeft: (await Promise.all(['omographLight', 'samplerSteps6', 'samplerFast'].map(async (name) => (await import('/src/library.js')).getVoice(`teratts-v2:${name}`)))).filter(Boolean).length,
     workers: window.pdfReaderApp.tts.tera.workers,
     offered: [...document.querySelectorAll('#ttsVoice option')].map((option) => option.textContent).filter((label) => label.includes('TeraTTS')),
   }));

@@ -20,16 +20,18 @@ import { planPieces } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
 import {
   ACCENT_PARTS,
-  FAST_RECIPES,
-  FAST_VERSION,
+  DERIVED_PARTS,
+  DERIVED_VERSION,
   PACK_SIZE_MB,
+  SAMPLER_PARTS,
   TERA_VOICES,
   downloadPack,
   getPack,
   isPackInstalled,
   loadParts,
+  dropLegacyParts,
   removePack,
-  storeFastParts,
+  storeDerivedPart,
 } from './tera-pack.js';
 
 export const TERA_PREFIX = 'tera:';
@@ -55,10 +57,10 @@ function withPause(pcm, sampleRate, seconds) {
  * @param options.threads () => 'auto' | '1' | '2' | '3' — сколько сэмплеров
  *   держать (tera-threads.js)
  * @param options.rate () => скорость чтения: от неё зависит, сколько нужно
- * @param options.quality () => 'fast' | 'max' — быстрая версия моделей
- *   (onnx-quantize.js: вдвое меньше работы процессору) или исходная
+ * @param options.quality () => 'max' | 'steps6' | 'fast' — какой сэмплер: исходный,
+ *   на 6 шагов или ещё и в 8 бит (tera-pack.js, DERIVED_PARTS)
  */
-export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'fast' } = {}) {
+export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'max' } = {}) {
   const player = createAudioPlayer();
   const cache = new Map(); // голос|текст → { pieces, fastStart }
   const waiting = new Map();
@@ -76,7 +78,8 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
   let lagging = false; // синтез уже не успевал за речью — нужен ещё сэмплер
-  let fast = false; // в памяти быстрая версия моделей
+  let variant = 'max'; // какой сэмплер в памяти — ключ SAMPLER_PARTS
+  let omographPart = 'omographModel'; // какая модель омографов в памяти
   let lastEnded = 0; // когда договорила предыдущая фраза
 
   function touch() {
@@ -134,7 +137,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   }
 
   async function loadSampler(slot) {
-    const sampler = fast ? FAST_RECIPES.sampler.part : 'sampler';
+    const sampler = SAMPLER_PARTS[variant];
     const parts = await loadParts(['textEncoder', 'duration', sampler, 'indexer']);
     const models = {
       textEncoder: await parts.textEncoder.arrayBuffer(),
@@ -146,33 +149,34 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     slot.loaded = true;
   }
 
-  /** Файлы воркера ударений; у быстрой версии — облегчённая модель омографов. */
+  /** Файлы воркера ударений — с той моделью омографов, что собралась. */
   async function loadAccentParts() {
-    const omograph = FAST_RECIPES.omographModel.part;
-    const files = await loadParts(ACCENT_PARTS.map((name) => (fast && name === 'omographModel' ? omograph : name)));
-    if (fast) {
-      files.omographModel = files[omograph];
-      delete files[omograph];
+    const files = await loadParts(ACCENT_PARTS.map((name) => (name === 'omographModel' ? omographPart : name)));
+    if (omographPart !== 'omographModel') {
+      files.omographModel = files[omographPart];
+      delete files[omographPart];
     }
     return files;
   }
 
   /**
-   * Быстрая версия сэмплера, вокодера и модели омографов — из скачанных моделей, один раз
-   * (несколько секунд при первой загрузке после скачивания или обновления).
+   * Производная модель (tera-pack.js, DERIVED_PARTS) — из скачанной, один раз
+   * (секунды при первой загрузке после скачивания или обновления).
+   * @returns {Promise<boolean>} есть; нет — читаем исходной моделью
    */
-  async function ensureFastParts() {
-    if (pack.fast === FAST_VERSION) return;
+  async function ensureDerived(name) {
+    if (pack.derived?.[name] === DERIVED_VERSION) return true;
     const slot = spawn('synth');
     try {
-      const blobs = {};
-      for (const [name, { part, steps, exclude, int8Weights }] of Object.entries(FAST_RECIPES)) {
-        const model = await (await loadParts([name]))[name].arrayBuffer();
-        const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights }, [model]);
-        blobs[part] = new Blob([reply.model]);
-      }
-      await storeFastParts(blobs);
+      const { from, steps, exclude, int8Weights, dynamic } = DERIVED_PARTS[name];
+      const model = await (await loadParts([from]))[from].arrayBuffer();
+      const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights, dynamic }, [model]);
+      await storeDerivedPart(name, new Blob([reply.model]));
       pack = await getPack();
+      return true;
+    } catch (error) {
+      console.warn(`TeraTTS: модель ${name} не собралась — беру исходную`, error);
+      return false;
     } finally {
       slot.worker.terminate();
     }
@@ -181,23 +185,18 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   async function ensureLoaded() {
     if (ready) return;
     loading ||= (async () => {
-      pack = await getPack();
-      fast = quality() !== 'max';
-      if (fast) {
-        // Не получилось — читаем исходной моделью: медленнее, но читаем.
-        await ensureFastParts().catch((error) => {
-          console.warn('Быстрая версия TeraTTS не собралась', error);
-          fast = false;
-        });
-      }
+      pack = await dropLegacyParts(await getPack());
+      // Облегчённая модель омографов на звук не влияет — она всегда; сэмплер — по настройке.
+      omographPart = (await ensureDerived('omographLight')) ? 'omographLight' : 'omographModel';
+      const wanted = SAMPLER_PARTS[quality()] ? quality() : 'max';
+      variant = wanted === 'max' || (await ensureDerived(SAMPLER_PARTS[wanted])) ? wanted : 'max';
       workers.accent = spawn('accent');
       workers.vocoder = spawn('synth');
       const first = addSampler();
       // На большой скорости нужен и второй сэмплер — грузим его вместе с
       // первым, чтобы и первая фраза синтезировалась в два потока.
       for (let i = 1; i < wantedSamplers(); i += 1) addSampler();
-      const vocoderPart = fast ? FAST_RECIPES.vocoder.part : 'vocoder';
-      const vocoder = await (await loadParts([vocoderPart]))[vocoderPart].arrayBuffer();
+      const vocoder = await (await loadParts(['vocoder'])).vocoder.arrayBuffer();
       await Promise.all([
         first,
         call(workers.vocoder, { type: 'load', models: { vocoder } }, [vocoder]),
@@ -214,7 +213,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     }
   }
 
-  const wantedSamplers = () => samplerCount(threads(), { rate: rate(), lagging, cores: navigator.hardwareConcurrency || 4, fast: quality() !== 'max' });
+  const wantedSamplers = () => samplerCount(threads(), { rate: rate(), lagging, cores: navigator.hardwareConcurrency || 4, fast: quality() === 'fast' });
 
   function addSampler() {
     const slot = spawn('synth');
@@ -602,9 +601,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     unload() {
       shutdown();
     },
-    /** Для проверок: в памяти быстрая версия моделей. */
-    get fast() {
-      return ready && fast;
+    /** Для проверок: какие модели в памяти. */
+    get models() {
+      return ready ? { sampler: SAMPLER_PARTS[variant], omograph: omographPart } : null;
     },
     /** Сколько сэмплеров сейчас работает или грузится. */
     get samplers() {

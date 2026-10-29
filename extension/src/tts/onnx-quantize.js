@@ -224,9 +224,10 @@ function transpose(values, rows, cols) {
  * @param options.exclude (имя узла) => true — не трогать этот узел
  * @param options.int8Weights только оставить int8-веса int8 (см. начало файла);
  *   float-веса при этом не трогаются
+ * @param options.dynamic переводить float-веса в uint8; false — только число шагов
  * @returns {{ model: Uint8Array, quantized: number }}
  */
-export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false } = {}) {
+export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false, dynamic = true } = {}) {
   let quantized = 0;
 
   function rewriteGraph(buf, start, end, isTop) {
@@ -254,18 +255,18 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
 
     const newTensors = [];
     const replacedUses = new Map();
-    const dynamic = new Map(); // вход → [квантованный, масштаб, нулевая точка]
+    const quantizedInputs = new Map(); // вход → [квантованный, масштаб, нулевая точка]
     const nodeBytes = [];
     const unit = (name) => replacedUses.set(name, (replacedUses.get(name) || 0) + 1);
 
     /** Вход узла в uint8 — один DynamicQuantizeLinear на тензор. */
     function quantizedInput(input, out) {
-      if (!dynamic.has(input)) {
+      if (!quantizedInputs.has(input)) {
         const names = [`${input}::q8`, `${input}::q8_scale`, `${input}::q8_zero`];
-        dynamic.set(input, names);
+        quantizedInputs.set(input, names);
         out.push(nodeProto('DynamicQuantizeLinear', [input], names, `${input}::q8_dql`));
       }
-      return dynamic.get(input);
+      return quantizedInputs.get(input);
     }
 
     /** Общий хвост: целое → float, умножить на произведение масштабов, прибавить смещение. */
@@ -423,7 +424,7 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
         nodeBytes.push(node.bytes);
         continue;
       }
-      if ((node.opType === 'Conv' && tryConv(node, out)) || ((node.opType === 'MatMul' || node.opType === 'Gemm') && tryMatMul(node, out))) {
+      if (dynamic && ((node.opType === 'Conv' && tryConv(node, out)) || ((node.opType === 'MatMul' || node.opType === 'Gemm') && tryMatMul(node, out)))) {
         quantized += 1;
         nodeBytes.push(...out.map((bytes) => lengthField(1, bytes)));
         continue;
