@@ -1,11 +1,12 @@
 // Провайдер нейроголосов Piper. Интерфейс тот же, что у web-speech.js, плюс
 // управление голосами: скачать с HuggingFace, загрузить из файла, удалить.
-// Синтез идёт в воркерах (piper-worker.js), звук играет AudioContext.
+// Синтез идёт в воркерах (piper-worker.js), звук играет audio-player.js.
 // Контроллер заранее просит синтезировать несколько следующих фраз; на
 // машине с 4+ ядрами работают два воркера параллельно — паузы между фразами
 // не накапливаются, даже если синтез идёт почти со скоростью речи.
 
 import * as library from '../library.js';
+import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
 import { estimateWordTimings } from './piper-math.js';
 
@@ -23,10 +24,12 @@ export const PIPER_CATALOG = [
 ];
 
 const CACHE_SIZE = 8;
-const BOUNDARY_POLL_MS = 40;
 // Второй воркер — ещё одна копия модели в памяти (~150 МБ), поэтому только
 // там, где ядер хватает на параллельный синтез.
 const POOL_SIZE = (globalThis.navigator?.hardwareConcurrency || 2) >= 4 ? 2 : 1;
+
+/** Записи хранилища голосов, которые принадлежат Piper (у TeraTTS — свои). */
+export const isPiperRecord = (record) => (record.engine ?? 'piper') === 'piper';
 
 const keyOf = (voiceId) => (voiceId?.startsWith(PIPER_PREFIX) ? voiceId.slice(PIPER_PREFIX.length) : voiceId);
 
@@ -41,11 +44,9 @@ export function createPiperProvider() {
   let seq = 0;
   const waiting = new Map();
   const cache = new Map(); // голос|скорость|текст → промис со звуком
-  let context = null;
-  let current = null; // играющая фраза
+  const player = createAudioPlayer();
   let token = 0; // растёт при каждой отмене — старые фразы узнают, что они не нужны
   let epoch = 0; // то же для очередей воркеров: задания старой эпохи пропускаются
-  let paused = false;
   let download = null; // { key, controller }
 
   // ── Воркеры ──────────────────────────────────────────────────────────
@@ -145,74 +146,12 @@ export function createPiperProvider() {
     return cache.get(cacheKey);
   }
 
-  // ── Звук ─────────────────────────────────────────────────────────────
-
-  function audioContext() {
-    context ||= new AudioContext();
-    return context;
-  }
-
-  function stopCurrent(result) {
-    if (!current) return;
-    const { source, timer, resolve } = current;
-    current = null;
-    clearInterval(timer);
-    source.onended = null;
-    try {
-      source.stop();
-    } catch {
-      /* ещё не запущен или уже закончился */
-    }
-    resolve(result);
-  }
-
-  async function play(audio, text, segments, { volume = 1, onBoundary, onStart }, myToken) {
-    const ctx = audioContext();
-    // Поставили на паузу, пока фраза синтезировалась, — начнём её на паузе.
-    if (paused) await ctx.suspend();
-    else if (ctx.state === 'suspended') ctx.resume();
-    if (myToken !== token) return 'cancelled';
-
-    const buffer = ctx.createBuffer(1, audio.pcm.length, audio.sampleRate);
-    buffer.copyToChannel(audio.pcm, 0);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    const gain = ctx.createGain();
-    gain.gain.value = volume;
-    source.connect(gain).connect(ctx.destination);
-
-    // Границ слов Piper не даёт: оцениваем их по доле произнесённых букв и
-    // сверяем с часами AudioContext — на паузе они стоят, подсветка тоже.
-    const timings = onBoundary ? estimateWordTimings(text, segments) : [];
-    const startedAt = ctx.currentTime;
-    let next = 0;
-    return new Promise((resolve) => {
-      const timer = setInterval(() => {
-        const progress = (ctx.currentTime - startedAt) / buffer.duration;
-        while (next < timings.length && timings[next].at <= progress) {
-          const { charIndex, charLength } = timings[next];
-          next += 1;
-          onBoundary({ charIndex, charLength, name: 'word' });
-        }
-      }, BOUNDARY_POLL_MS);
-      current = { source, timer, resolve };
-      source.onended = () => {
-        if (current?.source !== source) return;
-        current = null;
-        clearInterval(timer);
-        resolve('ended');
-      };
-      source.start();
-      onStart?.();
-    });
-  }
-
   // ── Голоса ───────────────────────────────────────────────────────────
 
   async function voices() {
     let installed = [];
     try {
-      installed = await library.listVoices();
+      installed = (await library.listVoices()).filter(isPiperRecord);
     } catch {
       /* база недоступна — покажем только каталог */
     }
@@ -325,6 +264,7 @@ export function createPiperProvider() {
 
   return {
     id: 'piper',
+    neural: true,
     available: typeof Worker !== 'undefined' && typeof AudioContext !== 'undefined',
     voices,
     downloadVoice,
@@ -356,7 +296,13 @@ export function createPiperProvider() {
         audio = await synthesize(spoken, options); // задание отменили по ошибке эпохи — ещё раз
       }
       if (myToken !== token) return 'cancelled';
-      return play(audio, text, segments, options, myToken);
+      return player.play(audio.pcm, audio.sampleRate, {
+        volume: options.volume,
+        timings: options.onBoundary ? estimateWordTimings(text, segments) : [],
+        onBoundary: options.onBoundary,
+        onStart: options.onStart,
+        isCancelled: () => myToken !== token,
+      });
     },
 
     /** Голос уже в памяти воркера — первая фраза пойдёт без загрузки модели. */
@@ -370,8 +316,7 @@ export function createPiperProvider() {
      * звуку начаться.
      */
     unlock() {
-      const ctx = audioContext();
-      if (ctx.state === 'suspended' && !paused) ctx.resume();
+      player.unlock();
     },
 
     /** Синтезировать заранее — пока звучит текущая фраза. */
@@ -380,25 +325,23 @@ export function createPiperProvider() {
     },
 
     pause() {
-      paused = true;
-      context?.suspend();
+      player.pause();
     },
     resume() {
-      paused = false;
-      context?.resume();
+      player.resume();
     },
     cancel() {
       token += 1;
       // Заготовки для прежнего места больше не нужны — воркеры их пропустят.
       epoch += 1;
       for (const slot of slots) slot.worker.postMessage({ type: 'epoch', epoch });
-      stopCurrent('cancelled');
+      player.stop('cancelled');
     },
     get speaking() {
-      return Boolean(current);
+      return player.speaking;
     },
     get paused() {
-      return paused;
+      return player.paused;
     },
     /** Для тестов: фонемы текста, без модели голоса. */
     phonemize(text, voice = 'ru') {

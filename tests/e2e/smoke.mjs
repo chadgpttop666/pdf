@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { dummyTeraFiles } from '../../scripts/make-dummy-tera.mjs';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PORT = Number(process.env.PORT || 8123);
@@ -637,6 +638,8 @@ try {
     join(root, 'tests', 'fixtures', 'piper-dummy.onnx.json'),
   ]);
   await page.waitForFunction(() => document.querySelector('.piper-status')?.textContent.includes('загружен'), null, { timeout: 10000 });
+  // Окно перестраивается после загрузки — ждём новый список.
+  await page.waitForFunction(() => [...document.querySelectorAll('.piper-list li')].some((li) => li.textContent.includes('скачан')), null, { timeout: 10000 }).catch(() => {});
   const piperListed = await page.evaluate(() => ({
     voice: document.getElementById('ttsVoice').value,
     option: [...document.querySelectorAll('#ttsVoice optgroup')].map((group) => group.label + ': ' + [...group.children].map((o) => o.textContent).join(', ')),
@@ -747,6 +750,15 @@ try {
         (downloadResult.status.includes('загрузить из файла') && downloadResult.voice === 'mock-ru')),
     JSON.stringify(downloadResult)
   );
+  // Если HuggingFace доступен, голос скачался и выбрался — дальше нужен подменённый.
+  const useMockVoice = () =>
+    page.evaluate(() => {
+      const select = document.getElementById('ttsVoice');
+      select.value = 'mock-ru';
+      select.dispatchEvent(new Event('change'));
+    });
+  await useMockVoice();
+  await page.waitForTimeout(200);
 
   // ── Панель озвучки и клавиши ──
   await page.evaluate(() => {
@@ -999,6 +1011,115 @@ try {
       mixed.some(([voice, text]) => voice === 'mock-ru' && text.includes('Сегодня в нашем распоряжении')),
     JSON.stringify(mixed.slice(0, 6))
   );
+
+  // ── Нейроголос TeraTTS (пакет-пустышка вместо настоящих 520 МБ) ──
+  const teraFiles = dummyTeraFiles();
+  let teraRequests = 0;
+  await page.route('https://huggingface.co/**', (route) => {
+    const url = route.request().url();
+    const name = Object.keys(teraFiles).find((suffix) => url.endsWith(suffix));
+    if (!name || !/TeraTTSv2|ruaccent/.test(url)) return route.fallback();
+    teraRequests += 1;
+    return route.fulfill({ status: 200, body: teraFiles[name], headers: { 'content-type': 'application/octet-stream', 'access-control-allow-origin': '*' } });
+  });
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
+  await page.waitForSelector('.tera-voices button');
+  const teraButton = await page.textContent('.tera-voices button');
+  await page.click('.tera-voices button');
+  await page.waitForFunction(() => /скачаны|Не скачалось/.test(document.querySelector('.tera-status')?.textContent || ''), null, { timeout: 30000 });
+  // После загрузки список голосов и окно перестраиваются.
+  await page.waitForFunction(() => document.querySelector('.tera-voices button')?.textContent !== 'Отменить загрузку', null, { timeout: 10000 });
+  const teraListed = await page.evaluate(() => ({
+    status: document.querySelector('.tera-status')?.textContent,
+    voice: document.getElementById('ttsVoice').value,
+    groups: [...document.querySelectorAll('#ttsVoice optgroup')].map((group) => `${group.label}: ${[...group.children].map((o) => o.textContent).join(', ')}`),
+    removable: document.querySelector('.tera-voices button')?.textContent,
+  }));
+  check(
+    'TeraTTS: пакет скачивается из настроек, голоса появляются в списке',
+    /Скачать ≈\d+ МБ/.test(teraButton) &&
+      teraListed.voice === 'tera:ru_m5' &&
+      teraListed.removable === 'Удалить' &&
+      teraListed.groups.some((label) => label.startsWith('Нейроголоса TeraTTS') && label.includes('TeraTTS — женский')) &&
+      teraRequests >= 25,
+    JSON.stringify({ teraButton, ...teraListed, teraRequests })
+  );
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
+
+  const teraText = await page.evaluate(async () => {
+    const { tera } = window.pdfReaderApp.tts;
+    const rendered = await tera.render('Сегодня есть журналы «Journal of Political Philosophy» и «Ethics».', { voiceId: 'tera:ru_m5' });
+    return {
+      pieces: rendered.pieces,
+      seconds: rendered.pcm.length / rendered.sampleRate,
+      accented: await tera.accent('Сегодня есть еще журналы.'),
+      workers: tera.workers,
+    };
+  });
+  check(
+    'TeraTTS: английские названия — отдельными кусками, ударения и «ё» по словарю',
+    JSON.stringify(teraText.pieces.map((piece) => [piece.lang, piece.text])) ===
+      JSON.stringify([['ru', 'Сегодня есть журналы'], ['en', 'Journal of Political Philosophy'], ['ru', 'и'], ['en', 'Ethics']]) &&
+      teraText.accented === 'Сег+одня есть ещё журн+алы.' &&
+      teraText.seconds > 1 &&
+      teraText.workers === 3,
+    JSON.stringify(teraText)
+  );
+
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 1 }));
+  await page.waitForTimeout(400);
+  await page.click('#viewerContainer', { position: { x: 5, y: 5 } });
+  await page.keyboard.press('s'); // жест: браузер разрешит звук
+  await page.waitForFunction(() => window.pdfReaderApp.tts.engine === 'tera' && window.pdfReaderApp.tts.state === 'speaking', null, { timeout: 10000 });
+  const teraStart = await page.evaluate(() => ({ ...window.pdfReaderApp.tts.position }));
+  let teraWord = false;
+  for (let i = 0; i < 60 && !teraWord; i += 1) {
+    await page.waitForTimeout(100);
+    teraWord = await page.evaluate(() => Boolean(document.querySelector('.tts-word-box')));
+  }
+  await page.waitForFunction(
+    (start) => {
+      const now = window.pdfReaderApp.tts.position;
+      return now.pageNumber > start.pageNumber || now.sentenceIndex > start.sentenceIndex;
+    },
+    teraStart,
+    { timeout: 30000 }
+  );
+  const teraRun = await page.evaluate(() => ({
+    state: window.pdfReaderApp.tts.state,
+    position: window.pdfReaderApp.tts.position,
+    badge: !document.getElementById('ttsEngine').hidden,
+  }));
+  check(
+    'TeraTTS читает фразу за фразой с подсветкой слов',
+    teraRun.state === 'speaking' && teraWord && teraRun.badge,
+    `${JSON.stringify(teraStart)} → ${JSON.stringify(teraRun.position)}, слово: ${teraWord}`
+  );
+  await page.keyboard.press('Space');
+  const teraPaused = await page.evaluate(() => window.pdfReaderApp.tts.state);
+  await page.keyboard.press('Space');
+  const teraResumed = await page.evaluate(() => window.pdfReaderApp.tts.state);
+  check('TeraTTS: пробел ставит на паузу и продолжает', teraPaused === 'paused' && teraResumed === 'speaking', `${teraPaused} → ${teraResumed}`);
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
+
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
+  await page.waitForFunction(() => document.querySelector('.tera-voices button')?.textContent === 'Удалить');
+  await page.click('.tera-voices button');
+  await page.waitForFunction(() => /Скачать/.test(document.querySelector('.tera-voices button')?.textContent || ''), null, { timeout: 10000 });
+  const teraRemoved = await page.evaluate(async () => ({
+    installed: await window.pdfReaderApp.tts.tera.isInstalled(),
+    workers: window.pdfReaderApp.tts.tera.workers,
+    offered: [...document.querySelectorAll('#ttsVoice option')].map((option) => option.textContent).filter((label) => label.includes('TeraTTS')),
+  }));
+  check(
+    'TeraTTS: пакет удаляется, память освобождается',
+    !teraRemoved.installed && teraRemoved.workers === 0 && teraRemoved.offered.length === 1 && /скачать/.test(teraRemoved.offered[0]),
+    JSON.stringify(teraRemoved)
+  );
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
+  await page.unroute('https://huggingface.co/**');
+  await useMockVoice();
+  await page.waitForTimeout(200);
 
   // ── Имя файла при скачивании: по адресу без имени ──
   const savedName = async (path) => {

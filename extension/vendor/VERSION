@@ -1,5 +1,6 @@
 pdfjs-dist 6.3.289
 onnxruntime-web 1.30.0
+@huggingface/tokenizers 0.2.0
 @diffusionstudio/piper-wasm 1.0.0 (espeak-ng: ru_dict, en_dict)
 tesseract.js 7.0.0, tesseract.js-core 6.1.2 (rus, eng, best_int)
 Содержимое каталога генерируется командой npm run vendor, руками не правится.

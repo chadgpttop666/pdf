@@ -1,5 +1,6 @@
-// Копирует нужные куски pdfjs-dist, ONNX Runtime, фонемизатора Piper и
-// tesseract.js (распознавание сканов) в
+// Копирует нужные куски pdfjs-dist, ONNX Runtime, фонемизатора Piper,
+// токенизаторов HuggingFace (ударения для TeraTTS) и tesseract.js
+// (распознавание сканов) в
 // extension/vendor/, чтобы расширение устанавливалось из репозитория без
 // npm install. Загружать код из сети расширению нельзя — всё, что исполняется
 // (включая WASM), должно лежать внутри.
@@ -17,6 +18,7 @@ const src = join(root, 'node_modules', 'pdfjs-dist');
 const dst = join(root, 'extension', 'vendor');
 const ortSrc = join(root, 'node_modules', 'onnxruntime-web', 'dist');
 const piperSrc = join(root, 'node_modules', '@diffusionstudio', 'piper-wasm', 'build');
+const tokenizersSrc = join(root, 'node_modules', '@huggingface', 'tokenizers');
 const tesseractSrc = join(root, 'node_modules', 'tesseract.js', 'dist');
 const tesseractCoreSrc = join(root, 'node_modules', 'tesseract.js-core');
 // Ядро — одна сборка с SIMD и только LSTM: её понимает любой Firefox из
@@ -108,6 +110,15 @@ async function vendorOrt() {
   }
 }
 
+/** Токенизаторы моделей ударений RUAccent: чистый JS, один модуль. */
+async function vendorTokenizers() {
+  const out = join(dst, 'tokenizers');
+  await mkdir(out, { recursive: true });
+  const code = await readFile(join(tokenizersSrc, 'dist', 'tokenizers.min.mjs'), 'utf8');
+  await writeFile(join(out, 'tokenizers.min.mjs'), code.replace(/\/\/# sourceMappingURL=\S*\s*$/, ''));
+  await cp(join(tokenizersSrc, 'LICENSE'), join(out, 'LICENSE'));
+}
+
 /**
  * В сборке tesseract.js есть запасные ветки на конструкторе Function — на
  * случай, когда нет globalThis. В Firefox он есть всегда, ветки
@@ -156,6 +167,7 @@ async function main() {
   }
 
   await vendorOrt();
+  await vendorTokenizers();
   const espeakBytes = await vendorPiper();
   await vendorTesseract();
 
@@ -163,6 +175,7 @@ async function main() {
   const versions = [
     `pdfjs-dist ${await versionOf(src)}`,
     `onnxruntime-web ${await versionOf(dirname(ortSrc))}`,
+    `@huggingface/tokenizers ${await versionOf(tokenizersSrc)}`,
     `@diffusionstudio/piper-wasm ${await versionOf(dirname(piperSrc))} (espeak-ng: ${[...ESPEAK_DICTS].join(', ')})`,
     `tesseract.js ${await versionOf(dirname(tesseractSrc))}, tesseract.js-core ${await versionOf(tesseractCoreSrc)} (${TESSERACT_LANGS.join(', ')}, best_int)`,
   ];

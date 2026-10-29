@@ -87,6 +87,78 @@ export function createSettingsDialog(app) {
   }
 
   let piperMessage = ''; // переживает перерисовку диалога после загрузки голоса
+  let teraMessage = '';
+
+  /** TeraTTS: один пакет на все голоса — скачать, отменить, удалить. */
+  async function renderTeraVoices(container) {
+    const tera = app.tts?.tera;
+    if (!tera?.available) return;
+    const installed = await tera.isInstalled().catch(() => false);
+    const say = (text) => {
+      teraMessage = text;
+      // Диалог мог перерисоваться, пока шла загрузка: пишем в текущий.
+      for (const node of document.querySelectorAll('.tera-status')) node.textContent = text;
+    };
+    const refresh = async () => {
+      await app.tts.refreshVoices();
+      render();
+    };
+
+    let action;
+    if (tera.downloading) {
+      action = el('button', { type: 'button', onclick: () => tera.cancelDownload() }, 'Отменить загрузку');
+    } else if (installed) {
+      action = el(
+        'button',
+        {
+          type: 'button',
+          onclick: async () => {
+            await tera.removeVoice().catch((error) => say(error.message));
+            say('Голоса TeraTTS удалены');
+            await refresh();
+          },
+        },
+        'Удалить'
+      );
+    } else {
+      action = el(
+        'button',
+        {
+          type: 'button',
+          onclick: async () => {
+            const voiceId = (await tera.voices())[0].id;
+            const download = tera.downloadVoice(voiceId, (loaded, total, stage) => {
+              say(stage === 'index' ? 'Готовлю словарь ударений — это меньше минуты…' : `Скачано ${formatBytes(loaded)} из ${formatBytes(total)}`);
+            });
+            render(); // кнопка «Отменить»
+            try {
+              await download;
+              say('Голоса TeraTTS скачаны — выберите один на панели озвучки');
+              await updateSettings({ ttsVoiceUri: voiceId });
+            } catch (error) {
+              say(`Не скачалось: ${error.message || error}`);
+            }
+            await refresh();
+          },
+        },
+        `Скачать ≈${tera.sizeMb} МБ`
+      );
+    }
+
+    container.append(
+      el('span', { class: 'label' }, [
+        el('span', {}, `Нейроголоса TeraTTS${installed ? ' · скачаны' : ''}`),
+        el(
+          'span',
+          { class: 'hint' },
+          'Лучшее качество: ударения и «ё» по словарям и нейросетям, английские названия — по-английски. ' +
+            'Четыре голоса одним пакетом, скачивается один раз с HuggingFace. Во время чтения нужно около 1,5 ГБ памяти. ' +
+            'Модель — TeraTTSv2 от TeraSpace (OpenRAIL-M), ударения — RUAccent (MIT).'
+        ),
+      ]),
+      el('div', { class: 'piper-actions' }, [action, el('span', { class: 'hint tera-status' }, teraMessage)])
+    );
+  }
 
   /** Нейроголоса Piper: скачать, удалить, загрузить из файлов. */
   async function renderPiperVoices(container) {
@@ -187,6 +259,12 @@ export function createSettingsDialog(app) {
     for (const item of SETTINGS_SCHEMA) {
       if (item.group) {
         grid.append(el('div', { class: 'group-title' }, item.group));
+        continue;
+      }
+      if (item.custom === 'teraVoices') {
+        const section = el('div', { class: 'setting piper-voices tera-voices' });
+        grid.append(section);
+        renderTeraVoices(section);
         continue;
       }
       if (item.custom === 'piperVoices') {
