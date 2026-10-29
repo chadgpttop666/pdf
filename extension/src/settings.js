@@ -178,6 +178,17 @@ export const SETTINGS_SCHEMA = [
   // управление скачанными файлами.
   { custom: 'teraVoices' },
   {
+    key: 'teraQuality',
+    type: 'select',
+    def: 'fast',
+    options: [
+      ['fast', 'быстрое — вдвое меньше нагрузки'],
+      ['max', 'исходная модель'],
+    ],
+    label: 'TeraTTS: модель',
+    hint: 'Быстрая версия делается из скачанной один раз: веса в 8 бит и 6 шагов синтеза вместо 8. На слух почти не отличается, процессору и памяти — вдвое легче',
+  },
+  {
     key: 'teraThreads',
     type: 'select',
     def: 'auto',

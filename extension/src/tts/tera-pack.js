@@ -64,13 +64,26 @@ const OMOGRAPH_FILES = [
   ['omographTokenizerConfig', 'tokenizer_config.json'],
 ];
 
-/** Части, которые нужны воркерам (словарь ударений хранится уже индексом). */
-export const SYNTH_PARTS = ['textEncoder', 'duration', 'sampler'];
-export const VOCODER_PARTS = ['vocoder'];
+/** Части, которые нужны воркеру ударений (словарь хранится уже индексом). */
 export const ACCENT_PARTS = [
   'yoWords', 'yoHomographs', 'omographs', 'accentModel', 'accentVocab', 'accentConfig', 'yoModel', 'yoTokenizer',
   'yoTokenizerConfig', 'yoConfig', 'omographModel', 'omographTokenizer', 'omographTokenizerConfig', 'stressIndex',
 ];
+
+// Быстрая версия сэмплера и вокодера (onnx-quantize.js): делается из
+// скачанных моделей в браузере один раз и лежит рядом с ними. Версия растёт,
+// когда меняется способ — тогда быстрые модели пересобираются.
+export const FAST_VERSION = 1;
+export const FAST_RECIPES = {
+  sampler: { part: 'samplerFast', steps: 6 },
+  // Последние слои вокодера отвечают за мелкие детали звука — их не трогаем.
+  vocoder: { part: 'vocoderFast', exclude: ['head'] },
+  // Омографы: веса уже int8, но onnxruntime разворачивал их в fp32 (воркер
+  // ударений — 1,1 ГБ). Внимание оставляем во float: целочисленное меняло
+  // спорные решения чаще, а памяти почти не добавляет.
+  omographModel: { part: 'omographFast', int8Weights: true, exclude: ['attention'] },
+};
+const FAST_PART_NAMES = Object.values(FAST_RECIPES).map(({ part }) => part);
 
 const totalBytes = FILES.reduce((sum, [, , size]) => sum + size, 0) + Object.values(OMOGRAPH_SOURCES[0].sizes).reduce((a, b) => a + b, 0);
 export const PACK_SIZE_MB = Math.round(totalBytes / 1024 / 1024);
@@ -177,8 +190,15 @@ export async function loadParts(names) {
   return Object.fromEntries(entries);
 }
 
+/** Сохранить быструю версию моделей и отметить её в пакете. */
+export async function storeFastParts(blobs) {
+  for (const [name, blob] of Object.entries(blobs)) await library.putVoice({ id: PART(name), engine: 'tera-part', blob });
+  const record = await library.getVoice(TERA_PACK_ID);
+  await library.putVoice({ ...record, fast: FAST_VERSION });
+}
+
 export async function removePack() {
-  const names = [...new Set([...FILES.map(([name]) => name), ...OMOGRAPH_FILES.map(([name]) => name), 'stressIndex'])];
+  const names = [...new Set([...FILES.map(([name]) => name), ...OMOGRAPH_FILES.map(([name]) => name), 'stressIndex', ...FAST_PART_NAMES])];
   await library.deleteVoice(TERA_PACK_ID);
   await Promise.all(names.map((name) => library.deleteVoice(PART(name)).catch(() => {})));
 }

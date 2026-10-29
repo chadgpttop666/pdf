@@ -12,7 +12,11 @@ import { createWebSpeechProvider } from './web-speech.js';
 
 export function createEngines() {
   const piper = createPiperProvider();
-  const tera = createTeraProvider({ threads: () => getSetting('teraThreads'), rate: () => getSetting('ttsRate') });
+  const tera = createTeraProvider({
+    threads: () => getSetting('teraThreads'),
+    rate: () => getSetting('ttsRate'),
+    quality: () => getSetting('teraQuality'),
+  });
   let system = null;
 
   const systemEngine = () =>

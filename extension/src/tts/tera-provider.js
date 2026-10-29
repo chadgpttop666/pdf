@@ -20,15 +20,16 @@ import { planPieces } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
 import {
   ACCENT_PARTS,
+  FAST_RECIPES,
+  FAST_VERSION,
   PACK_SIZE_MB,
-  SYNTH_PARTS,
   TERA_VOICES,
-  VOCODER_PARTS,
   downloadPack,
   getPack,
   isPackInstalled,
   loadParts,
   removePack,
+  storeFastParts,
 } from './tera-pack.js';
 
 export const TERA_PREFIX = 'tera:';
@@ -54,8 +55,10 @@ function withPause(pcm, sampleRate, seconds) {
  * @param options.threads () => 'auto' | '1' | '2' | '3' — сколько сэмплеров
  *   держать (tera-threads.js)
  * @param options.rate () => скорость чтения: от неё зависит, сколько нужно
+ * @param options.quality () => 'fast' | 'max' — быстрая версия моделей
+ *   (onnx-quantize.js: вдвое меньше работы процессору) или исходная
  */
-export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = {}) {
+export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'fast' } = {}) {
   const player = createAudioPlayer();
   const cache = new Map(); // голос|текст → { pieces, fastStart }
   const waiting = new Map();
@@ -73,6 +76,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
   let lagging = false; // синтез уже не успевал за речью — нужен ещё сэмплер
+  let fast = false; // в памяти быстрая версия моделей
   let lastEnded = 0; // когда договорила предыдущая фраза
 
   function touch() {
@@ -130,30 +134,74 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
   }
 
   async function loadSampler(slot) {
-    const parts = await loadParts([...SYNTH_PARTS, 'indexer']);
-    const models = {};
-    for (const name of SYNTH_PARTS) models[name] = await parts[name].arrayBuffer();
+    const sampler = fast ? FAST_RECIPES.sampler.part : 'sampler';
+    const parts = await loadParts(['textEncoder', 'duration', sampler, 'indexer']);
+    const models = {
+      textEncoder: await parts.textEncoder.arrayBuffer(),
+      duration: await parts.duration.arrayBuffer(),
+      sampler: await parts[sampler].arrayBuffer(),
+    };
     const indexer = await parts.indexer.arrayBuffer();
     await call(slot, { type: 'load', models, indexer }, [...Object.values(models), indexer]);
     slot.loaded = true;
+  }
+
+  /** Файлы воркера ударений; у быстрой версии — облегчённая модель омографов. */
+  async function loadAccentParts() {
+    const omograph = FAST_RECIPES.omographModel.part;
+    const files = await loadParts(ACCENT_PARTS.map((name) => (fast && name === 'omographModel' ? omograph : name)));
+    if (fast) {
+      files.omographModel = files[omograph];
+      delete files[omograph];
+    }
+    return files;
+  }
+
+  /**
+   * Быстрая версия сэмплера, вокодера и модели омографов — из скачанных моделей, один раз
+   * (несколько секунд при первой загрузке после скачивания или обновления).
+   */
+  async function ensureFastParts() {
+    if (pack.fast === FAST_VERSION) return;
+    const slot = spawn('synth');
+    try {
+      const blobs = {};
+      for (const [name, { part, steps, exclude, int8Weights }] of Object.entries(FAST_RECIPES)) {
+        const model = await (await loadParts([name]))[name].arrayBuffer();
+        const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights }, [model]);
+        blobs[part] = new Blob([reply.model]);
+      }
+      await storeFastParts(blobs);
+      pack = await getPack();
+    } finally {
+      slot.worker.terminate();
+    }
   }
 
   async function ensureLoaded() {
     if (ready) return;
     loading ||= (async () => {
       pack = await getPack();
+      fast = quality() !== 'max';
+      if (fast) {
+        // Не получилось — читаем исходной моделью: медленнее, но читаем.
+        await ensureFastParts().catch((error) => {
+          console.warn('Быстрая версия TeraTTS не собралась', error);
+          fast = false;
+        });
+      }
       workers.accent = spawn('accent');
       workers.vocoder = spawn('synth');
       const first = addSampler();
       // На большой скорости нужен и второй сэмплер — грузим его вместе с
       // первым, чтобы и первая фраза синтезировалась в два потока.
       for (let i = 1; i < wantedSamplers(); i += 1) addSampler();
-      const vocoderParts = await loadParts(VOCODER_PARTS);
-      const vocoder = await vocoderParts.vocoder.arrayBuffer();
+      const vocoderPart = fast ? FAST_RECIPES.vocoder.part : 'vocoder';
+      const vocoder = await (await loadParts([vocoderPart]))[vocoderPart].arrayBuffer();
       await Promise.all([
         first,
         call(workers.vocoder, { type: 'load', models: { vocoder } }, [vocoder]),
-        loadParts(ACCENT_PARTS).then((files) => call(workers.accent, { type: 'load', files })),
+        loadAccentParts().then((files) => call(workers.accent, { type: 'load', files })),
       ]);
       ready = true;
     })();
@@ -166,7 +214,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
     }
   }
 
-  const wantedSamplers = () => samplerCount(threads(), { rate: rate(), lagging, cores: navigator.hardwareConcurrency || 4 });
+  const wantedSamplers = () => samplerCount(threads(), { rate: rate(), lagging, cores: navigator.hardwareConcurrency || 4, fast: quality() !== 'max' });
 
   function addSampler() {
     const slot = spawn('synth');
@@ -381,6 +429,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
     async speak(text, options = {}) {
       const myToken = token;
       touch();
+      // Скорость фразы — сразу, до загрузки и синтеза: если её поменяют в это
+      // время, новое значение (setRate) не должно затереться старым.
+      player.setRate(options.rate || 1);
       // Модели готовы — задание фразы ставится в очередь сразу, до любого
       // await: контроллер следом просит подготовить следующие фразы, и они
       // должны встать в очередь воркеров после этой, а не перед ней.
@@ -393,7 +444,6 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
       let entry = job(text, options, { forSpeak: true });
       speakingKey = key;
       liveVolume = options.volume ?? 1;
-      player.setRate(options.rate || 1);
       // Заготовки, отложенные на время загрузки, — после текущей фразы.
       for (const item of deferred.splice(0)) {
         if (item.epoch === epoch) readySeconds(job(item.text, item.options)).then(item.resolve, item.reject);
@@ -548,6 +598,14 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = 
       return player.blocked;
     },
     /** Для тестов: сколько воркеров запущено. */
+    /** Выгрузить модели — например, сменили качество: следующая фраза загрузит нужные. */
+    unload() {
+      shutdown();
+    },
+    /** Для проверок: в памяти быстрая версия моделей. */
+    get fast() {
+      return ready && fast;
+    },
     /** Сколько сэмплеров сейчас работает или грузится. */
     get samplers() {
       return workers.samplers.length;

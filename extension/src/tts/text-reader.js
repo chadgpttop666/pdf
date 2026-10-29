@@ -8,6 +8,8 @@ import { bufferBudget, bufferedSeconds, prepareAhead } from './buffer.js';
 
 const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
 const BUSY_DELAY_MS = 350;
+// Столько фраз подряд не синтезировалось — это уже не одна странная фраза, а сбой.
+const MAX_FAILED_SENTENCES = 3;
 
 /**
  * @param engines движки озвучки (engines.js)
@@ -71,6 +73,7 @@ export function createTextReader(engines, hooks = {}) {
   async function loop() {
     const mine = (generation += 1);
     setState('speaking');
+    let failed = 0;
     try {
       while (state !== 'idle' && mine === generation) {
         if (index >= sentences.length || index > until) {
@@ -95,7 +98,21 @@ export function createTextReader(engines, hooks = {}) {
           onBoundary: (event) => hooks.onWord?.(current, event.charIndex, event.charLength),
         });
         prefetch(current + 1);
-        const result = await speaking;
+        let result;
+        try {
+          result = await speaking;
+          failed = 0;
+        } catch (error) {
+          // Одна фраза не синтезировалась — пропускаем её, а не обрываем чтение.
+          clearTimeout(busyTimer);
+          if (mine !== generation || state === 'idle') return;
+          failed += 1;
+          if (failed >= MAX_FAILED_SENTENCES) throw error;
+          console.warn('Фраза не озвучилась — пропускаю', error);
+          status('Фразу не удалось озвучить — пропускаю');
+          index = current + 1;
+          continue;
+        }
         clearTimeout(busyTimer);
         if (mine !== generation || state === 'idle' || result === 'cancelled') return;
         index = current + 1;
@@ -135,6 +152,8 @@ export function createTextReader(engines, hooks = {}) {
     /** Дописать предложения в конец: идущее чтение не прерывается и дойдёт до них. */
     append(list) {
       sentences = sentences.concat(list);
+      // Новый кусок начинает синтезироваться сразу, а не со следующей фразы.
+      if (state !== 'idle') prefetch(index + 1);
     },
     /** Читать с предложения from; до to включительно (выделенный кусок) или до конца. */
     start(from = index, to = Infinity) {
@@ -157,6 +176,8 @@ export function createTextReader(engines, hooks = {}) {
       provider.pause();
       setState('paused');
       status('Пауза');
+      // На паузе запас копится — после неё чтение идёт без ожидания.
+      prefetch(index + 1);
     },
     resume() {
       if (state !== 'paused') return;

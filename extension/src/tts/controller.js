@@ -20,6 +20,8 @@ const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
 const PREFETCH_PAGES = 30;
 // Через столько без звука показываем, что нейроголос готовит фразу.
 const BUSY_DELAY_MS = 350;
+// Столько фраз подряд не синтезировалось — это уже не одна странная фраза, а сбой.
+const MAX_FAILED_SENTENCES = 3;
 
 export function createTts(app) {
   const bar = $('ttsBar');
@@ -353,6 +355,7 @@ export function createTts(app) {
   async function loop() {
     const myGeneration = ++generation;
     spokenInRun = 0;
+    let failed = 0;
     clearInterval(bufferTimer);
     bufferTimer = setInterval(showBuffer, 1000);
     state = 'speaking';
@@ -454,7 +457,22 @@ export function createTts(app) {
         });
         // Заготовки — после текущей фразы: в очереди синтеза она первая.
         prefetchAhead(utterance.next);
-        const result = await speaking;
+        let result;
+        try {
+          result = await speaking;
+          failed = 0;
+        } catch (error) {
+          // Одна фраза не синтезировалась — пропускаем её, а не обрываем чтение.
+          if (myGeneration !== generation || state === 'idle') return;
+          failed += 1;
+          if (failed >= MAX_FAILED_SENTENCES) throw error;
+          console.warn('Фраза не озвучилась — пропускаю', error);
+          voiceStarted();
+          stopHeard();
+          app.hud.show('Фразу не удалось озвучить — пропускаю', { duration: 3000 });
+          position = { ...utterance.next };
+          continue;
+        }
         voiceStarted();
         spokenInRun += 1;
         stopHeard();
@@ -741,6 +759,11 @@ export function createTts(app) {
       index = buildIndex(index.pdfDocument);
     }
     if ('ttsBufferMinutes' in changed && state !== 'idle') prefetchAhead(upcoming);
+    // Другая версия моделей TeraTTS: выгружаем, следующая фраза загрузит нужную.
+    if ('teraQuality' in changed) {
+      if (provider === tera) finish();
+      tera.unload();
+    }
     if ('ttsProvider' in changed || 'ttsHttpUrl' in changed) {
       finish();
       engines.resetSystem();

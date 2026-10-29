@@ -292,6 +292,9 @@ export function createPiperProvider() {
      */
     async speak(text, options = {}) {
       const myToken = token;
+      // Скорость фразы — сразу, до синтеза: если её поменяют, пока фраза
+      // синтезируется, новое значение (setRate) не должно затереться старым.
+      player.setRate(options.rate || 1);
       const { text: spoken, segments } = spokenForm(text, options.voiceId);
       const key = keyFor(spoken, options);
       speakingKey = key;
@@ -306,7 +309,6 @@ export function createPiperProvider() {
       if (myToken !== token) return 'cancelled';
       const result = await player.play(audio.pcm, audio.sampleRate, {
         volume: options.volume,
-        rate: options.rate || 1,
         timings: options.onBoundary ? estimateWordTimings(text, segments) : [],
         onBoundary: options.onBoundary,
         onStart: options.onStart,

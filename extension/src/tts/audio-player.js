@@ -137,19 +137,19 @@ export function createAudioPlayer() {
   }
 
   /**
-   * @param options.rate скорость; по умолчанию — заданная setRate
+   * Скорость — заданная setRate: провайдер ставит её в начале фразы, ещё до
+   * синтеза, чтобы смена скорости во время синтеза не затиралась.
    * @param timings [{ at: доля длительности 0…1, charIndex, charLength }]
    * @param isCancelled проверка перед стартом: фразу могли отменить, пока ждали контекст
    * @returns {Promise<'ended'|'cancelled'>}
    */
-  async function play(pcm, sampleRate, { volume = 1, rate: phraseRate, timings = [], onBoundary, onStart, isCancelled = () => false } = {}) {
+  async function play(pcm, sampleRate, { volume = 1, timings = [], onBoundary, onStart, isCancelled = () => false } = {}) {
     const ctx = audioContext();
     // Поставили на паузу, пока фраза синтезировалась, — начнём её на паузе.
     if (paused) await ctx.suspend();
     else if (ctx.state === 'suspended') ctx.resume();
     if (isCancelled()) return 'cancelled';
     if (!pcm.length) return 'ended';
-    if (phraseRate) rate = clampRate(phraseRate);
     stop('cancelled');
 
     const gain = ctx.createGain();

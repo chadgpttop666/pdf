@@ -4,7 +4,9 @@
 // озвучивает английский голос системы.
 
 // Латинское слово: буквы, апостроф, дефис, точка внутри («U.S.»), «&».
-const LATIN_RUN = /[A-Za-z][A-Za-z'’\-&.]*(?:[  ]+[A-Za-z][A-Za-z'’\-&.]*)*/g;
+// Буквы — любые латинские, с диакритикой тоже: иначе «Müller» рвался на
+// «Mü» русским голосом и «ller» английским.
+const LATIN_RUN = /\p{Script=Latin}[\p{Script=Latin}'’\-&.]*(?:[  ]+\p{Script=Latin}[\p{Script=Latin}'’\-&.]*)*/gu;
 
 /**
  * @returns {{ start: number, end: number, lang: 'ru'|'en' }[]} куски подряд, покрывают весь текст
@@ -13,7 +15,7 @@ export function splitLanguageRuns(text) {
   const english = [];
   for (const match of text.matchAll(LATIN_RUN)) {
     // Одиночные буквы («1992a», «x») — не английский текст.
-    if (!/[A-Za-z]{2}/.test(match[0])) continue;
+    if (!/\p{Script=Latin}{2}/u.test(match[0])) continue;
     english.push({ start: match.index, end: match.index + match[0].length });
   }
 

@@ -28,4 +28,10 @@ describe('сколько потоков синтеза TeraTTS', () => {
     assert.equal(samplerCount('3', { rate: 1, cores: 2 }), 3);
     assert.equal(samplerCount('мусор'), 1);
   });
+
+  it('быстрой модели одного сэмплера хватает дольше: второй — от 1,8×', () => {
+    assert.equal(samplerCount('auto', { rate: 1.5, cores: 4, fast: true }), 1);
+    assert.equal(samplerCount('auto', { rate: 1.8, cores: 4, fast: true }), 2);
+    assert.equal(samplerCount('auto', { rate: 1, lagging: true, cores: 4, fast: true }), 2);
+  });
 });

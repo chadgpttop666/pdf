@@ -38,4 +38,14 @@ describe('русский текст и английские вставки', () 
     assert.equal(runs.at(-1).end, text.length);
     runs.slice(1).forEach((run, i) => assert.equal(run.start, runs[i].end));
   });
+
+  it('латиница с диакритикой — целым словом, а не обрывками', () => {
+    const text = 'Müller, Gödel и Žižek';
+    const runs = splitLanguageRuns(text).map(({ start, end, lang }) => [lang, text.slice(start, end)]);
+    assert.deepEqual(runs, [
+      ['en', 'Müller, Gödel'],
+      ['ru', ' и '],
+      ['en', 'Žižek'],
+    ]);
+  });
 });

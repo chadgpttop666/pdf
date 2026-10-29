@@ -5,6 +5,7 @@
 // какие модели ему прислали, то он и умеет.
 
 import * as ort from '../../vendor/ort/ort.wasm.min.mjs';
+import { quantizeModel } from './onnx-quantize.js';
 import { encodeText, keepSupported, modelText, voicedRange } from './tera-text.js';
 
 ort.env.wasm.wasmPaths = new URL('../../vendor/ort/', import.meta.url).href;
@@ -115,6 +116,17 @@ self.onmessage = ({ data: message }) => {
       if (message.type === 'load') {
         await load(message);
         self.postMessage({ id: message.id, type: 'loaded' });
+        return;
+      }
+      // Быстрая версия модели (onnx-quantize.js) — один раз, после скачивания.
+      if (message.type === 'quantize') {
+        const exclude = message.exclude ?? [];
+        const { model } = quantizeModel(new Uint8Array(message.model), {
+          steps: message.steps ?? null,
+          int8Weights: Boolean(message.int8Weights),
+          exclude: (name) => exclude.some((part) => name.includes(part)),
+        });
+        self.postMessage({ id: message.id, type: 'quantized', model: model.buffer }, [model.buffer]);
         return;
       }
       if (message.epoch < currentEpoch) {

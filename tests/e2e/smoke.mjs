@@ -1128,12 +1128,18 @@ try {
     state: window.pdfReaderApp.tts.state,
     position: window.pdfReaderApp.tts.position,
     badge: !document.getElementById('ttsEngine').hidden,
+    fast: window.pdfReaderApp.tts.tera.fast,
   }));
   check(
     'TeraTTS читает фразу за фразой с подсветкой слов',
     teraRun.state === 'speaking' && teraWord && teraRun.badge,
     `${JSON.stringify(teraStart)} → ${JSON.stringify(teraRun.position)}, слово: ${teraWord}`
   );
+  const fastParts = await page.evaluate(async () => {
+    const library = await import('/src/library.js');
+    return Promise.all(['samplerFast', 'vocoderFast', 'omographFast'].map(async (name) => Boolean((await library.getVoice(`teratts-v2:${name}`))?.blob)));
+  });
+  check('TeraTTS: быстрая версия моделей собрана из скачанных и загружена', teraRun.fast && fastParts.every(Boolean), JSON.stringify({ fast: teraRun.fast, fastParts }));
   // Громкость: нейроголос меняет её сразу, посреди фразы.
   const volumeChange = await page.evaluate(async () => {
     const { tera } = window.pdfReaderApp.tts;
@@ -1168,12 +1174,13 @@ try {
   await page.waitForFunction(() => /Скачать/.test(document.querySelector('.tera-voices button')?.textContent || ''), null, { timeout: 10000 });
   const teraRemoved = await page.evaluate(async () => ({
     installed: await window.pdfReaderApp.tts.tera.isInstalled(),
+    fastLeft: (await Promise.all(['samplerFast', 'vocoderFast', 'omographFast'].map(async (name) => (await import('/src/library.js')).getVoice(`teratts-v2:${name}`)))).filter(Boolean).length,
     workers: window.pdfReaderApp.tts.tera.workers,
     offered: [...document.querySelectorAll('#ttsVoice option')].map((option) => option.textContent).filter((label) => label.includes('TeraTTS')),
   }));
   check(
     'TeraTTS: пакет удаляется, память освобождается',
-    !teraRemoved.installed && teraRemoved.workers === 0 && teraRemoved.offered.length === 1 && /скачать/.test(teraRemoved.offered[0]),
+    !teraRemoved.installed && teraRemoved.fastLeft === 0 && teraRemoved.workers === 0 && teraRemoved.offered.length === 1 && /скачать/.test(teraRemoved.offered[0]),
     JSON.stringify(teraRemoved)
   );
   await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());

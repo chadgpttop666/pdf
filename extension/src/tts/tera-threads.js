@@ -12,11 +12,13 @@
  * @param rate скорость чтения
  * @param lagging синтез уже не успевал за речью
  * @param cores число ядер процессора
+ * @param fast быстрая версия моделей: ей одного сэмплера хватает дольше
  */
-export function samplerCount(choice, { rate = 1, lagging = false, cores = 4 } = {}) {
+export function samplerCount(choice, { rate = 1, lagging = false, cores = 4, fast = false } = {}) {
   if (choice !== 'auto') return Math.min(3, Math.max(1, Math.round(Number(choice)) || 1));
-  let wanted = rate >= 1.3 || lagging ? 2 : 1;
-  if (rate >= 2.2 && cores >= 8) wanted = 3;
+  const [second, third] = fast ? [1.8, 2.6] : [1.3, 2.2];
+  let wanted = rate >= second || lagging ? 2 : 1;
+  if (rate >= third && cores >= 8) wanted = 3;
   // Ещё по ядру нужно вокодеру, ударениям и самой странице.
   return Math.max(1, Math.min(wanted, cores - 2));
 }
