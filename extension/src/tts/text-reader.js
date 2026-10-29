@@ -132,6 +132,10 @@ export function createTextReader(engines, hooks = {}) {
       index = 0;
       until = Infinity;
     },
+    /** Дописать предложения в конец: идущее чтение не прерывается и дойдёт до них. */
+    append(list) {
+      sentences = sentences.concat(list);
+    },
     /** Читать с предложения from; до to включительно (выделенный кусок) или до конца. */
     start(from = index, to = Infinity) {
       if (!sentences.length) return;

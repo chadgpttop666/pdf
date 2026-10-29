@@ -153,8 +153,8 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
 //
 // Читаем прямо на сайте: content/speak-overlay.js подсвечивает читаемую
 // фразу и слово на самой странице и ставит в углу плашку управления
-// (speak-pill.html). Сочетание клавиш без нового выделения ставит идущее
-// чтение на паузу и продолжает его.
+// (speak-pill.html). Следующее выделение встаёт в очередь за предыдущим.
+// Сочетание клавиш без нового выделения ставит чтение на паузу и продолжает.
 //
 // Куда расширениям нельзя (about:, магазин дополнений, режим чтения), текст
 // открывается в маленьком окне speak.html: он кладётся в storage.session
@@ -162,7 +162,8 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
 
 const SPEAK_KEY_PREFIX = 'speak:';
 const SPEAK_CSS = `
-::highlight(pdf-reader-speak-sentence) { background-color: rgb(255 214 0 / 0.28); }
+::highlight(pdf-reader-speak-sentence) { background-color: rgb(255 214 0 / 0.32); }
+::highlight(pdf-reader-speak-queue) { background-color: rgb(255 214 0 / 0.16); }
 ::highlight(pdf-reader-speak-word) { background-color: rgb(255 170 0 / 0.65); color: inherit; }
 `;
 

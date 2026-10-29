@@ -4,6 +4,9 @@
 // секрет, что в адресе плашки. Обратно уходят места читаемой фразы и слова
 // — подсвечивает их сама страница, — размер плашки и её перетаскивание.
 //
+// Куски выделенного текста приходят очередью: каждый следующий дописывается
+// в конец, чтение не прерывается.
+//
 // Голоса, скорость, громкость и запас подготовки — общие с читалкой PDF.
 
 import { $, isTypingTarget, on, wireSteppers } from './dom.js';
@@ -18,7 +21,7 @@ import { hydrateIcons, setIcon } from './ui/icons.js';
 const app = $('app');
 let port = null;
 let ready = false;
-let pending = null; // текст, пришедший раньше, чем загрузились настройки
+let pending = []; // куски, пришедшие раньше, чем загрузились настройки
 let sentences = [];
 let language = 'ru';
 // Обычный ход чтения видно по счётчику на плашке — в строке состояния он лишний.
@@ -31,7 +34,7 @@ const reader = createTextReader(engines, {
   onSentence(index) {
     const sentence = sentences[index];
     if (sentence) send({ type: 'sentence', start: sentence.start, end: sentence.end });
-    $('pillCount').textContent = `${index + 1} / ${sentences.length}`;
+    showCount(index);
   },
   onWord(index, start, length) {
     const sentence = sentences[index];
@@ -66,25 +69,41 @@ addEventListener('message', (event) => {
 });
 
 function fromPage(message) {
-  if (message?.type === 'text') {
-    if (ready) read(message.text);
-    else pending = message.text;
+  if (message?.type === 'append') {
+    if (ready) add(message.text, message.offset);
+    else pending.push(message);
+  } else if (message?.type === 'selection') {
+    $('pillAdd').hidden = !message.available;
   } else if (message?.type === 'toggle') {
     if (reader.state === 'idle') reader.start(reader.index);
     else reader.toggle();
   }
 }
 
-function read(text) {
-  language = detectLanguage(text);
-  sentences = sentencesInText(text, language);
-  reader.load(sentences.map((sentence) => sentence.text));
-  $('pillCount').textContent = sentences.length ? `1 / ${sentences.length}` : '';
-  if (!sentences.length) {
-    setStatus('В выделении нет текста для чтения');
+const showCount = (index = reader.index) => {
+  $('pillCount').textContent = sentences.length ? `${Math.min(index + 1, sentences.length)} / ${sentences.length}` : '';
+};
+
+/** Кусок выделенного — в конец очереди; offset — его место в тексте страницы. */
+function add(text, offset) {
+  const lang = detectLanguage(text);
+  if (!sentences.length) language = lang;
+  const added = sentencesInText(text, lang).map((sentence) => ({ ...sentence, start: sentence.start + offset, end: sentence.end + offset }));
+  if (!added.length) {
+    if (!sentences.length) setStatus('В выделении нет текста для чтения');
     return;
   }
-  reader.start(0);
+  const first = sentences.length;
+  sentences = sentences.concat(added);
+  reader.append(added.map((sentence) => sentence.text));
+  // Чтение уже кончилось или ещё не начиналось — начинаем с нового куска.
+  if (reader.state === 'idle') start(first);
+  else showCount();
+}
+
+function start(from) {
+  reader.start(from);
+  showCount(from);
   // Браузер может не дать звуку начаться без нажатия в самой плашке.
   setTimeout(() => {
     if (!reader.audioBlocked) return;
@@ -115,6 +134,7 @@ function close() {
 }
 
 on($('speakPlay'), 'click', play);
+on($('pillAdd'), 'click', () => send({ type: 'add-selection' }));
 on($('speakPrev'), 'click', () => reader.previous());
 on($('speakNext'), 'click', () => reader.next());
 on($('pillClose'), 'click', close);
@@ -204,8 +224,7 @@ async function main() {
   setInterval(showBuffer, 1000);
   await fillVoices();
   ready = true;
-  if (pending !== null) read(pending);
-  pending = null;
+  for (const message of pending.splice(0)) add(message.text, message.offset);
   // Для проверок.
   window.speakPill = {
     reader,

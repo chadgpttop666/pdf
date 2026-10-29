@@ -1279,6 +1279,41 @@ try {
   await pill.waitForFunction(() => window.spokenSentences.length >= 2, null, { timeout: 10000 });
   await site.waitForFunction(() => [...(CSS.highlights.get('pdf-reader-speak-sentence') ?? [])].map(String).join('').includes('Первое'), null, { timeout: 5000 });
   check('на сайте: подсветка идёт за чтением — фраза внутри абзаца с курсивом', true);
+  // Второй кусок — после рекламы, саму рекламу не выделяем: он встаёт в очередь.
+  const selectSecond = () =>
+    site.evaluate(() => {
+      const range = new Range();
+      range.selectNodeContents(document.getElementById('p3'));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    });
+  await selectSecond();
+  await pill.waitForFunction(() => !document.getElementById('pillAdd').hidden, null, { timeout: 3000 });
+  await pill.click('#pillAdd');
+  await site.waitForFunction(() => CSS.highlights.has('pdf-reader-speak-queue'), null, { timeout: 3000 });
+  const queued = await site.evaluate(() => ({
+    queue: [...(CSS.highlights.get('pdf-reader-speak-queue') ?? [])].map(String),
+    selection: String(getSelection()),
+  }));
+  const queuedInPill = await pill.evaluate(() => ({
+    sentences: window.speakPill.sentences.map((sentence) => sentence.text),
+    state: window.speakPill.reader.state,
+    add: !document.getElementById('pillAdd').hidden,
+  }));
+  check(
+    'на сайте: второе выделение — «＋» на плашке, кусок встал в очередь, чтение не прервалось, очередь видна на странице',
+    queuedInPill.sentences.length === 6 &&
+      queuedInPill.sentences[5] === 'Второй кусок, выделенный после рекламы.' &&
+      queuedInPill.state === 'speaking' &&
+      !queuedInPill.add &&
+      queued.selection === '' &&
+      queued.queue.some((text) => text.includes('Второй кусок')),
+    JSON.stringify({ ...queued, ...queuedInPill })
+  );
+  await selectSecond();
+  const duplicate = await site.evaluate(() => window.__pdfReaderSpeak.fromSelection());
+  const afterDuplicate = await pill.evaluate(() => window.speakPill.sentences.length);
+  check('на сайте: тот же кусок второй раз в очередь не встаёт', duplicate && afterDuplicate === 6, `${duplicate}, ${afterDuplicate}`);
   await site.evaluate(() => window.__pdfReaderSpeak.toggle());
   const sitePaused = await pill.evaluate(() => window.speakPill.reader.state);
   await site.evaluate(() => window.__pdfReaderSpeak.toggle());
@@ -1291,6 +1326,13 @@ try {
   await site.waitForTimeout(300);
   const withMenu = await site.evaluate(() => Math.round(document.querySelector('pdf-reader-speak').getBoundingClientRect().height));
   check('на сайте: скорость на плашке, меню голоса — плашка растёт вверх', pillRate === '1.1×' && withMenu > onSite.pill.height + 40, `${pillRate}, ${onSite.pill.height} → ${withMenu}`);
+  await pill.waitForFunction(() => window.spokenSentences.includes('Второй кусок, выделенный после рекламы.'), null, { timeout: 20000 });
+  const order = await pill.evaluate(() => [...window.spokenSentences]);
+  check(
+    'на сайте: куски прочитаны по очереди, реклама между ними — нет',
+    order.lastIndexOf('и вторая строка') < order.indexOf('Второй кусок, выделенный после рекламы.') && !order.some((text) => /Подпишитесь|Хвост статьи/.test(text)),
+    JSON.stringify(order)
+  );
   await pill.click('#pillClose');
   await site.waitForTimeout(300);
   const closed = await site.evaluate(() => ({

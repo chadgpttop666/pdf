@@ -89,6 +89,10 @@ button.icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 button.stepper { width: 26px; height: 26px; }
 button.stepper .icon-svg { width: 14px; height: 14px; }
 button.play { position: relative; }
+/* «＋» — на странице выделен ещё кусок: добавить его в очередь. */
+button.add { background: var(--accent); color: var(--bg); }
+button.add:hover { background: color-mix(in srgb, var(--accent) 85%, var(--fg)); }
+button.icon[hidden] { display: none; }
 button.play .icon-svg { width: 20px; height: 20px; }
 
 .pill-sep {

@@ -10,6 +10,10 @@
 // на странице. Плашка и страница говорят через MessageChannel; канал плашка
 // принимает только с секретом из своего адреса, его странице не узнать.
 //
+// Выделения копятся очередью: следующий кусок (мусор между ними можно не
+// выделять) читается после предыдущего, а ещё не прочитанное слабо
+// подсвечено на странице.
+//
 // Обычный (не модульный) скрипт: так его можно вставить в любую страницу.
 
 (() => {
@@ -17,6 +21,7 @@
 
   const SENTENCE = 'pdf-reader-speak-sentence';
   const WORD = 'pdf-reader-speak-word';
+  const QUEUE = 'pdf-reader-speak-queue';
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
   const INLINE_DISPLAY = /^(inline|contents|ruby)/;
   // Пользователь сам листает — некоторое время страницу за чтением не тянем.
@@ -24,8 +29,13 @@
   const PILL_WIDTH = 380;
   const PILL_HEIGHT = 56;
 
-  let session = null; // { host, frame, port, map }
+  // { host, frame, port, text, map, pieces: [{ start, end, first, last }], readTo }
+  let session = null;
   let lastUserScroll = 0;
+  // Последнее непустое выделение на странице: щелчок по «＋» в плашке может
+  // его снять раньше, чем плашка попросит добавить кусок.
+  let remembered = [];
+  let selectionTimer = 0;
 
   const frameUrl = () => globalThis.__pdfReaderSpeakFrameUrl || browser.runtime.getURL('speak-pill.html');
 
@@ -36,11 +46,16 @@
 
   // ── Выделенный текст с картой символов ────────────────────────────────
 
+  const hasText = (text) => /[\p{L}\p{N}]/u.test(text);
+  const rangesOf = (selection) =>
+    Array.from({ length: selection?.rangeCount ?? 0 }, (_, i) => selection.getRangeAt(i)).filter((range) => !range.collapsed);
+
   /**
+   * @param ranges выделенные диапазоны (в Firefox их может быть несколько — с Ctrl)
    * @returns {{ text: string, map: Array<[Text, number]> }} абзацы — через
    *   '\n', пробелы схлопнуты; map[i] — узел и место i-го символа
    */
-  function collect(selection) {
+  function collect(ranges) {
     const chars = [];
     const map = [];
     const visibility = new Map();
@@ -67,8 +82,7 @@
       space = false;
     };
 
-    for (let r = 0; r < selection.rangeCount; r += 1) {
-      const range = selection.getRangeAt(r);
+    for (const [r, range] of ranges.entries()) {
       if (r > 0) newline();
       const root = range.commonAncestorContainer;
       const nodes = [];
@@ -98,7 +112,7 @@
         const to = node === range.endContainer ? range.endOffset : node.data.length;
         for (let i = from; i < to; i += 1) {
           const char = node.data[i];
-          if (char === '­' || char === '​') continue; // мягкий перенос, невидимый пробел
+          if (char === '\u00ad' || char === '\u200b') continue; // мягкий перенос, невидимый пробел
           if (/\s/.test(char)) {
             space = true;
             continue;
@@ -146,6 +160,64 @@
   function clearHighlights() {
     CSS.highlights?.delete(SENTENCE);
     CSS.highlights?.delete(WORD);
+    CSS.highlights?.delete(QUEUE);
+  }
+
+  /** Слабая подсветка того, что ещё будет прочитано, — правее звучащей фразы. */
+  function showQueue() {
+    if (!globalThis.CSS?.highlights || !session) return;
+    const ranges = [];
+    for (const piece of session.pieces) {
+      let start = Math.max(piece.start, session.readTo);
+      while (start < piece.end && /\s/.test(session.text[start])) start += 1;
+      const range = start < piece.end ? rangeFor(start, piece.end) : null;
+      if (range) ranges.push(range);
+    }
+    if (ranges.length) CSS.highlights.set(QUEUE, new Highlight(...ranges));
+    else CSS.highlights.delete(QUEUE);
+  }
+
+  /**
+   * Добавить кусок в очередь (первый — начать чтение).
+   * @returns {boolean} кусок прочитается: новый или уже стоит в очереди
+   */
+  function add(ranges) {
+    const { text, map } = collect(ranges);
+    if (!hasText(text)) return false;
+    session ??= createPill();
+    const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+    if (session.pieces.some((piece) => same(piece.first, map[0]) && same(piece.last, map.at(-1)))) return true;
+    const offset = session.text ? session.text.length + 1 : 0;
+    if (session.text) {
+      session.text += '\n';
+      session.map.push(session.map.at(-1));
+    }
+    session.text += text;
+    session.map = session.map.concat(map); // без push(...map): длинное выделение переполнило бы стек
+    session.pieces.push({ start: offset, end: offset + text.length, first: map[0], last: map.at(-1) });
+    session.port.postMessage({ type: 'append', text, offset, title: document.title });
+    showQueue();
+    return true;
+  }
+
+  /** Выделение поменялось — плашка показывает или прячет «＋». */
+  function onSelectionChange() {
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(() => {
+      if (!session) return;
+      const selection = getSelection();
+      const ranges = rangesOf(selection);
+      if (ranges.length && hasText(String(selection))) remembered = ranges.map((range) => range.cloneRange());
+      // Фокус ушёл в плашку — выделение могло сняться щелчком по «＋»: помним его.
+      else if (document.activeElement !== session.host) remembered = [];
+      session.port.postMessage({ type: 'selection', available: remembered.length > 0 });
+    }, 150);
+  }
+
+  function forgetSelection() {
+    getSelection()?.removeAllRanges(); // синее выделение закрывало бы подсветку
+    remembered = [];
+    session?.port.postMessage({ type: 'selection', available: false });
   }
 
   /** Фраза ушла за край окна — подтянуть к ней страницу, если читатель сам не листает. */
@@ -197,7 +269,8 @@
     });
     channel.port1.onmessage = ({ data }) => fromPill(data);
     for (const type of ['wheel', 'touchmove', 'keydown']) addEventListener(type, noteUserScroll, { passive: true, capture: true });
-    return { host, frame, port: channel.port1, map: [] };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return { host, frame, port: channel.port1, text: '', map: [], pieces: [], readTo: 0 };
   }
 
   /** Плашку перетаскивают: дальше она стоит там, куда её поставили. */
@@ -224,6 +297,9 @@
     session.port.close();
     session.host.remove();
     for (const type of ['wheel', 'touchmove', 'keydown']) removeEventListener(type, noteUserScroll, { capture: true });
+    document.removeEventListener('selectionchange', onSelectionChange);
+    clearTimeout(selectionTimer);
+    remembered = [];
     session = null;
   }
 
@@ -234,6 +310,8 @@
         CSS.highlights?.delete(WORD);
         const range = highlight(SENTENCE, message.start, message.end);
         if (range) reveal(range);
+        session.readTo = message.end;
+        showQueue();
         break;
       }
       case 'word':
@@ -251,6 +329,13 @@
       case 'close':
         close();
         break;
+      case 'add-selection': {
+        const live = rangesOf(getSelection());
+        const ranges = live.length && hasText(String(getSelection())) ? live : remembered;
+        if (ranges.length) add(ranges);
+        forgetSelection();
+        break;
+      }
       default:
     }
   }
@@ -258,18 +343,14 @@
   // ── Что вызывает фоновая страница ─────────────────────────────────────
 
   globalThis.__pdfReaderSpeak = {
-    /** Прочитать текущее выделение. false — выделения нет. */
+    /** Прочитать текущее выделение — первым или следом за уже выделенным. false — выделения нет. */
     fromSelection() {
       const selection = getSelection();
-      if (!selection || selection.isCollapsed) return false;
-      const { text, map } = collect(selection);
-      if (!/[\p{L}\p{N}]/u.test(text)) return false;
-      selection.removeAllRanges(); // синее выделение закрывало бы подсветку
-      clearHighlights();
-      session ??= createPill();
-      session.map = map;
-      session.port.postMessage({ type: 'text', text, title: document.title });
-      return true;
+      const ranges = rangesOf(selection);
+      if (!ranges.length || !hasText(String(selection))) return false;
+      const added = add(ranges);
+      forgetSelection();
+      return added;
     },
     /** Пауза или продолжение. false — здесь ничего не читается. */
     toggle() {
