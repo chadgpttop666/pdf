@@ -241,11 +241,17 @@ export function createTts(app) {
       busyTimer = setTimeout(() => {
         show('Нейроголос готовит фразу…');
         // Посреди чтения фраза не готова — синтез не успевает за речью.
-        if (provider === tera && spokenInRun > 1 && !getSetting('teraSecondThread') && (lags += 1) >= 2 && !lagHintShown) {
+        // При «сами» TeraTTS на первую же нехватку добавляет поток — подсказку
+        // показываем, только если и это не помогло.
+        const single = getSetting('teraThreads') === '1';
+        if (provider === tera && spokenInRun > 1 && (lags += 1) >= (single ? 2 : 4) && !lagHintShown) {
           lagHintShown = true;
-          // Звук синтезируется на 1×: на 2× синтез должен успевать вдвое быстрее.
-          const slower = getSetting('ttsRate') > 1.3 ? ' или уменьшите скорость' : '';
-          app.hud.show(`TeraTTS не успевает на этом компьютере — включите «TeraTTS: второй поток синтеза» в настройках${slower}`, { duration: 8000 });
+          app.hud.show(
+            single
+              ? 'TeraTTS не успевает на этом компьютере — в настройках «TeraTTS: потоки синтеза» выберите «сами» или «два»'
+              : 'TeraTTS не успевает на этой скорости — уменьшите её или поставьте на паузу: запас наберётся',
+            { duration: 8000 }
+          );
         }
       }, BUSY_DELAY_MS);
     }

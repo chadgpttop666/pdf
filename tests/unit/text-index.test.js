@@ -98,6 +98,29 @@ describe('buildPageText', () => {
     assert.equal(text, 'первый второй');
   });
 
+  it('слово за словом в плотной строке «по ширине» — с пробелами', () => {
+    // Как в скане с чужим распознаванием: каждое слово — отдельный кусок без
+    // пробела, зазоры 0,12–0,15 кегля, а одно слово ещё и разрезано вплотную.
+    const words = ['Современная', 'ситуация', 'связана', 'с', 'фундамен', 'тальными'];
+    let x = 72;
+    const items = words.map((word, i) => {
+      const width = word.length * 5.5;
+      const piece = item(word, { x, y: 700, width, hasEOL: false });
+      x += width + (i === 4 ? 0 : i % 2 ? 1.3 : 1.6);
+      return piece;
+    });
+    assert.equal(buildPageText(items).text, 'Современная ситуация связана с фундаментальными');
+  });
+
+  it('обычная строка из длинных кусков: узкий зазор — не пробел', () => {
+    const { text } = buildPageText([
+      item('Длинный кусок текста ', { x: 72, y: 700, width: 120, hasEOL: false }),
+      item('кур', { x: 192, y: 700, width: 15, hasEOL: false }),
+      item('сив', { x: 208.2, y: 700, hasEOL: false }),
+    ]);
+    assert.equal(text, 'Длинный кусок текста курсив');
+  });
+
   it('не разрывает слово, разложенное на несколько кусков вплотную', () => {
     const { text } = buildPageText([
       item('сло', { x: 72, y: 700, width: 20, hasEOL: false }),

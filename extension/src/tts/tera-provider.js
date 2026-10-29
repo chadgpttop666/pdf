@@ -17,6 +17,7 @@ import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
 import { estimateWordTimings } from './piper-math.js';
 import { planPieces } from './tera-text.js';
+import { samplerCount } from './tera-threads.js';
 import {
   ACCENT_PARTS,
   PACK_SIZE_MB,
@@ -37,6 +38,8 @@ const CACHE_SIZE = 1000;
 // Модели занимают гигабайты памяти — после долгого простоя выгружаем их;
 // следующая фраза загрузит снова (около десяти секунд).
 const IDLE_UNLOAD_MS = 10 * 60 * 1000;
+// Сколько секунд звучания должно быть готово, чтобы начать фразу на большой скорости.
+const HEAD_START_SECONDS = 2.5;
 
 const keyOf = (voiceId) => (voiceId?.startsWith(TERA_PREFIX) ? voiceId.slice(TERA_PREFIX.length) : voiceId);
 
@@ -48,10 +51,11 @@ function withPause(pcm, sampleRate, seconds) {
 }
 
 /**
- * @param options.secondThread () => boolean — второй воркер-сэмплер: быстрее,
- *   но ещё ~1 ГБ памяти
+ * @param options.threads () => 'auto' | '1' | '2' | '3' — сколько сэмплеров
+ *   держать (tera-threads.js)
+ * @param options.rate () => скорость чтения: от неё зависит, сколько нужно
  */
-export function createTeraProvider({ secondThread = () => false } = {}) {
+export function createTeraProvider({ threads = () => 'auto', rate = () => 1 } = {}) {
   const player = createAudioPlayer();
   const cache = new Map(); // голос|текст → { pieces, fastStart }
   const waiting = new Map();
@@ -68,6 +72,8 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
   let liveVolume = 1; // громкость, поменянная посреди фразы, — для её следующих кусков
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
+  let lagging = false; // синтез уже не успевал за речью — нужен ещё сэмплер
+  let lastEnded = 0; // когда договорила предыдущая фраза
 
   function touch() {
     clearTimeout(idleTimer);
@@ -116,6 +122,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     workers.vocoder = null;
     workers.accent = null;
     ready = false;
+    lagging = false;
     loading = null;
     for (const item of deferred) item.reject(error);
     deferred = [];
@@ -137,11 +144,14 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       pack = await getPack();
       workers.accent = spawn('accent');
       workers.vocoder = spawn('synth');
-      workers.samplers = [spawn('synth')];
+      const first = addSampler();
+      // На большой скорости нужен и второй сэмплер — грузим его вместе с
+      // первым, чтобы и первая фраза синтезировалась в два потока.
+      for (let i = 1; i < wantedSamplers(); i += 1) addSampler();
       const vocoderParts = await loadParts(VOCODER_PARTS);
       const vocoder = await vocoderParts.vocoder.arrayBuffer();
       await Promise.all([
-        loadSampler(workers.samplers[0]),
+        first,
         call(workers.vocoder, { type: 'load', models: { vocoder } }, [vocoder]),
         loadParts(ACCENT_PARTS).then((files) => call(workers.accent, { type: 'load', files })),
       ]);
@@ -156,19 +166,60 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     }
   }
 
-  /** Второй сэмплер — по настройке, когда первый уже работает. */
+  const wantedSamplers = () => samplerCount(threads(), { rate: rate(), lagging, cores: navigator.hardwareConcurrency || 4 });
+
+  function addSampler() {
+    const slot = spawn('synth');
+    workers.samplers.push(slot);
+    const loaded = loadSampler(slot);
+    loaded.catch(() => {
+      slot.worker.terminate();
+      workers.samplers = workers.samplers.filter((other) => other !== slot);
+    });
+    return loaded;
+  }
+
+  /** Сколько сэмплеров нужно — по настройке и скорости; первый уже работает. */
   function adjustThreads() {
     if (!ready) return;
-    if (secondThread() && workers.samplers.length < 2) {
-      const slot = spawn('synth');
-      workers.samplers.push(slot);
-      loadSampler(slot).catch(() => {
-        slot.worker.terminate();
-        workers.samplers = workers.samplers.filter((other) => other !== slot);
-      });
-    } else if (!secondThread() && workers.samplers.length > 1) {
-      for (const slot of workers.samplers.splice(1)) slot.worker.terminate();
+    const wanted = wantedSamplers();
+    while (workers.samplers.length < wanted) addSampler();
+    // Лишний гасим, только когда ему нечего доделывать: иначе его куски не
+    // пришли бы никогда и чтение встало бы.
+    for (const slot of workers.samplers.slice(wanted)) {
+      if (slot.pending || !slot.loaded) continue;
+      slot.worker.terminate();
+      workers.samplers = workers.samplers.filter((other) => other !== slot);
     }
+  }
+
+  /**
+   * На большой скорости первый короткий кусок фразы звучит считаные секунды:
+   * пара слов — и тишина, пока готовится следующий. Поэтому там начинаем,
+   * когда готово хотя бы HEAD_START_SECONDS звучания (или вся фраза). На
+   * обычной скорости первого куска хватает — звук не задерживается.
+   */
+  async function headStart(entry, playbackRate, myToken) {
+    if (playbackRate <= 1.25) return;
+    const need = HEAD_START_SECONDS * playbackRate;
+    for (;;) {
+      let seconds = 0;
+      const next = entry.pieces.find((piece) => {
+        if (!piece.done) return true;
+        seconds += piece.seconds;
+        return false;
+      });
+      if (!next || seconds >= need || myToken !== token) return;
+      await next.audio.catch(() => {}); // ошибку разберёт основной цикл
+      if (!next.done) return;
+    }
+  }
+
+  /** Звук понадобился, а куска ещё нет — синтез не успевает за речью. */
+  function noteLag() {
+    if (lagging) return;
+    lagging = true;
+    adjustThreads();
   }
 
   const pickSampler = () => workers.samplers.filter((slot) => slot.loaded).reduce((a, b) => (b.pending < a.pending ? b : a));
@@ -208,7 +259,13 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       const { latent: data, frames, samples } = await request;
       return call(workers.vocoder, { type: 'vocode', latent: data, frames, samples, epoch: jobEpoch }, [data.buffer]);
     });
-    piece.audio.catch(() => {});
+    piece.audio.then(
+      (audio) => {
+        piece.done = true;
+        piece.seconds = audio.pcm.length / audio.sampleRate + (piece.pause || 0);
+      },
+      () => {}
+    );
     return piece;
   }
 
@@ -342,9 +399,14 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
         if (item.epoch === epoch) readySeconds(job(item.text, item.options)).then(item.resolve, item.reject);
         else item.reject(Object.assign(new Error('Фраза больше не нужна'), { dropped: true }));
       }
+      // Предыдущая фраза только что договорила, а эта не готова — не успеваем.
+      if (performance.now() - lastEnded < 300 && !entry.pieces[0].done) noteLag();
+      await headStart(entry, player.rate, myToken);
+      if (myToken !== token) return 'cancelled';
       let retried = false;
       for (let i = 0; i < entry.pieces.length; i += 1) {
         const piece = entry.pieces[i];
+        if (i > 0 && !piece.done) noteLag();
         let audio;
         try {
           audio = await piece.audio;
@@ -371,13 +433,16 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       // Прозвучала — заготовка больше не нужна, память освобождаем.
       if (cache.get(key) === entry) cache.delete(key);
       if (speakingKey === key) speakingKey = null;
+      lastEnded = performance.now();
+      adjustThreads(); // скорость могли снизить — лишний сэмплер отпускаем
       touch();
       return 'ended';
     },
 
     /** Скорость — сразу, посреди фразы, без повторного синтеза. */
-    setRate(rate) {
-      player.setRate(rate);
+    setRate(value) {
+      player.setRate(value);
+      adjustThreads(); // на большей скорости синтезу нужен ещё поток
     },
     /** Для проверок: скорость, с которой сейчас играет звук. */
     get playbackRate() {
@@ -433,6 +498,7 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
     /** Вся фраза одним звуком — для проверок и сохранения в файл. */
     async render(text, options = {}) {
       await ensureLoaded();
+      adjustThreads();
       const { pieces } = createJob(text, options, false);
       const parts = [];
       let sampleRate = 44100;
@@ -482,6 +548,10 @@ export function createTeraProvider({ secondThread = () => false } = {}) {
       return player.blocked;
     },
     /** Для тестов: сколько воркеров запущено. */
+    /** Сколько сэмплеров сейчас работает или грузится. */
+    get samplers() {
+      return workers.samplers.length;
+    },
     get workers() {
       return workers.samplers.length + (workers.vocoder ? 1 : 0) + (workers.accent ? 1 : 0);
     },

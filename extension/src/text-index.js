@@ -56,8 +56,9 @@ export function buildPageText(items, filter) {
       }
     }
     let previous = null;
+    const threshold = spaceThreshold(line.records);
     for (const { item, spanIndex } of line.records) {
-      if (previous) text += gapSeparator(previous, item, text);
+      if (previous) text += gapSeparator(previous, item, text, threshold);
       const start = text.length;
       text += item.str;
       entries.push({ spanIndex, start, end: text.length });
@@ -176,15 +177,44 @@ function isParagraphBreak(previous, next, layout) {
   return startsAnew && next.left > layout.left + next.fontSize * 0.8;
 }
 
+/** Зазор между кусками строки в долях кегля. */
+const relativeGap = (previous, item) => (itemX(item) - (itemX(previous) + (previous.width ?? 0))) / itemFontSize(previous);
+
+const SPACE_GAP = 0.2;
+
+/**
+ * Какой зазор между кусками строки считать пробелом, в долях кегля.
+ *
+ * Обычно — пятая часть. Но бывают PDF (чаще всего сканы с чужим
+ * распознаванием), где каждое слово — отдельный кусок без пробела, а строка
+ * выключена по ширине: в плотной строке пробел между словами сжат до
+ * 0,1–0,2 кегля, и слова слипались — «Современнаяситуациясвязана». Если
+ * почти все куски строки разделены заметным зазором, пробел в ней — всё,
+ * что шире половины её обычного зазора. Слово, разложенное на куски
+ * вплотную, так и остаётся словом.
+ */
+function spaceThreshold(records) {
+  const gaps = [];
+  for (let i = 1; i < records.length; i += 1) {
+    const previous = records[i - 1].item;
+    const item = records[i].item;
+    if (/\s$/.test(previous.str) || /^\s/.test(item.str) || !item.str) continue;
+    gaps.push(relativeGap(previous, item));
+  }
+  if (gaps.length < 3) return SPACE_GAP;
+  const typical = median(gaps);
+  if (typical < 0.08) return SPACE_GAP; // куски вплотную — это не «слово за словом»
+  return Math.max(0.05, Math.min(SPACE_GAP, typical / 2));
+}
+
 /** Пробел между кусками одной строки, если на письме между ними зазор. */
-function gapSeparator(previous, item, text) {
+function gapSeparator(previous, item, text, threshold = SPACE_GAP) {
   const last = text.at(-1);
   if (last === ' ' || last === '\n' || item.str.startsWith(' ')) return '';
   // Перед закрывающей пунктуацией пробела не бывает — зазор там остаётся,
   // например, от выброшенного знака сноски.
   if (/^[.,;:!?…)\]»"]/.test(item.str)) return '';
-  const gap = itemX(item) - (itemX(previous) + (previous.width ?? 0));
-  return gap > itemFontSize(previous) * 0.2 ? ' ' : '';
+  return relativeGap(previous, item) > threshold ? ' ' : '';
 }
 
 export function median(values) {

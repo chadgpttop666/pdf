@@ -178,11 +178,17 @@ export const SETTINGS_SCHEMA = [
   // управление скачанными файлами.
   { custom: 'teraVoices' },
   {
-    key: 'teraSecondThread',
-    type: 'bool',
-    def: false,
-    label: 'TeraTTS: второй поток синтеза',
-    hint: 'Если голос не успевает и между фразами паузы. Нужно ещё около 1 ГБ памяти',
+    key: 'teraThreads',
+    type: 'select',
+    def: 'auto',
+    options: [
+      ['auto', 'сами по скорости чтения'],
+      ['1', 'один'],
+      ['2', 'два (+≈1 ГБ памяти)'],
+      ['3', 'три (+≈2 ГБ памяти)'],
+    ],
+    label: 'TeraTTS: потоки синтеза',
+    hint: 'Речь синтезируется на обычной скорости, поэтому на 2× синтез должен успевать вдвое быстрее. «Сами» — второй поток включается от 1,3× и если между фразами паузы',
   },
   { custom: 'piperVoices' },
   { group: 'Вид' },
@@ -321,7 +327,11 @@ const listeners = new Set();
 
 export async function loadSettings() {
   const stored = await storage.get(STORAGE_KEY);
-  current = { ...DEFAULTS, ...(stored?.[STORAGE_KEY] || {}) };
+  const saved = stored?.[STORAGE_KEY] || {};
+  current = { ...DEFAULTS, ...saved };
+  // Был флажок «второй поток» — включённый становится двумя потоками.
+  if (saved.teraSecondThread && !saved.teraThreads) current.teraThreads = '2';
+  delete current.teraSecondThread;
   return current;
 }
 
