@@ -1,6 +1,6 @@
 [package]
 name = "pdf-reader-tts"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 description = "Ускоритель озвучки PDF-читалки: синтез TeraTTS вне браузера"
 license = "MIT"

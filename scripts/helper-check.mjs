@@ -291,9 +291,10 @@ async function checkTranscription() {
   const { withStress, plain } = encodeText(modelText('ru', keepSupported(phrase, table)), table);
   const { pcm, sampleRate } = await client.synth({ ids: withStress, plain, ...voice, maxSeconds: maxSecondsFor(phrase) });
   started = performance.now();
-  const { text } = await client.transcribe(resample(pcm, sampleRate), 'ru');
+  const { text, timings, system, threads } = await client.transcribe(resample(pcm, sampleRate), 'ru');
   const elapsed = (performance.now() - started) / 1000;
   const words = ['книгу', 'синтез', 'голос'].filter((word) => text.toLowerCase().includes(word));
+  console.log(`whisper.cpp: ${system}; потоков ${threads}; детектор речи ${timings?.vad} мс, загрузка ${timings?.load} мс, распознавание ${timings?.decode} мс`);
   const line = `расшифровка за ${elapsed.toFixed(1)} с: «${text}»`;
   if (words.length < 2) fail(`${line} — не те слова`);
   console.log(line);

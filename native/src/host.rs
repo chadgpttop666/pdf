@@ -346,11 +346,15 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>) -> Result<(
             std::thread::spawn(move || {
                 let started = std::time::Instant::now();
                 match speech::transcribe(&path, vad.as_deref(), &samples, &language) {
-                    Ok(text) => shared.out.send(json!({
+                    Ok(result) => shared.out.send(json!({
                         "type": "transcript",
                         "id": id,
-                        "text": text,
+                        "text": result.text,
                         "seconds": started.elapsed().as_secs_f64(),
+                        // Замеры: где уходит время (детектор речи, загрузка модели, распознавание).
+                        "timings": { "vad": result.vad_ms as u64, "load": result.load_ms as u64, "decode": result.decode_ms as u64 },
+                        "system": whisper_rs::print_system_info(),
+                        "threads": speech::threads(),
                     })),
                     Err(error) => shared.error(&id, &error, false),
                 }

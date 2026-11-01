@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::path::Path;
+use std::time::Instant;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 
 /// Имена файлов моделей в папке моделей.
@@ -84,26 +85,39 @@ fn speech_only(vad: &Path, samples: &[f32]) -> Result<Vec<f32>, String> {
     Ok(speech)
 }
 
+/// Текст заметки и сколько заняли части работы (мс) — для замеров.
+#[derive(Debug, Default)]
+pub struct Transcript {
+    pub text: String,
+    pub vad_ms: u128,
+    pub load_ms: u128,
+    pub decode_ms: u128,
+}
+
 /// Текст заметки. Модели грузятся на время расшифровки (около полсекунды) и
 /// сразу освобождают память.
 /// `vad` — детектор речи; без него Whisper слушает всю запись.
-pub fn transcribe(model: &Path, vad: Option<&Path>, samples: &[f32], language: &str) -> Result<String, String> {
+pub fn transcribe(model: &Path, vad: Option<&Path>, samples: &[f32], language: &str) -> Result<Transcript, String> {
     supported()?;
     if samples.len() > MAX_SECONDS * SAMPLE_RATE {
         return Err("Заметка длиннее пяти минут".into());
     }
     whisper_rs::install_logging_hooks(); // журнал whisper.cpp — не в stdout, там сообщения Firefox
+    let mut result = Transcript::default();
+    let mut clock = Instant::now();
     let speech;
     let samples = match vad {
         Some(vad) => {
             speech = speech_only(vad, samples)?;
+            result.vad_ms = clock.elapsed().as_millis();
             if speech.is_empty() {
-                return Ok(String::new());
+                return Ok(result);
             }
             &speech[..]
         }
         None => samples,
     };
+    clock = Instant::now();
     let path = model.to_str().ok_or("путь к модели не в UTF-8")?;
     let context = WhisperContext::new_with_params(path, WhisperContextParameters::default()).map_err(|error| format!("модель Whisper: {error}"))?;
     let mut state = context.create_state().map_err(|error| format!("Whisper: {error}"))?;
@@ -125,12 +139,16 @@ pub fn transcribe(model: &Path, vad: Option<&Path>, samples: &[f32], language: &
     } else {
         Cow::Borrowed(samples)
     };
+    result.load_ms = clock.elapsed().as_millis();
+    clock = Instant::now();
     state.full(params, &audio).map_err(|error| format!("Whisper: {error}"))?;
+    result.decode_ms = clock.elapsed().as_millis();
     let segments: Vec<String> = (0..state.full_n_segments())
         .filter_map(|index| state.get_segment(index))
         .filter_map(|segment| segment.to_str_lossy().ok().map(|text| text.into_owned()))
         .collect();
-    Ok(clean(&segments))
+    result.text = clean(&segments);
+    Ok(result)
 }
 
 #[cfg(test)]
