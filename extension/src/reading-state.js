@@ -65,6 +65,7 @@ export function createReadingState(app) {
       cropEnabled: app.appearance?.crop.enabled ?? false,
       cropBox: app.appearance?.crop.box,
       tts: app.tts?.position,
+      ttsBar: app.tts?.pickMode ?? false,
       updatedAt: Date.now(),
     };
   }
@@ -97,6 +98,7 @@ export function createReadingState(app) {
    */
   function restore(state) {
     restoring = true;
+    let settle = 0; // когда вид точно на месте — тогда его и показываем
     try {
       app.setZoom(state?.zoom || getSetting('defaultZoom'), { force: true });
       app.appearance?.restore(state);
@@ -107,15 +109,18 @@ export function createReadingState(app) {
       const expected = scrollToSaved(state);
       if (Number.isFinite(state.left) && !state.viewLock) app.container.scrollLeft = state.left;
       if (state.tts?.pageNumber) app.tts?.setPosition(state.tts);
+      if (state.ttsBar) app.tts?.showBar(true);
       if (state.viewMode === 'reflow') {
         app.reflow?.enter({ pageNumber: state.pageNumber, sentenceIndex: state.sentenceIndex ?? 0 });
       }
 
       // Масштаб применяется асинхронно и может сдвинуть вид — сверяемся.
+      settle = 250;
       setTimeout(() => {
         if (Math.abs(app.container.scrollTop - expected) > 8) scrollToSaved(state);
-      }, 250);
+      }, settle);
     } finally {
+      setTimeout(() => app.eventBus.dispatch('viewrestored', { source: app }), settle);
       setTimeout(() => {
         restoring = false;
       }, 700);
@@ -126,7 +131,10 @@ export function createReadingState(app) {
     record = null;
     try {
       const id = await identify(documentSource);
-      if (!id) return;
+      if (!id) {
+        applyState(null);
+        return;
+      }
       const existing = await library.getDocument(id);
       record = {
         id,

@@ -48,6 +48,8 @@ const CACHE_SIZE = 1000;
 // Модели занимают гигабайты памяти — после долгого простоя выгружаем их;
 // следующая фраза загрузит снова (около десяти секунд).
 const IDLE_UNLOAD_MS = 10 * 60 * 1000;
+// Пока вкладка на экране, простой до выгрузки дольше.
+const IDLE_VISIBLE_UNLOAD_MS = 30 * 60 * 1000;
 // Сколько секунд звучания должно быть готово, чтобы начать фразу на большой скорости.
 const HEAD_START_SECONDS = 2.5;
 
@@ -85,6 +87,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let liveVolume = 1; // громкость, поменянная посреди фразы, — для её следующих кусков
   let lane = Promise.resolve(); // очередь отправки кусков в сэмплер
   let idleTimer = 0;
+  let lastUsed = 0; // когда голос последний раз был нужен
   let lagging = false; // синтез уже не успевал за речью — нужен ещё сэмплер
   let samplerPart = 'sampler'; // какой сэмплер в памяти — часть пакета
   let omographPart = 'omographModel'; // какая модель омографов в памяти
@@ -96,10 +99,23 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let helperError = null; // почему ускоритель не подключился в последний раз
 
   function touch() {
+    lastUsed = Date.now();
+    armIdle(IDLE_UNLOAD_MS);
+  }
+
+  function armIdle(delay) {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (!player.speaking && !download) shutdown();
-    }, IDLE_UNLOAD_MS);
+      if (player.speaking || download) return;
+      // Вкладка перед глазами — читатель, скорее всего, вот-вот продолжит:
+      // держим голос дольше, чтобы «Читать» не ждало новой загрузки.
+      const idle = Date.now() - lastUsed;
+      if (globalThis.document?.visibilityState === 'visible' && idle < IDLE_VISIBLE_UNLOAD_MS) {
+        armIdle(IDLE_VISIBLE_UNLOAD_MS - idle);
+        return;
+      }
+      shutdown();
+    }, delay);
   }
 
   // ── Воркеры ──────────────────────────────────────────────────────────

@@ -576,6 +576,9 @@ try {
     await page.mouse.wheel(0, 0); // читатель жив, но не листает
     await page.waitForTimeout(1000);
   }
+  // Такт учёта — раз в 5 с; без этого итог зависел бы от того, где таймер
+  // оказался относительно теста.
+  await page.evaluate(() => window.pdfReaderApp.stats.tick());
   await page.evaluate(() => window.pdfReaderApp.container.scrollBy(0, 150));
   await page.waitForTimeout(300);
   await page.evaluate(() => window.pdfReaderApp.stats.tick());
@@ -1362,7 +1365,12 @@ try {
     return { hit: hit?.id || hit?.className, status: document.getElementById('pillStatus').textContent, statusHidden: document.getElementById('pillStatus').hidden, state: window.speakPill.reader.state, voice: document.getElementById('ttsVoice').value };
   });
   await pill.click('#pillAdd');
-  await site.waitForFunction(() => CSS.highlights.has('pdf-reader-speak-queue'), null, { timeout: 3000 });
+  // Подсветка «впереди» уже есть — от непрочитанной части первого куска;
+  // ждём, пока в очереди окажется именно второй кусок.
+  await pill.waitForFunction(() => window.speakPill.sentences.length >= 6, null, { timeout: 5000 }).catch(() => {});
+  await site
+    .waitForFunction(() => [...(CSS.highlights.get('pdf-reader-speak-queue') ?? [])].map(String).join('').includes('Второй кусок'), null, { timeout: 3000 })
+    .catch(() => {});
   const queued = await site.evaluate(() => ({
     queue: [...(CSS.highlights.get('pdf-reader-speak-queue') ?? [])].map(String),
     selection: String(getSelection()),

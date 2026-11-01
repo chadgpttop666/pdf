@@ -67,7 +67,7 @@ export function createStats(app) {
   let bankMs = 0; // активное время чтения с тех пор
   let averageChars = null; // знаков на средней странице текущего документа
   let docId = null;
-  let busy = false;
+  let running = null; // идущий такт учёта
   let stashSeq = 0;
 
   const enabled = () => getSetting('statsEnabled');
@@ -228,39 +228,46 @@ export function createStats(app) {
     return chars * share;
   }
 
-  async function tick() {
+  /**
+   * Такт учёта. Пока идёт предыдущий (он ждёт базу), новый не начинается и
+   * время не теряет: отсчёт продолжится со следующего такта, а позвавший —
+   * дождётся идущего, чтобы увидеть уже посчитанное.
+   */
+  function tick() {
+    running ??= measure().finally(() => {
+      running = null;
+    });
+    return running;
+  }
+
+  async function measure() {
     const now = Date.now();
     const elapsed = Math.min(now - lastTick, TICK_MS * 2);
     lastTick = now;
-    if (busy || !enabled() || !docId || document.visibilityState !== 'visible') return;
-    busy = true;
-    try {
-      rollover();
-      // Озвучку считает событие ttslistened — по звучанию, не по тактам.
-      const listening = app.tts?.state === 'speaking';
-      const position = normalizePosition(currentPosition());
-      // Скан или картинка: время есть, а текста нет — в скорость не берём.
-      const noText = position && (await charsOf(position.pageNumber)) === 0 ? elapsed : 0;
-      if (listening) {
-        counted = null; // за озвучкой вид едет сам — это не чтение глазами
-        settleQuiet();
-      } else if (app.autoScroll?.running) {
-        settleQuiet();
-        addReading(elapsed, noText);
-        await trackProgress();
-      } else if (now - lastActivity < IDLE_LIMIT_MS) {
-        quiet.ms += elapsed;
-        quiet.noTextMs += noText;
-        await trackProgress();
-      } else if (quiet.ms) {
-        // Читатель ушёл: засчитываем только время, нужное на экран текста.
-        settleQuiet(position ? idleTail({ screenChars: await screenChars(position), speed: readingSpeed() ?? undefined }) : 0);
-      }
-      if (now - lastFlush >= FLUSH_MS) await flush();
-      await updateEta();
-    } finally {
-      busy = false;
+    if (!enabled() || !docId || document.visibilityState !== 'visible') return;
+    rollover();
+    // Озвучку считает событие ttslistened — по звучанию, не по тактам.
+    const listening = app.tts?.state === 'speaking';
+    const position = normalizePosition(currentPosition());
+    // Скан или картинка: время есть, а текста нет — в скорость не берём.
+    const noText = position && (await charsOf(position.pageNumber)) === 0 ? elapsed : 0;
+    if (listening) {
+      counted = null; // за озвучкой вид едет сам — это не чтение глазами
+      settleQuiet();
+    } else if (app.autoScroll?.running) {
+      settleQuiet();
+      addReading(elapsed, noText);
+      await trackProgress();
+    } else if (now - lastActivity < IDLE_LIMIT_MS) {
+      quiet.ms += elapsed;
+      quiet.noTextMs += noText;
+      await trackProgress();
+    } else if (quiet.ms) {
+      // Читатель ушёл: засчитываем только время, нужное на экран текста.
+      settleQuiet(position ? idleTail({ screenChars: await screenChars(position), speed: readingSpeed() ?? undefined }) : 0);
     }
+    if (now - lastFlush >= FLUSH_MS) await flush();
+    await updateEta();
   }
 
   const markActive = () => {

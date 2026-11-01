@@ -66,7 +66,9 @@ export function createTts(app) {
   function showBar(visible) {
     // Нейроголос грузит модели, пока читатель выбирает, откуда читать.
     if (visible && bar.hidden) engines.neuralFor()?.preload?.();
+    const changed = bar.hidden === visible;
     bar.hidden = !visible;
+    if (changed) app.readingState?.scheduleSave(); // открытая панель вернётся с документом
     app.el.classList.toggle('tts-picking', visible);
     if (visible && state === 'idle' && !cursorShown) setStatus(PICK_HINT);
     if (!visible && state === 'idle') clearCursor();
@@ -883,6 +885,12 @@ export function createTts(app) {
     index?.page(position.pageNumber).then((page) => {
       if (page) view().highlightSentence(page, position.sentenceIndex);
     });
+  });
+
+  // Вернулись на вкладку с открытой панелью озвучки: пока вкладка была в фоне,
+  // голос мог выгрузиться из памяти — грузим его заново сразу, а не по «Читать».
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (!bar.hidden || state !== 'idle')) engines.neuralFor()?.preload?.();
   });
 
   // Страницу распознали — её текст другой, перечитываем при следующем обращении.

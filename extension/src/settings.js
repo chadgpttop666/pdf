@@ -301,6 +301,13 @@ export const SETTINGS_SCHEMA = [
     label: 'Запоминать место чтения',
   },
   {
+    key: 'keepTabLoaded',
+    type: 'bool',
+    def: true,
+    label: 'Не выгружать вкладку читалки',
+    hint: 'Когда памяти мало, Firefox выгружает фоновые вкладки, а при возврате загружает их заново — документ, место, голос. Вкладку с книгой он оставит как была',
+  },
+  {
     key: 'storeFilesInLibrary',
     type: 'bool',
     def: true,

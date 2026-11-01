@@ -80,6 +80,8 @@ button:hover { border-color: var(--accent); }
 button:active { transform: translateY(1px); }
 button.icon { padding: 0; width: 32px; min-width: 32px; }
 .icon-svg { flex: none; display: block; }
+/* Место под иконку, пока модули её не нарисовали: подписи на кнопках не прыгают. */
+button[data-icon]:not(.has-icon, .icon, .stepper)::before { content: ''; flex: none; width: 18px; height: 18px; }
 button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 button.stepper { width: 26px; min-width: 26px; min-height: 26px; height: 26px; border-radius: 50%; }
 button.stepper .icon-svg { width: 14px; height: 14px; }
@@ -455,6 +457,32 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 }
 
 #app.has-document #welcome { display: none; }
+
+/* Документ открывается: вместо стартового экрана — тихий значок загрузки,
+   страницы показываем, когда место чтения уже восстановлено. Иначе видно,
+   как первая страница в другом масштабе прыгает к сохранённому месту. */
+#app.opening #welcome { display: none; }
+#viewerContainer, #reflowContainer { transition: opacity .16s ease; }
+#app.opening #viewerContainer, #app.opening #reflowContainer { opacity: 0; }
+#app.opening::after {
+  content: '';
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  z-index: 40;
+  pointer-events: none;
+  /* Обычное открытие обходится без значка: он появляется, только если ждать дольше секунды. */
+  animation: tts-spin .8s linear infinite, boot-appear .2s ease .9s both;
+}
+@keyframes boot-appear { from { opacity: 0; } to { opacity: 1; } }
+/* Пока читалка запускается, панели встают на места без анимаций. */
+#app.booting *, #app.booting *::before, #app.booting *::after { transition: none !important; }
 
 .welcome-card {
   width: min(520px, 90vw);

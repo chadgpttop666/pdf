@@ -66,7 +66,37 @@ export const app = {
 };
 
 function applyUiTheme() {
-  appEl.dataset.uiTheme = getSetting('uiTheme');
+  const theme = getSetting('uiTheme');
+  appEl.dataset.uiTheme = theme;
+  // Копия для boot.js: в следующий раз тема будет с первого кадра.
+  try {
+    localStorage.setItem('pdf-reader-ui-theme', theme);
+  } catch {
+    // Без копии тема просто применится чуть позже.
+  }
+}
+
+/** Документ не откроется — вернуть стартовый экран и анимации. */
+function stopOpening() {
+  appEl.classList.remove('opening', 'booting');
+}
+
+/**
+ * Страницы показываем, когда место чтения уже восстановлено (reading-state
+ * сообщает об этом), — без кадра с первой страницей в другом масштабе.
+ * Если восстановление почему-то не пришло, показываем всё равно.
+ */
+function wireReveal() {
+  let fallback = 0;
+  const reveal = () => {
+    clearTimeout(fallback);
+    requestAnimationFrame(() => requestAnimationFrame(stopOpening));
+  };
+  app.eventBus.on('documentopened', () => {
+    clearTimeout(fallback);
+    fallback = setTimeout(reveal, 5000);
+  });
+  app.eventBus.on('viewrestored', reveal);
 }
 
 /**
@@ -97,11 +127,12 @@ function isSafeDocumentUrl(raw) {
 
 async function openSource(open, describe) {
   try {
-    appEl.classList.add('loading');
+    appEl.classList.add('loading', 'opening');
     await open();
     appEl.classList.add('has-document');
     app.hud.hide();
   } catch (error) {
+    stopOpening();
     console.error('Не удалось открыть документ', error);
     app.hud.show(`Не удалось открыть ${describe}: ${error?.message || error}`, { duration: 6000 });
   } finally {
@@ -117,6 +148,7 @@ export function openUrl(url, options) {
   // Расширения Firefox не имеют доступа к file:// — честно скажем об этом
   // вместо невнятной ошибки загрузки.
   if (/^file:/i.test(url) && extensionApi) {
+    stopOpening();
     app.hud.show('Локальный файл нельзя открыть по ссылке — перетащите его в окно или нажмите «Открыть»', {
       duration: 8000,
     });
@@ -232,6 +264,22 @@ function wireAutoFit() {
   observer.observe(app.container);
 }
 
+/**
+ * Firefox выгружает фоновые вкладки, когда памяти мало, а при возврате
+ * открывает их заново: документ, место и голос грузятся снова. Вкладку
+ * читалки он не выгружает, пока включена настройка.
+ */
+function keepTabLoaded(tabId) {
+  const apply = () =>
+    extensionApi.tabs.update(tabId, { autoDiscardable: !getSetting('keepTabLoaded') }).catch((error) => {
+      console.warn('Не удалось запретить выгрузку вкладки', error);
+    });
+  apply();
+  onSettingsChanged((_all, changed) => {
+    if ('keepTabLoaded' in changed) apply();
+  });
+}
+
 /** Адрес документа и имя файла, которое фоновая страница узнала у сервера. */
 function documentFromQuery() {
   const params = new URLSearchParams(location.search);
@@ -241,10 +289,10 @@ function documentFromQuery() {
 }
 
 async function main() {
+  hydrateIcons(); // до первого ожидания: кнопки сразу с иконками
+  app.icons = { setIcon };
   await loadSettings();
   applyUiTheme();
-  hydrateIcons();
-  app.icons = { setIcon };
 
   const core = createViewer({ container: $('viewerContainer'), viewerEl: $('viewer') });
   Object.assign(app, core);
@@ -280,6 +328,7 @@ async function main() {
   // страницу расширения не встроить, поэтому фоновая страница присылает сообщение.
   extensionApi?.tabs?.getCurrent?.().then((tab) => {
     if (!tab) return;
+    keepTabLoaded(tab.id);
     extensionApi.runtime.onMessage.addListener((message) => {
       if (message?.type !== 'pdf-reader-speak-selection' || message.tabId !== tab.id) return;
       const selected = window.getSelection();
@@ -345,9 +394,13 @@ async function main() {
   wireSteppers();
   wireAutoFit();
   wireFocusReturn();
+  wireReveal();
 
   const initial = documentFromQuery();
   if (initial) await openUrl(initial.url, { name: initial.name });
+  else stopOpening();
+  // Без документа анимации включаем сразу; с ним — когда восстановлен вид.
+  if (!appEl.classList.contains('opening')) requestAnimationFrame(stopOpening);
 
   // Фоновая страница может попросить открыть документ уже после запуска.
   extensionApi?.runtime?.onMessage?.addListener((message) => {

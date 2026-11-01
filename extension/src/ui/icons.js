@@ -88,6 +88,7 @@ export function icon(name) {
 export function setIcon(element, name) {
   element.querySelector(':scope > .icon-svg')?.remove();
   element.prepend(icon(name));
+  element.classList.add('has-icon');
   element.dataset.icon = name;
 }
 
