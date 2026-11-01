@@ -1,17 +1,18 @@
 // Локальная библиотека: место чтения, закладки, сами файлы недавних
-// документов, статистика чтения по дням, скачанные нейроголоса и
-// распознанный текст сканов. Всё лежит в IndexedDB браузера и никуда не
+// документов, статистика чтения по дням, скачанные нейроголоса,
+// распознанный текст сканов и голосовые заметки. Всё лежит в IndexedDB браузера и никуда не
 // отправляется.
 
 import { emptyDay, mergeDays } from './stats-math.js';
 
 const DB_NAME = 'pdf-reader';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const DOCUMENTS = 'documents';
 const FILES = 'files';
 const STATS = 'stats';
 const VOICES = 'voices';
 const OCR = 'ocr';
+const RECORDINGS = 'recordings';
 
 let dbPromise = null;
 
@@ -38,6 +39,10 @@ function openDb() {
       // Версия 4: распознанный текст страниц-сканов, ключ «документ#страница».
       if (!db.objectStoreNames.contains(OCR)) {
         db.createObjectStore(OCR, { keyPath: 'key' }).createIndex('docId', 'docId');
+      }
+      // Версия 5: голосовые заметки к выделениям — запись (Blob) и её документ.
+      if (!db.objectStoreNames.contains(RECORDINGS)) {
+        db.createObjectStore(RECORDINGS, { keyPath: 'id' }).createIndex('docId', 'docId');
       }
     };
     request.onsuccess = () => {
@@ -125,10 +130,11 @@ export async function loadFile(id) {
 }
 
 export async function deleteDocument(id) {
-  return transaction([DOCUMENTS, FILES, OCR], 'readwrite', async (documents, files, ocr) => {
+  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS], 'readwrite', async (documents, files, ocr, recordings) => {
     await request(documents.delete(id));
     await request(files.delete(id));
     for (const key of await request(ocr.index('docId').getAllKeys(id))) await request(ocr.delete(key));
+    for (const key of await request(recordings.index('docId').getAllKeys(id))) await request(recordings.delete(key));
   });
 }
 
@@ -163,11 +169,25 @@ export async function pruneFiles(maxBytes) {
 }
 
 export async function clearLibrary() {
-  return transaction([DOCUMENTS, FILES, OCR], 'readwrite', async (documents, files, ocr) => {
+  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS], 'readwrite', async (documents, files, ocr, recordings) => {
     await request(documents.clear());
     await request(files.clear());
     await request(ocr.clear());
+    await request(recordings.clear());
   });
+}
+
+/** Голосовая заметка: { id, docId, blob, seconds, createdAt }. */
+export async function putRecording(record) {
+  return transaction(RECORDINGS, 'readwrite', (store) => request(store.put(record)));
+}
+
+export async function getRecording(id) {
+  return transaction(RECORDINGS, 'readonly', (store) => request(store.get(id)));
+}
+
+export async function deleteRecording(id) {
+  return transaction(RECORDINGS, 'readwrite', (store) => request(store.delete(id)));
 }
 
 /** Статистика за все дни — записей немного, по одной на день чтения. */

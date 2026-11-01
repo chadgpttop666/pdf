@@ -259,7 +259,21 @@
         <span class="mark-sep"></span>
         <button id="markSpeak" class="icon" data-icon="speak" title="Озвучить выделенное; во время чтения — в очередь (Alt+Shift+S)" aria-label="Озвучить выделенное"></button>
         <button id="markNoteToggle" class="icon" data-icon="note" title="Заметка к выделению" aria-label="Заметка"></button>
+        <button id="markVoice" class="icon" data-icon="mic" title="Голосовая заметка: скажите мысль вслух — запись сохранится, а с ускорителем станет и текстом" aria-label="Голосовая заметка"></button>
         <button id="markDelete" class="icon" data-icon="trash" title="Убрать выделение" aria-label="Убрать выделение" hidden></button>
+      </div>
+      <div id="markRecorder" class="mark-recorder" hidden>
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span id="markRecTime" class="rec-time">0:00</span>
+        <span class="rec-level" aria-hidden="true"><span id="markRecLevel"></span></span>
+        <button id="markRecStop" class="primary" data-icon="check" title="Закончить запись (Esc)">Готово</button>
+        <button id="markRecCancel" class="ghost" title="Не сохранять запись">Отмена</button>
+      </div>
+      <div id="markVoiceRow" class="mark-voice" hidden>
+        <button id="markVoicePlay" data-icon="play" title="Прослушать голосовую заметку">Прослушать</button>
+        <span id="markVoiceInfo" class="mark-voice-info"></span>
+        <button id="markVoiceTranscribe" class="ghost" title="Превратить запись в текст заметки" hidden>В текст</button>
+        <button id="markVoiceDelete" class="icon" data-icon="trash" title="Удалить запись (текст заметки останется)" aria-label="Удалить запись"></button>
       </div>
       <textarea id="markNote" rows="3" placeholder="Заметка — сохраняется сама" hidden></textarea>
     </div>

@@ -702,6 +702,20 @@ li.collapsed > .outline-tree { display: none; }
 #markDelete:hover { color: var(--danger); }
 #markNote { width: 260px; resize: vertical; font: inherit; font-size: 13px; }
 
+/* Голосовая заметка: запись и прослушивание прямо в панели выделения. */
+.mark-recorder, .mark-voice { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.mark-recorder button, .mark-voice button { min-height: 28px; padding: 2px 10px; }
+.mark-voice button.icon { padding: 0; width: 28px; min-width: 28px; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); animation: rec-blink 1s ease-in-out infinite; flex: none; }
+@keyframes rec-blink { 50% { opacity: .35; } }
+.rec-time { font-variant-numeric: tabular-nums; min-width: 34px; }
+.rec-level { width: 70px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex: none; }
+.rec-level > span { display: block; height: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform .08s linear; }
+.mark-voice-info { color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; flex: 1; }
+.mark-toolbar.recording .mark-row { opacity: .5; pointer-events: none; }
+.mark-play { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.mark-play .icon-svg { width: 14px; height: 14px; }
+
 /* Вкладка «Заметки»: закладки и выделения одним списком. */
 .notes-panel h4 { margin: 4px 2px 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--fg-muted); }
 .notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
@@ -738,6 +752,7 @@ li.collapsed > .outline-tree { display: none; }
   line-height: 1.35;
 }
 .mark-note { color: var(--fg-muted); font-style: italic; font-size: 12px; white-space: pre-wrap; }
+.mark-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 
 #bookmarksPopover { width: 340px; }
 .popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

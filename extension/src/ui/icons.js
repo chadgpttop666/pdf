@@ -58,6 +58,11 @@ const ICONS = {
   clock: [['circle', { cx: 12, cy: 12, r: 8.5 }], ['path', { d: 'M12 7.5V12l3 2' }]],
   chart: [['path', { d: 'M4 20h16' }], ['path', { d: 'M7 16.5v-5M12 16.5V6.5M17 16.5v-8' }]],
   marker: [['path', { d: 'M14.5 4.5l5 5-8.5 8.5H6v-5z' }], ['path', { d: 'M4 21h16' }]],
+  mic: [
+    ['rect', { x: 9, y: 3, width: 6, height: 11, rx: 3 }],
+    ['path', { d: 'M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7' }],
+  ],
+  check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
 };
 
 const SVG_ATTRIBUTES = {

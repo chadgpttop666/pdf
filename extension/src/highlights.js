@@ -10,6 +10,8 @@ import { icon } from './ui/icons.js';
 import { cleanForSpeech, cleanedIndexForRaw, offsetToSpanPoint, spanPointToOffset } from './text-index.js';
 import { locateInSpan, offsetInSpan, textSpansOfPage } from './visible-text.js';
 import { mergeRectsByLine } from './tts/highlighter.js';
+import { formatSeconds } from './voice/recorder.js';
+import { createVoiceNotes } from './voice/voice-notes.js';
 
 export const MARK_COLORS = { yellow: 'жёлтый', green: 'зелёный', blue: 'голубой', pink: 'розовый' };
 const NOTE_SAVE_DELAY = 500;
@@ -29,6 +31,9 @@ export function createHighlights(app) {
 
   const items = () => app.readingState.record?.highlights || [];
   const index = () => app.tts?.textIndex;
+  const find = (id) => items().find((item) => item.id === id) ?? null;
+  const voiceNotes = createVoiceNotes(app, { find, update: (id, patch) => update(id, patch) });
+  let recTimer = 0;
 
   function byPosition(a, b) {
     const [pa, pb] = [a.pieces[0], b.pieces[0]];
@@ -148,6 +153,7 @@ export function createHighlights(app) {
   }
 
   async function remove(id) {
+    voiceNotes.forget(find(id));
     await app.readingState.patch({ highlights: items().filter((item) => item.id !== id) });
   }
 
@@ -171,6 +177,7 @@ export function createHighlights(app) {
     noteInput.hidden = true;
     noteInput.value = '';
     markActiveSwatch(null);
+    renderVoiceRow();
     placeToolbar(range.getBoundingClientRect());
   }
 
@@ -182,6 +189,7 @@ export function createHighlights(app) {
     noteInput.hidden = !highlight.note;
     noteInput.value = highlight.note || '';
     markActiveSwatch(highlight.color);
+    renderVoiceRow();
     placeToolbar(rect);
   }
 
@@ -193,6 +201,8 @@ export function createHighlights(app) {
   }
 
   function hideToolbar() {
+    // Панель закрывают посреди записи (Esc, другое выделение) — запись сохраняем.
+    if (voiceNotes.recording) finishRecording();
     flushNote();
     toolbar.hidden = true;
     pendingRange = null;
@@ -220,7 +230,8 @@ export function createHighlights(app) {
     if (range) await createFromRange(range, color);
   }
 
-  async function openNote() {
+  /** Свежее выделение превращается в маркер — у заметки должен быть хозяин. */
+  async function ensureEditing() {
     if (!editingId && pendingRange) {
       const range = pendingRange;
       pendingRange = null;
@@ -228,20 +239,90 @@ export function createHighlights(app) {
       const created = await createFromRange(range, lastColor);
       if (!created) {
         hideToolbar();
-        return;
+        return null;
       }
       editingId = created.id;
       deleteButton.hidden = false;
+      $('markSpeak').hidden = true;
       markActiveSwatch(created.color);
     }
+    return editingId;
+  }
+
+  async function openNote() {
+    if (!(await ensureEditing())) return;
     noteInput.hidden = false;
     noteInput.focus();
   }
+
+  // ── Голосовая заметка ────────────────────────────────────────────────
+
+  function renderVoiceRow() {
+    const recording = voiceNotes.recording;
+    toolbar.classList.toggle('recording', Boolean(recording));
+    $('markRecorder').hidden = !recording;
+    $('markVoice').hidden = Boolean(recording);
+    const voice = !recording && editingId ? find(editingId)?.voice : null;
+    $('markVoiceRow').hidden = !voice;
+    if (voice) {
+      const playing = voiceNotes.isPlaying(voice);
+      app.icons?.setIcon($('markVoicePlay'), playing ? 'stop' : 'play');
+      $('markVoicePlay').lastChild.textContent = playing ? 'Стоп' : 'Прослушать';
+      $('markVoiceInfo').textContent = voiceNotes.describe(voice);
+      $('markVoiceTranscribe').hidden = voice.transcribed || voiceNotes.isBusy(voice);
+    }
+  }
+
+  function tickRecorder() {
+    const session = voiceNotes.recording?.session;
+    if (!session) return;
+    $('markRecTime').textContent = formatSeconds(session.seconds);
+    $('markRecLevel').style.transform = `scaleX(${session.level().toFixed(2)})`;
+  }
+
+  async function startRecordingNote() {
+    const id = await ensureEditing();
+    if (!id) return;
+    const started = await voiceNotes.start(id, { onLimit: () => finishRecording() });
+    if (!started) return;
+    $('markRecTime').textContent = '0:00';
+    clearInterval(recTimer);
+    recTimer = setInterval(tickRecorder, 100);
+    renderVoiceRow();
+    $('markRecStop').focus();
+  }
+
+  async function finishRecording() {
+    clearInterval(recTimer);
+    await voiceNotes.finish();
+    renderVoiceRow();
+  }
+
+  voiceNotes.onChange(() => {
+    if (!voiceNotes.recording) clearInterval(recTimer);
+    renderVoiceRow();
+    renderList();
+    // Расшифровка дописала заметку, пока панель открыта, — показываем её.
+    const item = editingId && find(editingId);
+    if (item && !toolbar.hidden && document.activeElement !== noteInput && item.note !== noteInput.value) {
+      noteInput.value = item.note || '';
+      noteInput.hidden = !item.note;
+    }
+  });
 
   for (const swatch of toolbar.querySelectorAll('.mark-swatch')) {
     on(swatch, 'click', () => chooseColor(swatch.dataset.color));
   }
   on($('markNoteToggle'), 'click', openNote);
+  on($('markVoice'), 'click', startRecordingNote);
+  on($('markRecStop'), 'click', finishRecording);
+  on($('markRecCancel'), 'click', () => {
+    clearInterval(recTimer);
+    voiceNotes.cancel();
+  });
+  on($('markVoicePlay'), 'click', () => editingId && voiceNotes.play(editingId));
+  on($('markVoiceTranscribe'), 'click', () => editingId && voiceNotes.toText(editingId));
+  on($('markVoiceDelete'), 'click', () => editingId && voiceNotes.removeVoice(editingId));
   // Озвучить выделенное — или поставить в очередь, если выделенное уже читается.
   on($('markSpeak'), 'click', async () => {
     const piece = pendingPiece;
@@ -273,14 +354,15 @@ export function createHighlights(app) {
   });
 
   on(document, 'pointerdown', (event) => {
-    if (toolbar.hidden || toolbar.contains(event.target)) return;
+    // Во время записи панель не прячем: читатель листает и говорит.
+    if (toolbar.hidden || toolbar.contains(event.target) || voiceNotes.recording) return;
     // Новое выделение покажет панель заново, щелчок по маркеру — тоже.
     hideToolbar();
   });
 
   for (const container of [app.container, $('reflowContainer')]) {
     on(container, 'scroll', () => {
-      if (!toolbar.hidden && document.activeElement !== noteInput) hideToolbar();
+      if (!toolbar.hidden && document.activeElement !== noteInput && !voiceNotes.recording) hideToolbar();
     }, { passive: true });
   }
 
@@ -321,7 +403,7 @@ export function createHighlights(app) {
         box.style.top = `${line.top - pageRect.top}px`;
         box.style.width = `${line.right - line.left + 2}px`;
         box.style.height = `${line.bottom - line.top}px`;
-        if (item.note) box.classList.add('has-note');
+        if (item.note || item.voice) box.classList.add('has-note');
         layer.append(box);
       }
     }
@@ -441,6 +523,20 @@ export function createHighlights(app) {
     for (const item of sorted) {
       const remover = el('button', { class: 'icon bookmark-delete', title: 'Убрать выделение', onclick: () => remove(item.id) });
       remover.append(icon('trash'));
+      let player = null;
+      if (item.voice) {
+        const playing = voiceNotes.isPlaying(item.voice);
+        player = el(
+          'button',
+          {
+            class: 'ghost mark-play',
+            title: `${playing ? 'Остановить' : 'Прослушать'} голосовую заметку (${voiceNotes.describe(item.voice)})`,
+            onclick: () => voiceNotes.play(item.id),
+          },
+          formatSeconds(item.voice.seconds)
+        );
+        player.prepend(icon(playing ? 'stop' : 'play'));
+      }
       ul.append(
         el('li', { class: `mark-item mark-${item.color}` }, [
           el('button', { class: 'mark-jump', title: 'Перейти к выделению', onclick: () => goTo(item) }, [
@@ -449,7 +545,7 @@ export function createHighlights(app) {
             item.note ? el('span', { class: 'mark-note' }, item.note) : null,
             el('span', { class: 'bookmark-date' }, formatDate(item.createdAt)),
           ]),
-          remover,
+          el('div', { class: 'mark-actions' }, [remover, player]),
         ])
       );
     }
@@ -471,6 +567,7 @@ export function createHighlights(app) {
       }
       lines.push(`> ${item.text}`, `> — с. ${pageNumber}`, '');
       if (item.note) lines.push(item.note, '');
+      if (item.voice) lines.push(`_Голосовая заметка, ${formatSeconds(item.voice.seconds)}${item.voice.transcribed && !item.voice.empty ? ' — текст выше' : ''}_`, '');
     }
     const bookmarks = record?.bookmarks || [];
     if (bookmarks.length) {
@@ -533,5 +630,6 @@ export function createHighlights(app) {
     get toolbarOpen() {
       return !toolbar.hidden;
     },
+    voiceNotes,
   };
 }

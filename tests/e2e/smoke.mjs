@@ -98,8 +98,13 @@ let browser;
 try {
   if (!(await waitForServer(`${BASE}/viewer.html`))) throw new Error('dev-сервер не поднялся');
 
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium' });
+  browser = await chromium.launch({
+    executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium',
+    // Поддельный микрофон (тон) — для голосовых заметок.
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  await context.grantPermissions(['microphone']);
   const page = await context.newPage();
   const consoleErrors = [];
   page.on('console', (message) => {
@@ -537,6 +542,70 @@ try {
     JSON.stringify(noted)
   );
 
+  // ── Голосовая заметка к тому же выделению ──
+  const markBox = await page.evaluate(() => {
+    const rect = document.querySelector('.page[data-page-number="3"] .mark-box').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.click(markBox.x, markBox.y);
+  await page.waitForTimeout(250);
+  await page.click('#markVoice');
+  await page.waitForFunction(() => !document.getElementById('markRecorder').hidden, null, { timeout: 5000 });
+  await page.waitForTimeout(1600);
+  const whileRecording = await page.evaluate(() => ({
+    time: document.getElementById('markRecTime').textContent,
+    level: document.getElementById('markRecLevel').style.transform,
+    swatchesLocked: document.getElementById('markToolbar').classList.contains('recording'),
+  }));
+  // Щелчок мимо панели во время записи её не закрывает.
+  await page.mouse.click(30, 400);
+  await page.waitForTimeout(150);
+  const stillOpen = await page.isVisible('#markRecorder');
+  await page.click('#markRecStop');
+  await page.waitForFunction(() => window.pdfReaderApp.readingState.record.highlights[0].voice, null, { timeout: 5000 });
+  await page.waitForTimeout(800);
+  const voiced = await page.evaluate(async () => {
+    const [item] = window.pdfReaderApp.readingState.record.highlights;
+    const library = await import('./src/library.js');
+    const record = await library.getRecording(item.voice.id);
+    return {
+      voice: item.voice,
+      note: item.note,
+      stored: record?.blob.size ?? 0,
+      docId: record?.docId === window.pdfReaderApp.readingState.documentId,
+      row: !document.getElementById('markVoiceRow').hidden,
+      info: document.getElementById('markVoiceInfo').textContent,
+      listed: document.querySelector('#highlightsPanel .mark-play')?.textContent,
+      hud: document.getElementById('hud').textContent,
+    };
+  });
+  check(
+    'голосовая заметка: запись идёт (время, уровень), щелчок мимо не прерывает, «Готово» сохраняет запись в библиотеку',
+    /^0:0[12]$/.test(whileRecording.time) &&
+      /scaleX/.test(whileRecording.level) &&
+      whileRecording.swatchesLocked &&
+      stillOpen &&
+      voiced.voice.seconds >= 1 &&
+      voiced.stored > 1000 &&
+      voiced.docId &&
+      voiced.note === 'моя заметка' &&
+      voiced.row &&
+      /0:0\d · без текста/.test(voiced.info) &&
+      /0:0\d/.test(voiced.listed),
+    JSON.stringify({ whileRecording, stillOpen, ...voiced })
+  );
+  check('без ускорителя — запись сохранена, подсказка, как получить текст', /Запись сохранена.*ускоритель/.test(voiced.hud), voiced.hud);
+  await page.click('#markVoicePlay');
+  await page.waitForTimeout(300);
+  const playback = await page.evaluate(() => ({
+    playing: window.pdfReaderApp.highlights.voiceNotes.isPlaying(window.pdfReaderApp.readingState.record.highlights[0].voice),
+    button: document.getElementById('markVoicePlay').textContent,
+  }));
+  check('запись проигрывается из панели выделения', playback.playing && playback.button === 'Стоп', JSON.stringify(playback));
+  await page.click('#markVoicePlay');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+
   const [notesDownload] = await Promise.all([
     page.waitForEvent('download', { timeout: 5000 }),
     page.click('#exportNotes'),
@@ -552,9 +621,19 @@ try {
       markdown.includes(`> ${marked.item.text}`) &&
       markdown.includes('> — с. 3') &&
       markdown.includes('моя заметка') &&
+      markdown.includes('_Голосовая заметка, 0:0') &&
       markdown.includes('## Закладки'),
     `${notesName}\n${markdown.slice(0, 300)}`
   );
+  // Запись убирают — текст заметки остаётся, файл из библиотеки удалён.
+  const voiceId = await page.evaluate(() => window.pdfReaderApp.readingState.record.highlights[0].voice.id);
+  await page.evaluate(() => window.pdfReaderApp.highlights.voiceNotes.removeVoice(window.pdfReaderApp.readingState.record.highlights[0].id));
+  const unvoiced = await page.evaluate(async (id) => {
+    const library = await import('./src/library.js');
+    const [item] = window.pdfReaderApp.readingState.record.highlights;
+    return { voice: item.voice, note: item.note, stored: Boolean(await library.getRecording(id)), listed: Boolean(document.querySelector('#highlightsPanel .mark-play')) };
+  }, voiceId);
+  check('удалить запись: файл убран, текст заметки остался', !unvoiced.voice && !unvoiced.stored && !unvoiced.listed && unvoiced.note === 'моя заметка', JSON.stringify(unvoiced));
   await page.evaluate(() => window.pdfReaderApp.toggleSidebar(false));
   await page.waitForTimeout(300);
 
