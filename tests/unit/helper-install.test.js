@@ -112,7 +112,7 @@ describe('установка ускорителя из расширения (hel
   it('весь путь: «Установить» → скачать с проверкой хэша → «Запустить» → нашёлся → модели → работает', async () => {
     Object.assign(HELPER_RELEASE.files.linux, { size: INSTALLER.length, sha256: SHA });
     globalThis.fetch = async (url) => {
-      assert.match(url, /releases\/download\/helper-v1\.0\.0\/pdf-reader-tts-linux$/);
+      assert.ok(url.endsWith(`/releases/download/helper-v${HELPER_RELEASE.version}/pdf-reader-tts-linux`), url);
       return new Response(INSTALLER);
     };
     const browser = fakeBrowser();
