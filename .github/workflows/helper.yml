@@ -86,6 +86,16 @@ jobs:
           for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do cp "/c/Windows/System32/$dll" vcrt/; done
           echo "PDF_TTS_EXTRA_LIBS=$(cygpath -w "$PWD/vcrt/msvcp140.dll");$(cygpath -w "$PWD/vcrt/msvcp140_1.dll");$(cygpath -w "$PWD/vcrt/vcruntime140.dll");$(cygpath -w "$PWD/vcrt/vcruntime140_1.dll")" >> "$GITHUB_ENV"
 
+      # whisper.cpp собирается через CMake. Для MSVC крейт cmake сам задаёт
+      # CMAKE_*_FLAGS_RELEASE и выбрасывает из них /O2 — библиотека выходила
+      # без оптимизации, расшифровка шла в 15 раз медленнее. Заданные явно,
+      # флаги он не трогает. (Только Windows: gcc таких флагов не знает.)
+      - name: Оптимизация whisper.cpp под MSVC
+        if: runner.os == 'Windows'
+        run: |
+          echo "CMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG" >> "$GITHUB_ENV"
+
       - name: Тесты
         working-directory: native
         run: |
