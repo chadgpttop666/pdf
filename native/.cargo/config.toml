@@ -7,8 +7,10 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # машины сборки — у раннера GitHub это может быть AVX-512, и у людей программа
 # падала бы. Собираем под AVX2 и FMA (процессоры с 2013 года); на более старых
 # помощник честно говорит, что расшифровка недоступна (speech::supported).
-# Библиотека C — статически, как у самой программы; привязки — готовые,
-# без libclang на машине сборки.
+# Библиотека C — статически, как у самой программы. Привязки к whisper.cpp
+# bindgen делает на каждой системе свои (готовые в whisper-rs — linux-овые,
+# на Windows не сходятся размеры структур); нужен libclang — на раннерах
+# GitHub он есть.
 [env]
 GGML_NATIVE = "OFF"
 GGML_AVX = "ON"
@@ -17,4 +19,3 @@ GGML_FMA = "ON"
 GGML_F16C = "ON"
 GGML_BMI2 = "ON"
 CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
-WHISPER_DONT_GENERATE_BINDINGS = "1"
