@@ -23,5 +23,5 @@ CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
 # не действует, и он собирается с динамической библиотекой C (/MD).
 CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
 # На Windows ещё нужны CMAKE_C_FLAGS_RELEASE / CMAKE_CXX_FLAGS_RELEASE =
-# "/O2 /Ob2 /DNDEBUG" — иначе whisper.cpp без оптимизации (их задаёт
+# "-O2 -Ob2 -DNDEBUG" — иначе whisper.cpp без оптимизации (их задаёт
 # .github/workflows/helper.yml; здесь нельзя — gcc таких флагов не знает).

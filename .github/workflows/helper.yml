@@ -90,11 +90,13 @@ jobs:
       # CMAKE_*_FLAGS_RELEASE и выбрасывает из них /O2 — библиотека выходила
       # без оптимизации, расшифровка шла в 15 раз медленнее. Заданные явно,
       # флаги он не трогает. (Только Windows: gcc таких флагов не знает.)
+      # Через дефис: «/O2» Git Bash принял бы за путь и превратил в
+      # «C:/Program Files/Git/O2».
       - name: Оптимизация whisper.cpp под MSVC
         if: runner.os == 'Windows'
         run: |
-          echo "CMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG" >> "$GITHUB_ENV"
+          echo "CMAKE_C_FLAGS_RELEASE=-O2 -Ob2 -DNDEBUG" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_FLAGS_RELEASE=-O2 -Ob2 -DNDEBUG" >> "$GITHUB_ENV"
 
       - name: Тесты
         working-directory: native
