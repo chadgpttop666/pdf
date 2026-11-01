@@ -15,7 +15,7 @@ import { WHISPER_MODEL, describeReason, installModel, transcribe, transcriberSta
  * @param highlights { find(id), update(id, patch) } — доступ к выделениям
  */
 export function createVoiceNotes(app, highlights) {
-  let recording = null; // { highlightId, session }
+  let recording = null; // { highlightId, session, aborted } — session нет, пока Firefox спрашивает про микрофон
   let playing = null; // { id, audio, url }
   const busy = new Set(); // id записей, которые сейчас расшифровываются
   const listeners = new Set();
@@ -30,12 +30,20 @@ export function createVoiceNotes(app, highlights) {
     stopPlaying();
     // Озвучка на паузу: иначе микрофон запишет и её.
     if (app.tts?.isSpeaking) app.tts.pause();
+    const ticket = { highlightId, session: null, aborted: false };
+    recording = ticket;
+    changed();
     try {
-      recording = { highlightId, session: null };
-      recording.session = await startRecording({ onLimit });
+      ticket.session = await startRecording({ onLimit });
     } catch (error) {
-      recording = null;
+      if (recording === ticket) recording = null;
+      changed();
       app.hud.show(describeMicError(error), { duration: 7000 });
+      return false;
+    }
+    // Пока Firefox спрашивал разрешение, запись отменили (Esc, другое выделение).
+    if (ticket.aborted) {
+      ticket.session.cancel();
       return false;
     }
     changed();
@@ -43,9 +51,20 @@ export function createVoiceNotes(app, highlights) {
   }
 
   /** Закончить запись и сохранить её. */
+  /** Запись ещё не началась (ждём разрешения) — просто отменить. */
+  function abortPending(current) {
+    current.aborted = true;
+    recording = null;
+    changed();
+  }
+
   async function finish() {
     const current = recording;
-    if (!current?.session) return null;
+    if (!current) return null;
+    if (!current.session) {
+      abortPending(current);
+      return null;
+    }
     recording = null;
     changed();
     let result;
@@ -64,7 +83,11 @@ export function createVoiceNotes(app, highlights) {
 
   function cancel() {
     const current = recording;
-    if (!current?.session) return;
+    if (!current) return;
+    if (!current.session) {
+      abortPending(current);
+      return;
+    }
     recording = null;
     current.session.cancel();
     changed();

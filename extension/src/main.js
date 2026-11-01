@@ -270,10 +270,14 @@ function wireAutoFit() {
  * читалки он не выгружает, пока включена настройка.
  */
 function keepTabLoaded(tabId) {
-  const apply = () =>
-    extensionApi.tabs.update(tabId, { autoDiscardable: !getSetting('keepTabLoaded') }).catch((error) => {
+  const apply = async () => {
+    try {
+      // Незнакомое свойство (старый Firefox) — исключение сразу, не отказ.
+      await extensionApi.tabs.update(tabId, { autoDiscardable: !getSetting('keepTabLoaded') });
+    } catch (error) {
       console.warn('Не удалось запретить выгрузку вкладки', error);
-    });
+    }
+  };
   apply();
   onSettingsChanged((_all, changed) => {
     if ('keepTabLoaded' in changed) apply();
@@ -412,6 +416,7 @@ async function main() {
 
 main().catch((error) => {
   console.error('Вьюер не запустился', error);
+  stopOpening(); // хотя бы не прятать то, что успело открыться
 });
 
 window.pdfReaderApp = app;
