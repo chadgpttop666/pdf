@@ -19,3 +19,6 @@ GGML_FMA = "ON"
 GGML_F16C = "ON"
 GGML_BMI2 = "ON"
 CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# whisper.cpp объявляет CMake 3.5 — без этой политики предыдущая строка
+# не действует, и он собирается с динамической библиотекой C (/MD).
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
