@@ -31,6 +31,13 @@ const fromBase64 = (text) => {
 
 const floatBytes = (values) => new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
 
+/** Звук float → 16 бит со знаком: вдвое меньше данных, для распознавания речи хватает. */
+export function pcm16Bytes(samples) {
+  const out = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) out[i] = Math.max(-32768, Math.min(32767, Math.round(samples[i] * 32767)));
+  return new Uint8Array(out.buffer);
+}
+
 /**
  * Клиент поверх порта: Port из runtime.connectNative или такой же объект
  * (postMessage, onMessage, onDisconnect, disconnect) — в проверках вне браузера.
@@ -102,6 +109,42 @@ export function createHelperClient(port) {
     return last;
   }
 
+  /**
+   * Файл из потока (скачивается тут же) — кусками, без копии целиком в памяти.
+   * @param stream ReadableStream байтов, size — его длина
+   */
+  async function uploadStream(type, fields, stream, size, onProgress) {
+    const reader = stream.getReader();
+    let offset = 0;
+    let buffer = new Uint8Array(CHUNK);
+    let filled = 0;
+    const flush = async (end) => {
+      const bytes = buffer.subarray(0, filled);
+      const reply = await request({ type, ...fields, offset, size, data: toBase64(bytes), last: end });
+      offset += filled;
+      filled = 0;
+      onProgress?.(offset, size);
+      return reply;
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      let from = 0;
+      while (from < value.length) {
+        const take = Math.min(CHUNK - filled, value.length - from);
+        buffer.set(value.subarray(from, from + take), filled);
+        filled += take;
+        from += take;
+        if (filled === CHUNK && offset + filled < size) {
+          await flush(false);
+          buffer = new Uint8Array(CHUNK);
+        }
+      }
+    }
+    if (offset + filled !== size) throw new Error(`Загрузка оборвалась: ${offset + filled} из ${size} байт`);
+    return flush(true);
+  }
+
   return {
     hello: () => request({ type: 'hello' }),
     /** Загрузить модели заранее — первая фраза пойдёт без ожидания. */
@@ -128,6 +171,14 @@ export function createHelperClient(port) {
       });
     },
     sendFile: (name, blob, onProgress) => upload('file', { name }, blob, onProgress),
+    /** Модель из интернета: помощник сверит SHA-256 и только тогда положит на место. */
+    streamFile: (name, stream, { size, sha256 }, onProgress) => uploadStream('file', { name, sha256 }, stream, size, onProgress),
+    /**
+     * Голосовая заметка → текст (Whisper в помощнике).
+     * @param samples Float32Array, 16 кГц, моно
+     * @returns {Promise<{ text: string, seconds: number }>}
+     */
+    transcribe: (samples, language = 'ru') => request({ type: 'transcribe', pcm: toBase64(pcm16Bytes(samples)), language }),
     /** Новая версия помощника: он поставит её себе сам. */
     update: (blob, sha256, onProgress) => upload('update', { sha256 }, blob, onProgress),
     uninstall: () => request({ type: 'uninstall' }),

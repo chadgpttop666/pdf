@@ -11,6 +11,7 @@ mod host;
 mod install;
 mod noise;
 mod protocol;
+mod speech;
 mod synth;
 
 pub const EXTENSION_ID: &str = "pdf-reader@chadgpttop666.github.io";

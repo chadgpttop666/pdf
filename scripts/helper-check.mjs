@@ -4,7 +4,11 @@
 // (onnxruntime-web — тем же, что в расширении).
 //
 //   node scripts/helper-check.mjs --helper native/target/release/pdf-reader-tts \
-//     --models <папка> [--download] [--hoist] [--compare] [--wav out.wav]
+//     --models <папка> [--download] [--hoist] [--compare] [--wav out.wav] [--transcribe]
+//
+// С --transcribe синтезированная фраза уходит обратно в помощник — на
+// расшифровку Whisper (голосовые заметки): модель — <папка>/whisper/, с
+// --download скачается.
 //
 // Папка моделей — как в репозитории TeraTTSv2 на HuggingFace (models/,
 // styles/, unicode_indexer.json); --download скачает недостающее.
@@ -18,6 +22,7 @@ import { PACK_URLS } from '../extension/src/tts/tera-pack.js';
 import { createHelperClient, syncModels } from '../extension/src/tts/tera-native.js';
 import { noise } from '../extension/src/tts/tera-noise.js';
 import { encodeText, keepSupported, maxSecondsFor, modelText, parseNpy, voicedRange } from '../extension/src/tts/tera-text.js';
+import { SPEECH_MODELS, WHISPER_MODEL, resample } from '../extension/src/voice/whisper.js';
 
 const { values: args } = parseArgs({
   options: {
@@ -31,6 +36,7 @@ const { values: args } = parseArgs({
     sampler: { type: 'string' },
     // Вынести веса сэмплера из цикла здесь же — как это делает расширение перед передачей.
     hoist: { type: 'boolean', default: false },
+    transcribe: { type: 'boolean', default: false },
   },
 });
 
@@ -249,5 +255,52 @@ if (args.wav) {
   console.log(`записал ${args.wav}`);
 }
 
+if (args.transcribe) await checkTranscription();
+
 client.close();
 console.log('✓ ускоритель работает');
+
+/** Голосовые заметки: синтезированная фраза → Whisper → те же слова. */
+async function checkTranscription() {
+  if (!hello.features?.includes('transcribe')) fail('помощник не умеет расшифровывать');
+  let started = performance.now();
+  const { Readable } = await import('node:stream');
+  for (const model of SPEECH_MODELS) {
+    const file = local(`whisper/${model.url.split('/').pop()}`);
+    if (!fs.existsSync(file)) {
+      if (!args.download) fail(`нет ${file} (или --download)`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const response = await fetch(model.url);
+      if (!response.ok) fail(`${model.name}: ${response.status}`);
+      fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+    }
+    // Как расширение: потоком, с проверкой SHA-256 в помощнике.
+    await client.streamFile(model.name, Readable.toWeb(fs.createReadStream(file)), model);
+  }
+  console.log(`передал модели расшифровки за ${((performance.now() - started) / 1000).toFixed(1)} с`);
+
+  // Повреждённый файл помощник не принимает.
+  const broken = await client
+    .streamFile(WHISPER_MODEL.name, new Blob([new Uint8Array(1000)]).stream(), { size: 1000, sha256: WHISPER_MODEL.sha256 })
+    .then(() => null, (error) => error.message);
+  if (!/SHA-256/.test(broken || '')) fail(`повреждённая модель принята: ${broken}`);
+  const after = await client.hello();
+  if (after.files.whisper !== WHISPER_MODEL.size) fail('после повреждённой передачи модель пропала');
+
+  const phrase = 'С+егодня мы чит+аем кн+игу о т+ом, как раб+отает с+интез р+ечи, и сл+ушаем, как зв+учит г+олос.';
+  const { withStress, plain } = encodeText(modelText('ru', keepSupported(phrase, table)), table);
+  const { pcm, sampleRate } = await client.synth({ ids: withStress, plain, ...voice, maxSeconds: maxSecondsFor(phrase) });
+  started = performance.now();
+  const { text } = await client.transcribe(resample(pcm, sampleRate), 'ru');
+  const elapsed = (performance.now() - started) / 1000;
+  const words = ['книгу', 'синтез', 'голос'].filter((word) => text.toLowerCase().includes(word));
+  const line = `расшифровка за ${elapsed.toFixed(1)} с: «${text}»`;
+  if (words.length < 2) fail(`${line} — не те слова`);
+  console.log(line);
+
+  // Тишина с тихим шумом: детектор речи не пускает её к Whisper — текста нет.
+  const hush = Float32Array.from({ length: 16000 * 3 }, () => (Math.random() - 0.5) * 0.004);
+  const quiet = await client.transcribe(hush, 'ru');
+  if (quiet.text) fail(`на тишине «расшифровано»: «${quiet.text}»`);
+  console.log('на тишине — пусто, как и должно');
+}

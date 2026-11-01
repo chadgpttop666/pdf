@@ -19,10 +19,9 @@
 
 import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
-import { fetchHelper } from './helper-install.js';
-import { HELPER_RELEASE } from './helper-release.js';
+import { updateIfOld } from './helper-install.js';
 import { estimateWordTimings } from './piper-math.js';
-import { HELPER_PROTOCOL, compareVersions, connectHelper, missingModels, syncModels } from './tera-native.js';
+import { HELPER_PROTOCOL, connectHelper, missingModels, syncModels } from './tera-native.js';
 import { encodeText, keepSupported, modelText, planPieces, voicedRange } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
 import {
@@ -221,22 +220,6 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     const sampler = (await ensureDerived(SAMPLER_PARTS.max)) ? SAMPLER_PARTS.max : 'sampler';
     const parts = await loadParts(['textEncoder', 'duration', sampler, 'vocoder']);
     return { textEncoder: parts.textEncoder, duration: parts.duration, sampler: parts[sampler], vocoder: parts.vocoder };
-  }
-
-  /** Помощник старее, чем ждёт расширение, — он поставит новую версию себе сам. */
-  async function updateIfOld(connection) {
-    if (compareVersions(connection.hello.version, HELPER_RELEASE.version) >= 0) return connection;
-    try {
-      const { blob, sha256 } = await fetchHelper();
-      await connection.client.update(blob, sha256);
-    } catch (error) {
-      console.warn('TeraTTS: ускоритель не обновился', error);
-      return connection;
-    }
-    connection.client.close();
-    const fresh = await connectHelper();
-    if (!fresh) throw new Error('После обновления ускоритель не запустился');
-    return fresh;
   }
 
   /** Подключиться к ускорителю и передать ему модели; null — синтез в браузере. */

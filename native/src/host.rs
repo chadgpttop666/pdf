@@ -5,6 +5,7 @@
 
 use crate::install;
 use crate::protocol::{self, Outbox};
+use crate::speech;
 use crate::synth::{Latent, Latents, Request, Vocoder, SAMPLE_RATE};
 use crate::{PROTOCOL, VERSION};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -14,7 +15,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock};
@@ -22,6 +23,9 @@ use std::time::Duration;
 
 /// Модели, которые расширение передаёт помощнику (имена — как в tera-pack.js).
 pub const MODEL_NAMES: [&str; 4] = ["textEncoder", "duration", "sampler", "vocoder"];
+/// Модель распознавания речи для голосовых заметок и детектор речи к ней — по желанию.
+pub const WHISPER: &str = "whisper";
+pub const VAD: &str = "vad";
 // Модели занимают почти гигабайт — после простоя выгружаем, как и расширение.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 // Сэмплов в одном сообщении: 512 КБ, в base64 — около 700 КБ.
@@ -91,16 +95,37 @@ fn threads() -> (usize, usize) {
     ((cores / 4).clamp(1, 4), 1)
 }
 
+/// Имя модели в сообщениях → файл в папке моделей.
+fn model_path(name: &str) -> Option<PathBuf> {
+    let file = if name == WHISPER {
+        speech::MODEL_FILE.to_string()
+    } else if name == VAD {
+        speech::VAD_FILE.to_string()
+    } else if MODEL_NAMES.contains(&name) {
+        format!("{name}.onnx")
+    } else {
+        return None;
+    };
+    Some(install::models_dir().join(file))
+}
+
+/// Какие модели уже переданы: имя → размер.
 fn model_files() -> serde_json::Map<String, Value> {
-    let dir = install::models_dir();
     MODEL_NAMES
         .iter()
+        .chain([&WHISPER, &VAD])
         .filter_map(|name| {
-            fs::metadata(dir.join(format!("{name}.onnx")))
-                .ok()
-                .map(|meta| (name.to_string(), json!(meta.len())))
+            let path = model_path(name)?;
+            fs::metadata(path).ok().map(|meta| (name.to_string(), json!(meta.len())))
         })
         .collect()
+}
+
+fn sha256_hex(path: &Path) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    io::copy(&mut file, &mut hasher).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Модели в памяти потока; загружаются при первой фразе и после замены файлов.
@@ -108,7 +133,8 @@ fn ensure<'a, T>(slot: &'a mut Option<(u64, T)>, shared: &Shared, load: impl FnO
     let generation = shared.models.load(Ordering::SeqCst);
     if slot.as_ref().map(|(loaded, _)| *loaded) != Some(generation) {
         *slot = None; // старые — из памяти до загрузки новых
-        if model_files().len() < MODEL_NAMES.len() {
+        let files = model_files();
+        if !MODEL_NAMES.iter().all(|name| files.contains_key(*name)) {
             return Err("Модели ещё не переданы помощнику".into());
         }
         let value = load(&environment()?, &install::models_dir())?;
@@ -231,6 +257,16 @@ fn floats(message: &Value, key: &str) -> Result<Vec<f32>, String> {
     Ok(chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect())
 }
 
+/// Звук 16 бит со знаком (little-endian) → float.
+fn pcm16(message: &Value, key: &str) -> Result<Vec<f32>, String> {
+    let raw = bytes(message, key)?;
+    let (chunks, rest) = raw.as_chunks::<2>();
+    if !rest.is_empty() {
+        return Err(format!("{key}: не 16-битный звук"));
+    }
+    Ok(chunks.iter().map(|chunk| f32::from(i16::from_le_bytes(*chunk)) / 32768.0).collect())
+}
+
 fn integers(message: &Value, key: &str) -> Result<Vec<i64>, String> {
     message
         .get(key)
@@ -279,7 +315,7 @@ fn receive(message: &Value, partial: &Path) -> Result<Option<u64>, String> {
     Ok(None)
 }
 
-fn handle(message: &Value, shared: &Shared, jobs: &Sender<Job>) -> Result<(), String> {
+fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>) -> Result<(), String> {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     match text(message, "type")? {
         // Ответ — сразу, без загрузки ONNX Runtime: при первом запуске на
@@ -293,22 +329,54 @@ fn handle(message: &Value, shared: &Shared, jobs: &Sender<Job>) -> Result<(), St
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+                "features": if speech::supported().is_ok() { json!(["transcribe"]) } else { json!([]) },
             }));
+        }
+        // Голосовая заметка → текст. Отдельным потоком: синтез и отмены
+        // тем временем обрабатываются как обычно.
+        "transcribe" => {
+            let path = model_path(WHISPER).expect("имя известно");
+            if !path.exists() {
+                return Err("Модель распознавания речи ещё не передана".into());
+            }
+            let vad = model_path(VAD).filter(|path| path.exists());
+            let samples = pcm16(message, "pcm")?;
+            let language = message.get("language").and_then(Value::as_str).unwrap_or("ru").to_string();
+            let shared = Arc::clone(shared);
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                match speech::transcribe(&path, vad.as_deref(), &samples, &language) {
+                    Ok(text) => shared.out.send(json!({
+                        "type": "transcript",
+                        "id": id,
+                        "text": text,
+                        "seconds": started.elapsed().as_secs_f64(),
+                    })),
+                    Err(error) => shared.error(&id, &error, false),
+                }
+            });
         }
         "file" => {
             let name = text(message, "name")?;
-            if !MODEL_NAMES.contains(&name) {
-                return Err(format!("незнакомая модель {name}"));
-            }
+            let target = model_path(name).ok_or_else(|| format!("незнакомая модель {name}"))?;
             let dir = install::models_dir();
             fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
             // У каждой копии помощника (читалка и плашка на сайте — разные
             // процессы) свой временный файл: передачи не мешают друг другу.
-            let partial = dir.join(format!("{name}.onnx.{}.part", std::process::id()));
+            let partial = dir.join(format!("{name}.{}.part", std::process::id()));
             let done = receive(message, &partial)?;
             if done.is_some() {
-                fs::rename(&partial, dir.join(format!("{name}.onnx"))).map_err(|error| format!("{name}: {error}"))?;
-                shared.models.fetch_add(1, Ordering::SeqCst);
+                // Файл из интернета (модель Whisper) — сверяем с ожидаемым.
+                if let Some(expected) = message.get("sha256").and_then(Value::as_str) {
+                    if !sha256_hex(&partial)?.eq_ignore_ascii_case(expected) {
+                        let _ = fs::remove_file(&partial);
+                        return Err(format!("{name}: файл повреждён — не сходится SHA-256"));
+                    }
+                }
+                fs::rename(&partial, &target).map_err(|error| format!("{name}: {error}"))?;
+                if MODEL_NAMES.contains(&name) {
+                    shared.models.fetch_add(1, Ordering::SeqCst);
+                }
             }
             shared.out.send(json!({ "type": "file-ok", "id": id, "name": name, "done": done.is_some() }));
         }

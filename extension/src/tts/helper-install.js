@@ -5,7 +5,7 @@
 // ожидание установки, передача моделей, обновления.
 
 import { HELPER_RELEASE, helperUrl } from './helper-release.js';
-import { connectHelper } from './tera-native.js';
+import { compareVersions, connectHelper } from './tera-native.js';
 
 export const HELPER_PERMISSIONS = { permissions: ['nativeMessaging', 'downloads', 'downloads.open'] };
 /**
@@ -106,6 +106,26 @@ export async function waitForHelper({ timeoutMs = WAIT_INSTALL_MS, isCancelled =
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return null;
+}
+
+/**
+ * Помощник старее, чем ждёт расширение, — он поставит новую версию себе сам
+ * (новый файл — с GitHub, с проверкой хэша) и запустится заново.
+ * @returns подключение к новой версии; старое, если обновиться не вышло
+ */
+export async function updateIfOld(connection) {
+  if (compareVersions(connection.hello.version, HELPER_RELEASE.version) >= 0) return connection;
+  try {
+    const { blob, sha256 } = await fetchHelper();
+    await connection.client.update(blob, sha256);
+  } catch (error) {
+    console.warn('Ускоритель не обновился', error);
+    return connection;
+  }
+  connection.client.close();
+  const fresh = await connectHelper();
+  if (!fresh) throw new Error('После обновления ускоритель не запустился');
+  return fresh;
 }
 
 /** Убрать скачанный установщик: программа уже скопировала себя на место. */
