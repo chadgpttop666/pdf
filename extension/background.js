@@ -212,6 +212,11 @@ async function selectionOf(tab, frameId) {
 }
 
 async function speakSelection(tab, info = {}) {
+  // Вкладка самой читалки: читает она, очередью и с подсветкой в PDF.
+  if (tab.url?.startsWith(VIEWER_URL)) {
+    browser.runtime.sendMessage({ type: 'pdf-reader-speak-selection', tabId: tab.id }).catch(() => {});
+    return;
+  }
   if (await speakOnPage(tab, info.frameId)) return;
   let text = await selectionOf(tab, info.frameId);
   if (!text.trim()) text = info.selectionText || '';

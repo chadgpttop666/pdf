@@ -14,6 +14,8 @@ import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpans
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
+/** Позиция a дальше позиции b в документе. */
+const isAfter = (a, b) => a.pageNumber > b.pageNumber || (a.pageNumber === b.pageNumber && a.sentenceIndex > b.sentenceIndex);
 // Сколько синтезировать заранее, задаёт настройка — минуты речи (buffer.js).
 // Дальше стольких страниц вперёд не заглядываем: на нераспознанном скане
 // предложений нет, и поиск текста ушёл бы до конца книги.
@@ -53,6 +55,10 @@ export function createTts(app) {
   let heard = { ms: 0, since: 0, started: false };
   let lags = 0; // сколько раз посреди чтения нейроголос не успел
   let lagHintShown = false;
+  // Чтение выделенного: текущий кусок и очередь следующих — { from, to },
+  // позиции предложений, to включительно. range = null — читаем документ подряд.
+  let range = null;
+  let queued = [];
 
   const PICK_HINT = 'Щёлкните по тексту — начну читать с этого места';
 
@@ -206,7 +212,17 @@ export function createTts(app) {
     const texts = [];
     let cursor = { ...from };
     let chars = 0;
+    // Читаем выделенное — заготовки только в его кусках, по очереди.
+    const plan = range ? [range, ...queued] : null;
+    let piece = 0;
     while (chars < budget && cursor.pageNumber - from.pageNumber <= PREFETCH_PAGES) {
+      if (plan) {
+        while (piece < plan.length && isAfter(cursor, plan[piece].to)) {
+          piece += 1;
+          if (piece < plan.length && isAfter(plan[piece].from, cursor)) cursor = { ...plan[piece].from };
+        }
+        if (piece >= plan.length) break;
+      }
       const page = await index.page(cursor.pageNumber);
       if (!page || token !== prefetchToken) return;
       if (cursor.sentenceIndex >= page.sentences.length) {
@@ -417,6 +433,18 @@ export function createTts(app) {
           continue;
         }
 
+        // Кусок выделенного дочитан — следующий из очереди или конец.
+        if (range && isAfter(position, range.to)) {
+          const next = queued.shift();
+          if (!next) {
+            finish('Выделенное прочитано');
+            return;
+          }
+          range = next;
+          if (isAfter(next.from, position) || isAfter(position, next.from)) position = { ...next.from };
+          continue;
+        }
+
         const utterance = await buildUtterance(page, position.sentenceIndex);
         if (myGeneration !== generation) return;
         // «* * *» и прочие разделители читать вслух незачем.
@@ -437,7 +465,7 @@ export function createTts(app) {
 
         const sentenceIndex = position.sentenceIndex;
         view().highlightSentence(page, sentenceIndex);
-        const status = `Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}`;
+        const status = `Стр. ${page.pageNumber}, предложение ${sentenceIndex + 1} из ${page.sentences.length}${queued.length ? ` · в очереди ещё ${queued.length}` : ''}`;
         sentenceStatus = status;
         setStatus(status);
         upcoming = utterance.next;
@@ -522,6 +550,8 @@ export function createTts(app) {
     // «Старт» копил бы речь молча, пока не нажмут ещё раз.
     if (state === 'paused') provider?.resume();
     state = 'idle';
+    range = null;
+    queued = [];
     clearInterval(bufferTimer);
     buffer = [];
     $('ttsBuffer').hidden = true;
@@ -542,26 +572,106 @@ export function createTts(app) {
     if (message) app.hud.show(message);
   }
 
+  /**
+   * Где точка выделения (узел и смещение в нём): спан текстового слоя или
+   * предложение режима «только текст». Без ожидания: пока ждали бы, pdf.js
+   * мог перерисовать слой, и узлы выделения стали бы уже не на странице.
+   */
+  function locatePoint(node, offset, atEnd = false) {
+    const inReflow = app.reflow?.positionOfNode(node);
+    if (inReflow) return { position: inReflow };
+    const span = textSpanOf(node);
+    if (span) {
+      const pageNumber = Number(span.closest('.page')?.dataset.pageNumber);
+      const spanIndex = pageNumber ? textSpansOfPage(app, pageNumber).indexOf(span) : -1;
+      if (spanIndex < 0) return null;
+      return { pageNumber, spanIndex, inSpan: node.nodeType === Node.TEXT_NODE ? offsetInSpan(span, node, offset) : 0 };
+    }
+    // Граница выделения пришлась между спанами — на перенос строки <br> или
+    // на сам слой: конец относим к спану перед ней, начало — к спану после.
+    const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    const pageNumber = Number(element?.closest('.page')?.dataset.pageNumber);
+    if (!pageNumber) return null;
+    const boundary = node.nodeType === Node.ELEMENT_NODE ? node.childNodes[offset] ?? null : node;
+    const spans = textSpansOfPage(app, pageNumber);
+    const before = (candidate) => {
+      if (!boundary) return candidate.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING || node.contains(candidate);
+      return Boolean(boundary.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_PRECEDING);
+    };
+    if (atEnd) {
+      const spanIndex = spans.findLastIndex((candidate) => before(candidate));
+      return spanIndex < 0 ? null : { pageNumber, spanIndex, inSpan: spans[spanIndex].textContent.length };
+    }
+    const spanIndex = spans.findIndex((candidate) => !before(candidate));
+    return spanIndex < 0 ? null : { pageNumber, spanIndex, inSpan: 0 };
+  }
+
+  /** Предложение точки; atEnd — конец выделения: точка в начале спана относится к предыдущему символу. */
+  async function positionOfPoint(point, atEnd = false) {
+    if (!point) return null;
+    if (point.position) return point.position;
+    const at = await index.offsetForSpan(point.pageNumber, point.spanIndex, point.inSpan);
+    return { pageNumber: point.pageNumber, sentenceIndex: await index.sentenceIndexAt(point.pageNumber, atEnd ? Math.max(0, at - 1) : at) };
+  }
+
   /** Если в тексте что-то выделено, читать начинаем с начала выделения. */
   async function positionFromSelection() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
-    const range = selection.getRangeAt(0); // начало диапазона всегда раньше конца
-    const inReflow = app.reflow?.positionOfNode(range.startContainer);
-    if (inReflow) {
-      selection.removeAllRanges();
-      return inReflow;
+    const selected = selection.getRangeAt(0); // начало диапазона всегда раньше конца
+    const position = await positionOfPoint(locatePoint(selected.startContainer, selected.startOffset));
+    if (position) selection.removeAllRanges();
+    return position;
+  }
+
+  /** Выделенный кусок — от предложения начала до предложения конца. */
+  async function rangeOfSelection(selected) {
+    if (!index || !selected || selected.collapsed) return null;
+    const start = locatePoint(selected.startContainer, selected.startOffset);
+    const end = locatePoint(selected.endContainer, selected.endOffset, true);
+    const from = await positionOfPoint(start);
+    const to = await positionOfPoint(end, true);
+    if (!from || !to) return null;
+    return { from, to: isAfter(from, to) ? from : to };
+  }
+
+  /**
+   * Озвучить выделенное: ничего не читается (или читается документ) — читать
+   * этот кусок; уже читается выделенное — поставить кусок в очередь, мусор
+   * между кусками пропускается.
+   * @param selected Range; по умолчанию — текущее выделение
+   * @returns {Promise<boolean>} кусок принят
+   */
+  async function speakSelection(selected = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0) : null) {
+    return speakPiece(await rangeOfSelection(selected));
+  }
+
+  /** То же для куска, место которого уже найдено (rangeOfSelection). */
+  async function speakPiece(piece) {
+    if (!piece) {
+      app.hud.show('Выделите текст документа — его и прочитаю');
+      return false;
     }
-    const span = textSpanOf(range.startContainer);
-    const pageNumber = Number(span?.closest('.page')?.dataset.pageNumber);
-    if (!span || !pageNumber) return null;
-    const spanIndex = textSpansOfPage(app, pageNumber).indexOf(span);
-    if (spanIndex < 0) return null;
-    const inSpan =
-      range.startContainer.nodeType === Node.TEXT_NODE ? offsetInSpan(span, range.startContainer, range.startOffset) : 0;
-    const offset = await index.offsetForSpan(pageNumber, spanIndex, inSpan);
-    selection.removeAllRanges();
-    return { pageNumber, sentenceIndex: await index.sentenceIndexAt(pageNumber, offset) };
+    window.getSelection()?.removeAllRanges();
+    const same = (a, b) => !isAfter(a.from, b.from) && !isAfter(b.from, a.from) && !isAfter(a.to, b.to) && !isAfter(b.to, a.to);
+    if (range && state !== 'idle') {
+      if ([range, ...queued].some((other) => same(other, piece))) {
+        app.hud.show('Этот кусок уже в очереди');
+        return true;
+      }
+      queued.push(piece);
+      app.hud.show(`Добавлено в очередь — впереди ${queued.length}`);
+      prefetchAhead(upcoming);
+      return true;
+    }
+    queued = [];
+    if (state === 'idle') {
+      await start(piece.from, piece);
+    } else {
+      range = piece;
+      restartAt(piece.from);
+    }
+    return true;
   }
 
   /** Показать, откуда начнётся чтение, не запуская его. */
@@ -578,7 +688,7 @@ export function createTts(app) {
     setStatus(`Начну с «${short}» — нажмите ▶ или S`);
   }
 
-  async function start(from) {
+  async function start(from, piece = null) {
     if (!index) {
       app.hud.show('Сначала откройте документ');
       return;
@@ -590,6 +700,9 @@ export function createTts(app) {
     const picked = cursorShown ? position : null;
     position = from || (await positionFromSelection()) || picked || (await view().firstVisible());
     cursorShown = false;
+    // Обычный старт — документ подряд; кусок — только выделенное.
+    range = piece;
+    queued = [];
     await loop();
   }
 
@@ -713,6 +826,9 @@ export function createTts(app) {
   }
 
   async function pickAt(target, event) {
+    // Щелчок по тексту — читать отсюда подряд, а не выделенные куски.
+    range = null;
+    queued = [];
     if (state !== 'idle') restartAt(target);
     else if (event.altKey) await start(target);
     else await showCursor(target);
@@ -818,6 +934,17 @@ export function createTts(app) {
     toggle,
     pause,
     resume,
+    speakSelection,
+    speakPiece,
+    /**
+     * Место выделения в документе: { from, to } — считать сразу, пока
+     * текстовый слой тот же (его перерисовка обрывает сохранённый Range).
+     */
+    pieceOfRange: rangeOfSelection,
+    /** Сколько кусков выделенного ждёт очереди (для проверок и панели). */
+    get queued() {
+      return queued.length;
+    },
     next: () => jump(1),
     previous: () => jump(-1),
     async adjustRate(delta) {

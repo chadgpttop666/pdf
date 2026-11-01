@@ -21,6 +21,7 @@ export function createHighlights(app) {
   const list = $('highlightsPanel');
 
   let pendingRange = null; // свежее выделение мышью, ещё не превращённое в маркер
+  let pendingPiece = null; // его место для озвучки — считается сразу (Promise)
   let editingId = null; // выделение, которое сейчас правят
   let lastColor = 'yellow';
   let noteTimer = 0;
@@ -163,8 +164,10 @@ export function createHighlights(app) {
 
   function showForSelection(range) {
     pendingRange = range.cloneRange();
+    pendingPiece = app.tts?.pieceOfRange(pendingRange).catch(() => null) ?? null;
     editingId = null;
     deleteButton.hidden = true;
+    $('markSpeak').hidden = false;
     noteInput.hidden = true;
     noteInput.value = '';
     markActiveSwatch(null);
@@ -175,6 +178,7 @@ export function createHighlights(app) {
     pendingRange = null;
     editingId = highlight.id;
     deleteButton.hidden = false;
+    $('markSpeak').hidden = true;
     noteInput.hidden = !highlight.note;
     noteInput.value = highlight.note || '';
     markActiveSwatch(highlight.color);
@@ -238,6 +242,13 @@ export function createHighlights(app) {
     on(swatch, 'click', () => chooseColor(swatch.dataset.color));
   }
   on($('markNoteToggle'), 'click', openNote);
+  // Озвучить выделенное — или поставить в очередь, если выделенное уже читается.
+  on($('markSpeak'), 'click', async () => {
+    const piece = pendingPiece;
+    hideToolbar();
+    window.getSelection()?.removeAllRanges();
+    if (piece) app.tts?.speakPiece(await piece);
+  });
   on(deleteButton, 'click', async () => {
     if (editingId) await remove(editingId);
     hideToolbar();

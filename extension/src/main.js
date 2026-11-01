@@ -276,6 +276,17 @@ async function main() {
   app.readingState = createReadingState(app);
   app.bookmarks = createBookmarks(app);
   app.highlights = createHighlights(app);
+  // «Озвучить выделенное» из меню или Alt+Shift+S в этой вкладке: скрипт в
+  // страницу расширения не встроить, поэтому фоновая страница присылает сообщение.
+  extensionApi?.tabs?.getCurrent?.().then((tab) => {
+    if (!tab) return;
+    extensionApi.runtime.onMessage.addListener((message) => {
+      if (message?.type !== 'pdf-reader-speak-selection' || message.tabId !== tab.id) return;
+      const selected = window.getSelection();
+      if (selected && !selected.isCollapsed) app.tts.speakSelection();
+      else app.tts.toggle();
+    });
+  });
   app.stats = createStats(app);
   app.ocr = createOcr(app);
   app.recent = createRecent(app);

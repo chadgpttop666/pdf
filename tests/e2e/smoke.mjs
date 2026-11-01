@@ -619,6 +619,65 @@ try {
     `+${Math.round(afterHidden.listenMs - beforeHidden.listenMs)} мс, +${afterHidden.listenChars - beforeHidden.listenChars} знаков`
   );
 
+  // Выделенное — очередью и в самом PDF: два куска стр. 2; текст между ними
+  // и дальше по документу не читается.
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await page.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
+  const selectSpans = (from, to) =>
+    page.evaluate(
+      ({ from: a, to: b }) => {
+        const spans = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].filter((span) => span.textContent.trim().length > 3);
+        const range = document.createRange();
+        range.setStart(spans[a].firstChild, 0);
+        range.setEnd(spans[b].firstChild, spans[b].firstChild.length);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return spans.map((span) => span.textContent.trim().slice(0, 14));
+      },
+      { from, to }
+    );
+  await page.evaluate(() => {
+    window.spokenSentences.length = 0;
+  });
+  const spansText = await selectSpans(1, 2);
+  // Кнопка «Озвучить» в панели над выделением.
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })));
+  await page.waitForFunction(() => !document.getElementById('markToolbar').hidden && !document.getElementById('markSpeak').hidden);
+  await page.click('#markSpeak');
+  await page
+    .waitForFunction(() => window.pdfReaderApp.tts.state === 'speaking', null, { timeout: 8000 })
+    .catch(async () => {
+      console.log('диагностика очереди:', JSON.stringify(await page.evaluate(() => ({
+        state: window.pdfReaderApp.tts.state,
+        hud: document.getElementById('hud').textContent,
+        status: document.getElementById('ttsStatus').textContent,
+        reflow: window.pdfReaderApp.reflow?.active,
+        bar: !document.getElementById('ttsBar').hidden,
+        engine: window.pdfReaderApp.tts.engine,
+        spoken: window.spokenSentences.length,
+      }))));
+    });
+  const last = spansText.length - 1;
+  await selectSpans(last, last);
+  const pdfQueued = await page.evaluate(async () => {
+    await window.pdfReaderApp.tts.speakSelection();
+    return window.pdfReaderApp.tts.queued;
+  });
+  await page.waitForFunction(() => window.pdfReaderApp.tts.state === 'idle', null, { timeout: 30000 });
+  const queueRun = await page.evaluate(() => ({ spoken: [...window.spokenSentences], status: document.getElementById('ttsStatus').textContent }));
+  // На странице больше двадцати фраз: прочитай читалка текст между кусками,
+  // их было бы куда больше трёх.
+  check(
+    'выделенное в PDF: кусок, затем кусок из очереди; текст между ними не читается',
+    pdfQueued === 1 &&
+      queueRun.spoken.length <= 3 &&
+      queueRun.spoken[0].includes(spansText[1]) &&
+      queueRun.spoken.at(-1).replace(/\s+/g, ' ').includes(spansText[last].replace(/\s+/g, ' ')) &&
+      /Выделенное прочитано/.test(queueRun.status),
+    JSON.stringify({ pdfQueued, first: spansText[1], last: spansText[last], spoken: queueRun.spoken, status: queueRun.status })
+  );
+
   await page.click('#readingEta');
   await page.waitForTimeout(400);
   const statsView = await page.evaluate(() => ({
@@ -1297,6 +1356,11 @@ try {
     });
   await selectSecond();
   await pill.waitForFunction(() => !document.getElementById('pillAdd').hidden, null, { timeout: 3000 });
+  const addDiag = await pill.evaluate(() => {
+    const r = document.getElementById('pillAdd').getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return { hit: hit?.id || hit?.className, status: document.getElementById('pillStatus').textContent, statusHidden: document.getElementById('pillStatus').hidden, state: window.speakPill.reader.state, voice: document.getElementById('ttsVoice').value };
+  });
   await pill.click('#pillAdd');
   await site.waitForFunction(() => CSS.highlights.has('pdf-reader-speak-queue'), null, { timeout: 3000 });
   const queued = await site.evaluate(() => ({
@@ -1316,7 +1380,7 @@ try {
       !queuedInPill.add &&
       queued.selection === '' &&
       queued.queue.some((text) => text.includes('Второй кусок')),
-    JSON.stringify({ ...queued, ...queuedInPill })
+    JSON.stringify({ ...queued, ...queuedInPill, addDiag })
   );
   await selectSecond();
   const duplicate = await site.evaluate(() => window.__pdfReaderSpeak.fromSelection());
