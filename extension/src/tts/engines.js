@@ -7,6 +7,7 @@ import { el, formatBytes } from '../dom.js';
 import { get as getSetting } from '../settings.js';
 import { createHttpProvider } from './http-provider.js';
 import { PIPER_PREFIX, createPiperProvider } from './piper-provider.js';
+import { HELPER_STAMP } from './helper-install.js';
 import { TERA_PREFIX, createTeraProvider } from './tera-provider.js';
 import { createWebSpeechProvider } from './web-speech.js';
 
@@ -17,6 +18,10 @@ export function createEngines() {
     rate: () => getSetting('ttsRate'),
     quality: () => getSetting('teraQuality'),
     useHelper: () => getSetting('teraUseHelper'),
+  });
+  // Ускоритель поставили или убрали — в этой вкладке или в другой.
+  globalThis.browser?.storage?.onChanged?.addListener((changes, area) => {
+    if (area === 'local' && changes[HELPER_STAMP]) tera.refreshHelper(changes[HELPER_STAMP].newValue?.installed !== false);
   });
   let system = null;
 

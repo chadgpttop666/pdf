@@ -23,6 +23,18 @@ describe('русский текст и английские вставки', () 
     ]);
   });
 
+  it('римские номера веков и глав — русский текст, остальная латиница — нет', () => {
+    assert.deepEqual(pieces('в XIX веке и XX в.'), [['ru', 'в XIX веке и XX в.']]);
+    assert.deepEqual(pieces('конца XIX — начала ХVIII века'), [['ru', 'конца XIX — начала ХVIII века']]);
+    assert.deepEqual(pieces('Глава IV. Итоги'), [['ru', 'Глава IV. Итоги']]);
+    assert.deepEqual(pieces('альбом MIX и Journal XIX'), [
+      ['ru', 'альбом '],
+      ['en', 'MIX'],
+      ['ru', ' и '],
+      ['en', 'Journal XIX'],
+    ]);
+  });
+
   it('одиночные латинские буквы не считаются английским', () => {
     assert.deepEqual(pieces('Goodin 1992a и пункт x'), [
       ['en', 'Goodin'],

@@ -42,4 +42,21 @@ fn main() {
     bundle.push_str("];\n");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bundle.rs");
     std::fs::write(out, bundle).unwrap();
+    describe_for_windows();
 }
+
+/// Описание в свойствах программы: «Диспетчер задач» показывает его вместо
+/// имени файла.
+#[cfg(windows)]
+fn describe_for_windows() {
+    winresource::WindowsResource::new()
+        .set("FileDescription", "Ускоритель озвучки PDF-читалки")
+        .set("ProductName", "PDF-читалка: ускоритель озвучки")
+        .set("CompanyName", "PDF-читалка")
+        .set("LegalCopyright", "MIT")
+        .compile()
+        .expect("ресурсы Windows (rc.exe из Windows SDK)");
+}
+
+#[cfg(not(windows))]
+fn describe_for_windows() {}

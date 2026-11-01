@@ -216,14 +216,15 @@ on($('ttsVolume'), 'input', async () => {
 
 let helperFlow = null;
 
-/** Строка ускорителя в меню: только для голосов TeraTTS и пока он не установлен (или ставится). */
+/** Строка ускорителя в меню — для голосов TeraTTS: ставится ли, работает ли синтез через него. */
 function showHelper() {
   const state = helperFlow?.state;
   const tera = String(getSetting('ttsVoiceUri') || '').startsWith('tera:');
   const row = $('pillHelper');
   row.hidden = !state || !tera || ['checking', 'unsupported'].includes(state.step);
   if (row.hidden) return;
-  $('pillHelperText').textContent = `Ускоритель: ${describeHelper(state)}`;
+  const inUse = state.step === 'working' && engines.tera.usingHelper;
+  $('pillHelperText').textContent = `Ускоритель: ${inUse ? 'синтез идёт через него.' : describeHelper(state)}`;
   const button = state.step === 'working' ? null : helperButton(state);
   $('pillHelperAction').hidden = !button;
   if (button) $('pillHelperAction').textContent = button.label;

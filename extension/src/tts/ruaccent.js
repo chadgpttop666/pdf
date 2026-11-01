@@ -22,6 +22,37 @@ export const UNSTRESSED = new Set([
 // Частицы через дефис: «где-то», «кто-нибудь».
 const HYPHEN_PARTICLES = new Set(['то', 'либо', 'нибудь', 'ка', 'таки']);
 
+// Не омографы, а норма и просторечие: в словаре омографов RUAccent у них оба
+// ударения, и нейросеть порой выбирала просторечное — «зв+онит», «щ+авель»,
+// «н+ачался». Здесь — только нормативное (по орфоэпическому словарю).
+export const NORMATIVE_STRESS = new Map(
+  Object.entries({
+    звонит: 'звон+ит', звонишь: 'звон+ишь', звоним: 'звон+им', звоните: 'звон+ите', звонят: 'звон+ят',
+    позвонит: 'позвон+ит', позвонишь: 'позвон+ишь', позвоним: 'позвон+им', позвоните: 'позвон+ите', позвонят: 'позвон+ят',
+    щавель: 'щав+ель', щавеля: 'щав+еля', щавелем: 'щав+елем',
+    договор: 'догов+ор', договоры: 'догов+оры', договоров: 'догов+оров',
+    бармен: 'б+армен', бармена: 'б+армена', торты: 'т+орты', тортов: 'т+ортов', тортами: 'т+ортами',
+    столяр: 'стол+яр', оптовый: 'опт+овый', оптовая: 'опт+овая', оптовые: 'опт+овые', оптовых: 'опт+овых',
+    начался: 'нач+ался', началась: 'начал+ась', началось: 'начал+ось', начались: 'начал+ись',
+    принялся: 'прин+ялся', принялась: 'принял+ась', поняла: 'понял+а', взяла: 'взял+а',
+    понял: 'п+онял', поняли: 'п+оняли', отдал: '+отдал', занял: 'з+анял',
+    включим: 'включ+им', включит: 'включ+ит', включишь: 'включ+ишь', включат: 'включ+ат',
+    кровоточащий: 'кровоточ+ащий', мастерски: 'мастерск+и', донельзя: 'дон+ельзя',
+    искра: '+искра', обеспечение: 'обесп+ечение', сливовый: 'сл+ивовый', свекла: 'св+ёкла',
+    шарфы: 'ш+арфы', шарфов: 'ш+арфов', банты: 'б+анты', бантов: 'б+антов', краны: 'кр+аны',
+    красивее: 'крас+ивее', закупорить: 'зак+упорить', ломоть: 'л+омоть', знамение: 'зн+амение',
+    газопровод: 'газопров+од', черпать: 'ч+ерпать', баловать: 'балов+ать', балуясь: 'бал+уясь', балует: 'бал+ует',
+  })
+);
+
+// «Века» после порядкового в родительном — единственное число: «двадцатого
+// в+ека», а не «век+а» (нейросеть путала с «века́» — множественным).
+const AFTER_GENITIVE_ORDINAL = new Map([
+  ['века', 'в+ека'],
+  ['года', 'г+ода'],
+]);
+const GENITIVE_ORDINAL = /(?:ого|его)$/u;
+
 const VOWELS = /[аеёиоуыэюя]/giu;
 // Символы, которые RUAccent оставляет во фразе для нейросетей; остальное
 // (многоточие «…», кавычки-лапки, короткое тире) он вычищает. «+» оставляем:
@@ -137,12 +168,20 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
   }
 
   async function omographFix(items) {
-    if (!models.chooseOmograph) return;
     const texts = items.map((item) => item.text);
     for (const [i, item] of items.entries()) {
       if (!item.word || item.text.includes('+')) continue;
+      const previous = items.slice(0, i).findLast((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
+      const normative =
+        NORMATIVE_STRESS.get(item.text.toLowerCase()) ||
+        (GENITIVE_ORDINAL.test(previous) ? AFTER_GENITIVE_ORDINAL.get(item.text.toLowerCase()) : undefined);
+      if (normative) {
+        item.text = fixCapital(item.text, normative);
+        texts[i] = normative;
+        continue;
+      }
       const variants = omographs.get(item.text.toLowerCase());
-      if (!variants?.length) continue;
+      if (!variants?.length || !models.chooseOmograph) continue;
       const chosen = variants.length === 1 ? variants[0] : await models.chooseOmograph(omographContext(texts, i), variants);
       item.text = fixCapital(item.text, chosen);
       texts[i] = chosen;

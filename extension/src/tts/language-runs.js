@@ -3,6 +3,8 @@
 // Русский системный голос читает латиницу плохо, поэтому такие вставки
 // озвучивает английский голос системы.
 
+import { isRomanInRussian } from './normalize-ru.js';
+
 // Латинское слово: буквы, апостроф, дефис, точка внутри («U.S.»), «&».
 // Буквы — любые латинские, с диакритикой тоже: иначе «Müller» рвался на
 // «Mü» русским голосом и «ller» английским.
@@ -16,6 +18,8 @@ export function splitLanguageRuns(text) {
   for (const match of text.matchAll(LATIN_RUN)) {
     // Одиночные буквы («1992a», «x») — не английский текст.
     if (!/\p{Script=Latin}{2}/u.test(match[0])) continue;
+    // Номер века или главы («в XIX веке», «Глава IV») — русское числительное.
+    if (isRomanInRussian(text, match.index, match.index + match[0].length)) continue;
     english.push({ start: match.index, end: match.index + match[0].length });
   }
 

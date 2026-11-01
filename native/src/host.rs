@@ -282,8 +282,10 @@ fn receive(message: &Value, partial: &Path) -> Result<Option<u64>, String> {
 fn handle(message: &Value, shared: &Shared, jobs: &Sender<Job>) -> Result<(), String> {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     match text(message, "type")? {
+        // Ответ — сразу, без загрузки ONNX Runtime: при первом запуске на
+        // Windows её проверяет антивирус, и приветствие ждало бы секунды.
+        // Если библиотека не загрузится, об этом скажет ответ на load.
         "hello" => {
-            let ort = environment().err();
             shared.out.send(json!({
                 "type": "hello",
                 "id": id,
@@ -291,7 +293,6 @@ fn handle(message: &Value, shared: &Shared, jobs: &Sender<Job>) -> Result<(), St
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-                "ortError": ort,
             }));
         }
         "file" => {

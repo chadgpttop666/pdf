@@ -8,6 +8,11 @@ import { HELPER_RELEASE, helperUrl } from './helper-release.js';
 import { connectHelper } from './tera-native.js';
 
 export const HELPER_PERMISSIONS = { permissions: ['nativeMessaging', 'downloads', 'downloads.open'] };
+/**
+ * Ключ в storage.local: меняется, когда ускоритель поставили или убрали, —
+ * чтобы и другие вкладки (читалка, плашка на сайте) сразу перешли к нему.
+ */
+export const HELPER_STAMP = 'teraHelperStamp';
 // Сколько ждать, пока человек запустит установщик и пройдёт SmartScreen.
 const WAIT_INSTALL_MS = 10 * 60 * 1000;
 
@@ -95,7 +100,8 @@ export function runInstaller(id) {
 export async function waitForHelper({ timeoutMs = WAIT_INSTALL_MS, isCancelled = () => false } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && !isCancelled()) {
-    const connection = await connectHelper({ timeout: 4000 });
+    // Первый запуск после установки бывает долгим: антивирус проверяет программу.
+    const connection = await connectHelper({ timeout: 15000 });
     if (connection) return connection;
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
@@ -144,9 +150,17 @@ export function createHelperFlow(tera) {
       await tera.prepareHelper((loaded, total) => set({ step: 'syncing', progress: total ? loaded / total : 1 }));
       const status = await tera.helperStatus();
       set(status.installed ? { step: 'working', ...status } : { step: 'missing' });
+      if (status.installed) announce();
     } catch (error) {
       fail(error);
     }
+  }
+
+  /** Сказать всем вкладкам: синтез — теперь через ускоритель (или уже без него). */
+  function announce(installed = true) {
+    api()
+      ?.storage?.local.set({ [HELPER_STAMP]: { at: Date.now(), installed } })
+      .catch(() => {});
   }
 
   return {
@@ -190,6 +204,7 @@ export function createHelperFlow(tera) {
         connection.client.close();
         await forgetInstaller(downloadId);
         await check();
+        if (state.step === 'working') announce();
       })().catch(fail);
     },
 
@@ -198,6 +213,7 @@ export function createHelperFlow(tera) {
       try {
         await tera.removeHelper();
         set({ step: 'missing', message: 'Ускоритель удалён' });
+        announce(false);
       } catch (error) {
         fail(error);
       }

@@ -104,4 +104,21 @@ describe('ударения RUAccent: разметка фразы', () => {
   it('ручное ударение главнее словаря', async () => {
     assert.equal(await accentuator().process('Старый з+амок'), 'Ст+арый з+амок');
   });
+
+  it('норма, а не просторечие: «звонит», «щавель» — без нейросети, по орфоэпическому словарю', async () => {
+    let asked = 0;
+    const acc = createAccentuator(
+      { stress, yoWords: new Map(), yoHomographs: new Map(), omographs: new Map([['звонит', ['зв+онит', 'звон+ит']]]) },
+      {
+        chooseOmograph: async (context, variants) => {
+          asked += 1;
+          return variants[0];
+        },
+      }
+    );
+    assert.equal(await acc.process('Кто звонит? Щавель!'), 'Кто звон+ит? Щав+ель!');
+    assert.equal(asked, 0);
+    // «Века» после «двадцатого» — единственное число.
+    assert.equal(await acc.process('начала двадцатого века'), 'начала двадцатого в+ека');
+  });
 });

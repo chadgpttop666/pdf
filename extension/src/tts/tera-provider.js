@@ -92,6 +92,8 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let helper = null; // { client, hello } — синтез идёт через ускоритель
   let helperLosses = 0; // ускоритель отключался посреди работы
   let table = null; // символ → номер: с ускорителем текст для модели готовит страница
+  let switching = false; // идёт переход к ускорителю посреди работы
+  let helperError = null; // почему ускоритель не подключился в последний раз
 
   function touch() {
     clearTimeout(idleTimer);
@@ -224,13 +226,14 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   /** Подключиться к ускорителю и передать ему модели; null — синтез в браузере. */
   async function attachHelper(onProgress) {
     if (!useHelper() || helperLosses >= 2) return null;
-    let connection = await connectHelper();
+    // Первый запуск на Windows бывает долгим: антивирус проверяет программу.
+    let connection = await connectHelper({ timeout: 30000 });
     if (!connection) return null;
     try {
+      helperError = null;
       connection = await updateIfOld(connection);
       const { hello, client } = connection;
       if (hello.protocol !== HELPER_PROTOCOL) throw new Error(`ускоритель другой версии (${hello.version})`);
-      if (hello.ortError) throw new Error(hello.ortError);
       if ((await syncModels(client, hello.files, await helperBlobs(), onProgress)).length) connection.hello = await client.hello();
       table = Int32Array.from(JSON.parse(await (await loadParts(['indexer'])).indexer.text()));
       await client.load();
@@ -244,8 +247,40 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       return connection;
     } catch (error) {
       console.warn('TeraTTS: ускоритель не подключился — синтез в браузере', error);
+      helperError = error.message || String(error);
       connection.client.close();
       return null;
+    }
+  }
+
+  /**
+   * Ускоритель поставили, пока синтез уже идёт в браузере: переходим к нему
+   * сразу, не перезагружая ударения. Воркеры синтеза закрываются, их
+   * недоделанные куски синтезируются заново — уже ускорителем.
+   */
+  async function switchToHelper() {
+    if (!ready || helper || switching || !useHelper()) return;
+    switching = true;
+    try {
+      const connection = await attachHelper();
+      if (!connection) return;
+      if (!ready || helper) {
+        connection.client.close(); // пока подключались, модели выгрузили
+        return;
+      }
+      helper = connection;
+      const old = [...workers.samplers, workers.vocoder].filter(Boolean);
+      workers.samplers = [];
+      workers.vocoder = null;
+      lagging = false;
+      for (const slot of old) slot.worker.terminate();
+      for (const [id, entry] of waiting) {
+        if (!old.includes(entry.slot)) continue;
+        waiting.delete(id);
+        entry.reject(dropped('Синтез перешёл к ускорителю'));
+      }
+    } finally {
+      switching = false;
     }
   }
 
@@ -339,7 +374,14 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     adjustThreads();
   }
 
-  const pickSampler = () => workers.samplers.filter((slot) => slot.loaded).reduce((a, b) => (b.pending < a.pending ? b : a));
+  /** Ошибка «фраза больше не нужна в этом виде» — speak синтезирует её заново. */
+  const dropped = (message) => Object.assign(new Error(message), { dropped: true });
+
+  function pickSampler() {
+    const loaded = workers.samplers.filter((slot) => slot.loaded);
+    if (!loaded.length) throw dropped('Синтез перешёл к ускорителю');
+    return loaded.reduce((a, b) => (b.pending < a.pending ? b : a));
+  }
 
   // ── Куски фразы ──────────────────────────────────────────────────────
 
@@ -350,10 +392,12 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       piece.lang === 'ru' ? call(workers.accent, { type: 'accent', text: spoken.text, epoch: jobEpoch }).then((reply) => reply.text) : Promise.resolve(spoken.text);
     // В сэмплер куски уходят строго в порядке создания: английскому куску
     // следующей фразы ударения не нужны, и иначе он обгонял бы русский кусок
-    // текущей — а читатель ждал бы звука.
-    if (helper) return synthesizeWithHelper(piece, accented, style, jobEpoch);
+    // текущей — а читатель ждал бы звука. Куда отправить — в ускоритель или в
+    // воркер, — решается в момент отправки: ускоритель могли подключить, пока
+    // кусок ждал очереди.
     const posting = lane.then(async () => {
       const text = await accented;
+      if (helper) return { native: synthesizeWithHelper(piece, text, style, jobEpoch) };
       const sampler = pickSampler();
       sampler.pending += 1;
       const request = call(sampler, {
@@ -373,8 +417,10 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       return { request }; // в обёртке: очередь ждёт отправки, а не синтеза
     });
     lane = posting.catch(() => {});
-    piece.audio = posting.then(async ({ request }) => {
+    piece.audio = posting.then(async ({ request, native }) => {
+      if (native) return native;
       const { latent: data, frames, samples } = await request;
+      if (!workers.vocoder) throw dropped('Синтез перешёл к ускорителю');
       return call(workers.vocoder, { type: 'vocode', latent: data, frames, samples, epoch: jobEpoch }, [data.buffer]);
     });
     piece.audio.then(
@@ -387,28 +433,12 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     return piece;
   }
 
-  /** То же через ускоритель: текст в номера символов — здесь, звук — у него. */
-  function synthesizeWithHelper(piece, accented, style, jobEpoch) {
-    const { client } = helper;
-    const posting = lane.then(async () => {
-      const { withStress, plain } = encodeText(modelText(piece.lang, keepSupported(await accented, table)), table);
-      const request = client.synth({ ids: withStress, plain, ttl: style.ttl, dp: style.dp, maxSeconds: piece.maxSeconds, epoch: jobEpoch });
-      return { request }; // в обёртке: очередь ждёт отправки, а не синтеза
-    });
-    lane = posting.catch(() => {});
-    piece.audio = posting.then(async ({ request }) => {
-      const { pcm, sampleRate } = await request;
-      const [start, end] = voicedRange(pcm, sampleRate);
-      return { pcm: pcm.slice(start, end), sampleRate };
-    });
-    piece.audio.then(
-      (audio) => {
-        piece.done = true;
-        piece.seconds = audio.pcm.length / audio.sampleRate + (piece.pause || 0);
-      },
-      () => {}
-    );
-    return piece;
+  /** Кусок через ускоритель: текст в номера символов — здесь, звук — у него. */
+  async function synthesizeWithHelper(piece, text, style, jobEpoch) {
+    const { withStress, plain } = encodeText(modelText(piece.lang, keepSupported(text, table)), table);
+    const { pcm, sampleRate } = await helper.client.synth({ ids: withStress, plain, ttl: style.ttl, dp: style.dp, maxSeconds: piece.maxSeconds, epoch: jobEpoch });
+    const [start, end] = voicedRange(pcm, sampleRate);
+    return { pcm: pcm.slice(start, end), sampleRate };
   }
 
   function createJob(text, { voiceId }, fastStart) {
@@ -697,6 +727,27 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     unload() {
       shutdown();
     },
+    /** Синтез сейчас идёт через ускоритель. */
+    get usingHelper() {
+      return Boolean(helper);
+    },
+    /** Ускоритель установлен, но не подключился — почему (для подсказки). */
+    get helperError() {
+      return helperError;
+    },
+    /**
+     * Ускоритель поставили или убрали (в этой или другой вкладке). Убрали —
+     * отпускаем его сразу: программа удаляет себя, когда её никто не держит.
+     */
+    refreshHelper(installed = true) {
+      helperLosses = 0;
+      if (!installed) {
+        if (helper) shutdown();
+        return;
+      }
+      switchToHelper().catch((error) => console.warn('TeraTTS: переход к ускорителю не удался', error));
+    },
+
     /** Для проверок: какие модели в памяти; sampler: 'helper' — синтез у ускорителя. */
     get models() {
       return ready ? { sampler: helper ? 'helper' : samplerPart, omograph: omographPart } : null;

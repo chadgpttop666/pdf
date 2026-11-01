@@ -110,8 +110,21 @@ export function createTts(app) {
     $('ttsVolume').value = String(getSetting('ttsVolume'));
     $('ttsVolumeValue').textContent = `${Math.round(Number(getSetting('ttsVolume')) * 100)} %`;
     $('ttsPitchValue').textContent = Number(getSetting('ttsPitch')).toFixed(1);
-    $('ttsEngine').hidden = !provider?.neural;
+    showEngine();
     app.el.classList.toggle('speaking', playing);
+  }
+
+  /** Метка «нейро»: синтез в браузере или через ускоритель (программу). */
+  function showEngine() {
+    const badge = $('ttsEngine');
+    badge.hidden = !provider?.neural;
+    const helper = provider === tera && tera.usingHelper;
+    badge.textContent = helper ? 'нейро · ускоритель' : 'нейро';
+    badge.title = helper
+      ? 'Нейроголос: синтез идёт в программе-ускорителе — в «Диспетчере задач» она в группе Firefox (pdf-reader-tts)'
+      : provider === tera && tera.helperError
+        ? `Нейроголос: синтез в браузере — ускоритель не подключился (${tera.helperError})`
+        : 'Нейроголос: синтез прямо в браузере, без интернета. Перед первой фразой голос загружается';
   }
 
   async function fillVoices() {
@@ -357,7 +370,10 @@ export function createTts(app) {
     spokenInRun = 0;
     let failed = 0;
     clearInterval(bufferTimer);
-    bufferTimer = setInterval(showBuffer, 1000);
+    bufferTimer = setInterval(() => {
+      showBuffer();
+      showEngine(); // ускоритель могли подключить посреди чтения
+    }, 1000);
     state = 'speaking';
     syncUi();
     app.wakeLock?.request();
@@ -452,6 +468,7 @@ export function createTts(app) {
             heard.started = true;
             if (state === 'speaking') heard.since = performance.now();
             voiceStarted(status);
+            showEngine(); // ускоритель мог подключиться, пока грузились модели
           },
           onBoundary,
         });
@@ -501,6 +518,9 @@ export function createTts(app) {
   }
 
   function finish(message) {
+    // Остановили на паузе: проигрыватель снимаем с паузы, иначе следующий
+    // «Старт» копил бы речь молча, пока не нажмут ещё раз.
+    if (state === 'paused') provider?.resume();
     state = 'idle';
     clearInterval(bufferTimer);
     buffer = [];

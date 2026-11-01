@@ -129,8 +129,14 @@ export function ordinal(n, grammaticalCase = 'nom', gender = 'm') {
   return prefix + stem + ending;
 }
 
-/** Римское число → арабское (I…MMM), null — не римское. */
-export function fromRoman(text) {
+// Римские цифры в русском тексте часто набраны кириллицей: «ХХ век» (Х —
+// русская «ха»), «ХIХ» вперемешку, «І» — украинская буква.
+const ROMAN_LETTERS = 'IVXLCDMХІ';
+const latinRoman = (text) => text.replace(/Х/g, 'X').replace(/І/g, 'I');
+
+/** Римское число → арабское (I…MMM), null — не римское. Кириллические Х и І — как латинские. */
+export function fromRoman(raw) {
+  const text = latinRoman(raw);
   if (!/^[IVXLCDM]+$/.test(text)) return null;
   const values = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
   let total = 0;
@@ -179,14 +185,24 @@ const YEAR_FORMS = {
   sg: { nom: 'год', gen: 'года', dat: 'году', acc: 'год', ins: 'годом', prep: 'году' },
   pl: { nom: 'годы', gen: 'годов', dat: 'годам', acc: 'годы', ins: 'годами', prep: 'годах' },
 };
-const CENTURY_NOUN = {
-  век: ['nom', false], века: ['gen', false], веку: ['dat', false], веком: ['ins', false], веке: ['prep', false],
-  веков: ['gen', true], векам: ['dat', true], веками: ['ins', true], веках: ['prep', true],
+// Слово после номера века: падеж, род числительного и число («веков» —
+// множественное: «XVIII и XIX веков»). Столетие и тысячелетие — среднего рода.
+const CENTURY_WORDS = {
+  век: ['nom', 'm', false], века: ['gen', 'm', false], веку: ['dat', 'm', false], веком: ['ins', 'm', false], веке: ['prep', 'm', false],
+  веков: ['gen', 'm', true], векам: ['dat', 'm', true], веками: ['ins', 'm', true], веках: ['prep', 'm', true],
 };
+for (const stem of ['столети', 'тысячелети']) {
+  const forms = { е: ['nom', false], я: ['gen', false], ю: ['dat', false], ем: ['ins', false], и: ['prep', false], й: ['gen', true], ям: ['dat', true], ями: ['ins', true], ях: ['prep', true] };
+  for (const [ending, [grammaticalCase, pluralNoun]] of Object.entries(forms)) CENTURY_WORDS[stem + ending] = [grammaticalCase, 'n', pluralNoun];
+}
+const CENTURY_NOUN = new RegExp(String.raw`^\s*(${Object.keys(CENTURY_WORDS).sort((a, b) => b.length - a.length).join('|')})(?![\p{L}])`, 'iu');
+const CENTURY_ABBR = /^\s*(вв?)\.(?![\p{L}])/u;
 const CENTURY_FORMS = {
   sg: { nom: 'век', gen: 'века', dat: 'веку', acc: 'век', ins: 'веком', prep: 'веке' },
   pl: { nom: 'века', gen: 'веков', dat: 'векам', acc: 'века', ins: 'веками', prep: 'веках' },
 };
+// После этих слов номер века — в родительном: «конца XIX — начала XX века».
+const GENITIVE_BEFORE = new Set(['начала', 'конца', 'середины', 'половины', 'рубежа', 'исхода', 'границы', 'литературы', 'истории', 'искусства']);
 
 // Существительные перед номером: «глава 5» → «глава пятая».
 const NUMBERED_NOUNS = {
@@ -324,6 +340,25 @@ function matchNumber(text, i) {
     return { end: fullEnd, spoken: keepSentenceEnd(text, fullEnd, `${years.join(' — ')} ${noun}`) };
   }
 
+  // Век арабскими цифрами: «в 19 веке», «до 19-го века», «20 век», «18–19 вв.».
+  // «За 20 веков», «2 века назад» — это счёт, а не номер века: не трогаем.
+  if (first >= 1 && first <= 40 && (!range || Number(range[1]) <= 40)) {
+    const after = centuryAfter(text.slice(afterRange));
+    const fromBefore = centuryCaseFromBefore(before);
+    const pair = range ? [first, Number(range[1])] : [first];
+    if (after && !after.abbr) {
+      const count = !range && (after.pluralNoun || (after.grammaticalCase === 'gen' && !fromBefore && !after.suffix));
+      if (!count) {
+        return { end: afterRange + after.suffix, spoken: pair.map((value) => ordinal(value, after.grammaticalCase, after.gender)).join(' — ') };
+      }
+    } else if (after) {
+      const grammaticalCase = fromBefore || 'gen';
+      const fullEnd = afterRange + after.suffix + after.abbr.length;
+      const noun = CENTURY_FORMS[after.pluralNoun || range ? 'pl' : 'sg'][grammaticalCase];
+      return { end: fullEnd, spoken: keepSentenceEnd(text, fullEnd, `${pair.map((value) => ordinal(value, grammaticalCase, 'm')).join(' — ')} ${noun}`) };
+    }
+  }
+
   // Наращение: «5-й», «1990-х».
   const suffixMatch = /^-([а-яё]{1,3})(?![\p{L}])/u.exec(text.slice(end));
   if (suffixMatch) {
@@ -370,44 +405,103 @@ function matchNumber(text, i) {
   return null;
 }
 
-/** Римские века и номера глав. */
+const ROMAN_TOKEN = new RegExp(String.raw`[${ROMAN_LETTERS}]+(?![\p{L}\p{N}])`, 'uy');
+const ROMAN_RANGE = new RegExp(String.raw`^\s*[-–—]\s*([${ROMAN_LETTERS}]+)(?![\p{L}\p{N}])`, 'u');
+// Наращение после номера: «XX-го века», «XIX-м веке».
+const ORDINAL_SUFFIX = /^-[а-яё]{1,3}(?![\p{L}])/u;
+// Номер века дальше в той же части фразы: «XIX — начала XX века», «XVIII и XIX веков».
+const LATER_CENTURY = new RegExp(String.raw`^[^.!?;:\d]{1,40}?(?<![\p{L}])([${ROMAN_LETTERS}]+)(?:-[а-яё]{1,3})?(?=(?:\s*(?:вв?)\.(?![\p{L}]))|${CENTURY_NOUN.source.slice(1)})`, 'iu');
+
+const COORDINATED = new RegExp(String.raw`(${Object.keys(CENTURY_WORDS).join('|')})\s+(?:и|или|либо|а)\s*$`, 'iu');
+
+/**
+ * Падеж номера века по словам перед ним: предлог, «начала», «конца»… или
+ * века через союз — «в XIX веке и XX в.» (тот же падеж, что у «веке»).
+ */
+function centuryCaseFromBefore(before) {
+  const word = /([а-яё]+)\s*$/i.exec(before)?.[1]?.toLowerCase();
+  if (word && word in PREPOSITION_CASE) return PREPOSITION_CASE[word];
+  if (word && (GENITIVE_BEFORE.has(word) || GEN_PREPOSITIONS.has(word))) return 'gen';
+  const coordinated = COORDINATED.exec(before);
+  return coordinated ? CENTURY_WORDS[coordinated[1].toLowerCase()][0] : null;
+}
+
+/** Слово века после номера (с наращением или без): { case, gender, plural, abbr, length }. */
+function centuryAfter(rest) {
+  const suffix = ORDINAL_SUFFIX.exec(rest)?.[0] || '';
+  const tail = rest.slice(suffix.length);
+  const noun = CENTURY_NOUN.exec(tail);
+  if (noun) {
+    const [grammaticalCase, gender, pluralNoun] = CENTURY_WORDS[noun[1].toLowerCase()];
+    return { grammaticalCase, gender, pluralNoun, suffix: suffix.length, abbr: null };
+  }
+  const abbr = CENTURY_ABBR.exec(tail);
+  if (abbr) return { grammaticalCase: null, gender: 'm', pluralNoun: abbr[1] === 'вв', suffix: suffix.length, abbr: abbr[0] };
+  return null;
+}
+
+/** Римские века (и тысячелетия) — порядковым в нужном падеже. */
 function matchRoman(text, i) {
-  const romanMatch = /[IVXLC]+(?![\p{L}\p{N}])/uy;
-  romanMatch.lastIndex = i;
-  const found = romanMatch.exec(text);
+  ROMAN_TOKEN.lastIndex = i;
+  const found = ROMAN_TOKEN.exec(text);
   if (!found) return null;
   const first = fromRoman(found[0]);
   if (!first) return null;
   let end = i + found[0].length;
   let second = null;
-  const range = /^\s*[-–—]\s*([IVXLC]+)(?![\p{L}\p{N}])/u.exec(text.slice(end));
+  const range = ROMAN_RANGE.exec(text.slice(end));
   if (range && fromRoman(range[1])) {
     second = fromRoman(range[1]);
     end += range[0].length;
   }
   const before = text.slice(Math.max(0, i - 30), i);
+  const numbers = (grammaticalCase, gender) => [first, second].filter(Boolean).map((value) => ordinal(value, grammaticalCase, gender)).join(' — ');
 
-  const noun = /^\s*(век|века|веку|веком|веке|веков|векам|веками|веках)(?![\p{L}])/u.exec(text.slice(end));
-  if (noun) {
-    const [grammaticalCase] = CENTURY_NOUN[noun[1]];
-    const centuries = [first, second].filter(Boolean).map((value) => ordinal(value, grammaticalCase, 'm'));
-    return { end, spoken: centuries.join(' — ') };
+  const after = centuryAfter(text.slice(end));
+  if (after && !after.abbr) {
+    return { end: end + after.suffix, spoken: numbers(after.grammaticalCase, after.gender) };
   }
-  const abbr = /^\s*(вв?)\.(?![\p{L}])/u.exec(text.slice(end));
-  if (abbr) {
-    const pluralNoun = abbr[1] === 'вв' || Boolean(second);
-    const grammaticalCase = caseFromPreposition(before);
-    const centuries = [first, second].filter(Boolean).map((value) => ordinal(value, grammaticalCase, 'm'));
-    const fullEnd = end + abbr[0].length;
-    const spoken = `${centuries.join(' — ')} ${CENTURY_FORMS[pluralNoun ? 'pl' : 'sg'][grammaticalCase]}`;
+  if (after) {
+    const grammaticalCase = centuryCaseFromBefore(before) || 'gen';
+    const pluralNoun = after.pluralNoun || Boolean(second);
+    const fullEnd = end + after.suffix + after.abbr.length;
+    const spoken = `${numbers(grammaticalCase, 'm')} ${CENTURY_FORMS[pluralNoun ? 'pl' : 'sg'][grammaticalCase]}`;
     return { end: fullEnd, spoken: keepSentenceEnd(text, fullEnd, spoken) };
+  }
+  // Слово века — после следующего номера: «конца XIX — начала XX века».
+  const later = LATER_CENTURY.exec(text.slice(end));
+  if (later && fromRoman(later[1])) {
+    const next = centuryAfter(text.slice(end + later[0].length));
+    const grammaticalCase = centuryCaseFromBefore(before) || next?.grammaticalCase || 'gen';
+    return { end, spoken: numbers(grammaticalCase, next?.gender || 'm') };
   }
   return null;
 }
 
+/**
+ * Латинские буквы на месте [start, end) — римский номер века или главы в
+ * русской фразе, а не английское слово: его читает русский голос (сначала
+ * normalizeRussian сделает из него числительное). Кириллические Х и І рядом
+ * — часть того же номера («ХVIII»).
+ */
+export function isRomanInRussian(text, start, end) {
+  let from = start;
+  let to = end;
+  while (to > from && /[.'’-]/.test(text[to - 1])) to -= 1; // «IV.» — точка не часть номера
+  while (from > 0 && /[ХІ]/.test(text[from - 1])) from -= 1;
+  while (to < text.length && /[ХІ]/.test(text[to])) to += 1;
+  const token = text.slice(from, to);
+  if (!/^[IVXLCDMХІ]+(?:[-–—][IVXLCDMХІ]+)?$/.test(token) || !token.split(/[-–—]/).every((part) => fromRoman(part))) return false;
+  if (isWordChar(text[from - 1]) || isWordChar(text[to])) return false;
+  const rest = text.slice(to);
+  if (centuryAfter(rest) || LATER_CENTURY.exec(rest)) return true;
+  const word = /([\p{L}]+)\s+$/u.exec(text.slice(Math.max(0, from - 20), from))?.[1]?.toLowerCase();
+  return Boolean(word && (word in NUMBERED_NOUNS.f || word in NUMBERED_NOUNS.m));
+}
+
 /** «Глава 5», «Часть II», «в главе 3» → номер порядковым в падеже слова. */
 function matchNumberedNoun(text, i) {
-  const word = /([\p{L}]+)\s+([IVXLC]+|\d{1,3})(?![\p{L}\p{N}]|-)/uy;
+  const word = /([\p{L}]+)\s+([IVXLCХІ]+|\d{1,3})(?![\p{L}\p{N}]|-)/uy;
   word.lastIndex = i;
   const found = word.exec(text);
   if (!found) return null;
@@ -448,7 +542,7 @@ export function normalizeRussian(text) {
       match =
         (/\p{L}/u.test(text[i]) && matchNumberedNoun(text, i)) ||
         (/\d/.test(text[i]) && matchNumber(text, i)) ||
-        (/[IVXLC]/.test(text[i]) && matchRoman(text, i)) ||
+        (/[IVXLCDMХІ]/.test(text[i]) && matchRoman(text, i)) ||
         matchAbbreviation(text, i);
     }
     if (match) {

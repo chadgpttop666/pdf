@@ -21,6 +21,8 @@ const BOUNDARY_POLL_MS = 40;
 const FIRST_BLOCK_SECONDS = 0.3;
 const BLOCK_SECONDS = 2;
 const FADE_SECONDS = 0.012;
+// Вход каждой фразы: короче, чтобы не смазать первый согласный, но без щелчка.
+const ENTRY_FADE_SECONDS = 0.004;
 // Пока тянут ползунок, звук перезапускается не чаще этого.
 const RATE_RESTART_MS = 80;
 // Если от фразы осталось меньше — доигрываем как есть, новая скорость со следующей.
@@ -48,8 +50,8 @@ export function createAudioPlayer() {
     return Math.min(entry.pcm.length, run.offset + elapsed * entry.sampleRate * run.rate);
   }
 
-  /** Играть запись с отсчёта offset на текущей скорости; fade — плавно войти. */
-  function startRun(entry, offset, fade = false) {
+  /** Играть запись с отсчёта offset на текущей скорости, плавно войдя за fade секунд. */
+  function startRun(entry, offset, fade = ENTRY_FADE_SECONDS) {
     const ctx = audioContext();
     const run = {
       stretcher: createStretcher(entry.pcm.subarray(offset), entry.sampleRate, rate),
@@ -62,10 +64,8 @@ export function createAudioPlayer() {
       timer: 0,
     };
     run.fade.connect(entry.gain);
-    if (fade) {
-      run.fade.gain.setValueAtTime(0, run.startedAt);
-      run.fade.gain.linearRampToValueAtTime(1, run.startedAt + FADE_SECONDS);
-    }
+    run.fade.gain.setValueAtTime(0, run.startedAt);
+    run.fade.gain.linearRampToValueAtTime(1, run.startedAt + fade);
     entry.run = run;
     const pump = (seconds) => {
       if (entry.run !== run) return;
@@ -116,8 +116,12 @@ export function createAudioPlayer() {
     current = null;
     clearInterval(entry.timer);
     clearTimeout(rateTimer);
-    stopRun(entry.run);
-    entry.gain.disconnect();
+    // Оборвали посреди звука (следующее предложение, стоп) — гасим плавно:
+    // резкий обрыв волны слышен щелчком.
+    const smoothly = result === 'cancelled' && context?.state === 'running';
+    stopRun(entry.run, smoothly);
+    if (smoothly) setTimeout(() => entry.gain.disconnect(), FADE_SECONDS * 1000 + 100);
+    else entry.gain.disconnect();
     entry.resolve(result);
   }
 
@@ -133,7 +137,7 @@ export function createAudioPlayer() {
     const at = Math.floor(position(entry));
     if (entry.pcm.length - at < MIN_RESTART_SECONDS * entry.sampleRate) return;
     stopRun(entry.run, true);
-    startRun(entry, at, true);
+    startRun(entry, at, FADE_SECONDS);
   }
 
   /**

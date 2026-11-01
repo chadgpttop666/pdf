@@ -195,7 +195,6 @@ const child = spawn(path.resolve(args.helper), [path.join(dir, 'pdf_reader_tts.j
 const client = createHelperClient(stdioPort(child));
 const hello = await client.hello();
 console.log(`помощник ${hello.version}, протокол ${hello.protocol}, ядер ${hello.cores}`);
-if (hello.ortError) fail(hello.ortError);
 
 let started = performance.now();
 const blobs = Object.fromEntries(await Promise.all(Object.entries(FILES).map(async ([name, relative]) => [name, await fs.openAsBlob(local(relative))])));
