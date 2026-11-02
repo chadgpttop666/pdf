@@ -63,6 +63,11 @@ const ICONS = {
     ['path', { d: 'M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7' }],
   ],
   check: [['path', { d: 'M5 12.5l4.5 4.5L19 7.5' }]],
+  headphones: [
+    ['path', { d: 'M4.5 15v-3a7.5 7.5 0 0 1 15 0v3' }],
+    ['rect', { x: 3.5, y: 13.5, width: 4.5, height: 6.5, rx: 1.5 }],
+    ['rect', { x: 16, y: 13.5, width: 4.5, height: 6.5, rx: 1.5 }],
+  ],
 };
 
 const SVG_ATTRIBUTES = {

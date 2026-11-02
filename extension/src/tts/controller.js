@@ -229,6 +229,32 @@ export function createTts(app) {
     return { parts, text, next };
   }
 
+  /**
+   * Фразы страниц from…to по порядку — для аудиокниги: тот же текст, что
+   * звучит при чтении вслух (примечания, склейка переносов, стык страниц).
+   * Фраза, перетекающая за последнюю страницу, — целиком.
+   */
+  async function* utterancesOf(fromPage, toPage) {
+    let cursor = { pageNumber: fromPage, sentenceIndex: 0 };
+    while (cursor.pageNumber <= Math.min(toPage, index.numPages)) {
+      const page = await index.page(cursor.pageNumber);
+      if (!page) break;
+      if (cursor.sentenceIndex === 0 && !page.sentences.length && (await needsOcr(page.pageNumber))) {
+        await app.ocr.recognize(page.pageNumber).catch((error) => console.warn('Не удалось распознать страницу', error));
+        if (app.ocr.has(page.pageNumber)) continue; // текст появился — перечитываем страницу
+      }
+      if (cursor.sentenceIndex >= page.sentences.length) {
+        cursor = { pageNumber: cursor.pageNumber + 1, sentenceIndex: 0 };
+        continue;
+      }
+      const utterance = await buildUtterance(page, cursor.sentenceIndex);
+      cursor = utterance.next;
+      if (isSpeakable(utterance.text)) {
+        yield { text: utterance.text, pageNumber: page.pageNumber, chapter: app.outline?.chapterTitleAt(page.pageNumber) ?? null };
+      }
+    }
+  }
+
   /** Тексты примечаний к знакам сносок в частях фразы — по порядку, без повторов. */
   async function notesOf(parts) {
     if (getSetting('ttsFootnotes') !== 'inline' || !index?.skipFurniture) return [];
@@ -1036,6 +1062,13 @@ export function createTts(app) {
       return !bar.hidden;
     },
     showBar,
+    utterancesOf,
+    /** Нейроголос, выбранный на панели, — только он умеет синтезировать в файл. */
+    neuralVoice() {
+      const voiceId = getSetting('ttsVoiceUri');
+      const engine = engines.neuralFor(voiceId);
+      return engine?.render ? { engine, voiceId, name: $('ttsVoice').selectedOptions?.[0]?.textContent ?? voiceId } : null;
+    },
     lastHighlight: (kind) => highlighter.lastText(kind),
     sleepTimer,
   };

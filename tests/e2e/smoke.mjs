@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { dummyTeraFiles } from '../../scripts/make-dummy-tera.mjs';
+import { readOgg } from '../../extension/src/tts/ogg-opus.js';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PORT = Number(process.env.PORT || 8123);
@@ -1404,6 +1405,29 @@ try {
   const teraResumed = await page.evaluate(() => window.pdfReaderApp.tts.state);
   check('TeraTTS: пробел ставит на паузу и продолжает', teraPaused === 'paused' && teraResumed === 'speaking', `${teraPaused} → ${teraResumed}`);
   await page.evaluate(() => window.pdfReaderApp.tts.stop());
+
+  // ── Аудиокнига: страница TeraTTS-голосом — в файл Ogg Opus ──
+  await page.click('#ttsExport');
+  await page.waitForFunction(() => document.getElementById('audiobookDialog').open);
+  const audiobookVoice = await page.evaluate(() => ({ text: document.getElementById('abVoice').textContent, disabled: document.getElementById('abStart').disabled }));
+  await page.fill('#abFrom', '1');
+  await page.fill('#abTo', '1');
+  const [audiobookDownload] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click('#abStart')]);
+  const oggBytes = new Uint8Array(readFileSync(await audiobookDownload.path()));
+  const oggPages = readOgg(oggBytes);
+  const audiobookStatus = await page.evaluate(() => document.getElementById('abStatus').textContent);
+  check(
+    'аудиокнига: страница голосом TeraTTS — в Ogg Opus, страницы Ogg целы, конец потока отмечен',
+    /^Голос — TeraTTS/.test(audiobookVoice.text) &&
+      !audiobookVoice.disabled &&
+      /Сохраняю «.* — с\. 1\.ogg» — \d+ с звука/.test(audiobookStatus) &&
+      new TextDecoder().decode(oggPages[0]?.packets[0]?.subarray(0, 8)) === 'OpusHead' &&
+      oggPages.every((oggPage) => oggPage.crcOk) &&
+      oggPages.slice(2).reduce((sum, oggPage) => sum + oggPage.packets.length, 0) > 50 &&
+      oggPages.at(-1).flags === 0x04,
+    JSON.stringify({ audiobookVoice, audiobookStatus, bytes: oggBytes.length, pages: oggPages.length })
+  );
+  await page.evaluate(() => document.getElementById('audiobookDialog').close());
 
   await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
   await page.waitForFunction(() => document.querySelector('.tera-voices button')?.textContent === 'Удалить');

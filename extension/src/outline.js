@@ -153,5 +153,19 @@ export function createOutline(app) {
     return title;
   }
 
-  return { load, markCurrent, nextChapterStart, chapterTitleAt };
+  /**
+   * Глава, в которой лежит страница: первая и последняя её страницы — для
+   * аудиокниги «эта глава». Без оглавления — вся книга.
+   */
+  function chapterRange(pageNumber, numPages) {
+    const starts = rows
+      .filter((entry) => entry.depth === chapterDepth && entry.pageNumber)
+      .map((entry) => entry.pageNumber)
+      .sort((a, b) => a - b);
+    const start = starts.filter((value) => value <= pageNumber).at(-1) ?? 1;
+    const next = starts.find((value) => value > pageNumber);
+    return { start, end: next ? Math.max(start, next - 1) : numPages, title: chapterTitleAt(pageNumber) };
+  }
+
+  return { load, markCurrent, nextChapterStart, chapterTitleAt, chapterRange };
 }

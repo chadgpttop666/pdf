@@ -896,6 +896,13 @@ dialog::backdrop { background: rgb(0 0 0 / 55%); }
 
 dialog h2 { margin: 0 0 14px; font-size: 18px; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0 0; padding: 0; }
+#audiobookDialog { width: min(480px, calc(100vw - 32px)); }
+.audiobook-range { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0; }
+.audiobook-range legend { padding: 0 4px; color: var(--fg-muted); font-size: 12px; }
+.audiobook-range label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.audiobook-range input[type='number'] { width: 5.5em; }
+.audiobook-progress { display: grid; gap: 6px; margin-top: 12px; font-size: 13px; }
+.audiobook-progress progress { width: 100%; }
 
 .settings-grid { display: grid; gap: 10px; }
 .settings-grid .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

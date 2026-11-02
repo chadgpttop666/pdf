@@ -172,6 +172,7 @@
       </label>
       <span id="ttsStatus" class="muted"></span>
       <div class="spacer"></div>
+      <button id="ttsExport" class="icon" data-icon="headphones" title="Аудиокнига: эта глава, страницы или вся книга — в звуковой файл" aria-label="Аудиокнига"></button>
       <button id="ttsClose" class="icon" data-icon="close" title="Скрыть панель" aria-label="Скрыть панель"></button>
     </div>
 
@@ -318,6 +319,29 @@
         <div id="statsBody"></div>
         <menu>
           <button type="button" id="statsReset" class="ghost">Сбросить</button>
+          <button value="close">Закрыть</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="audiobookDialog">
+      <form method="dialog">
+        <h2>Аудиокнига</h2>
+        <p id="abVoice" class="popover-hint"></p>
+        <fieldset class="audiobook-range">
+          <legend>Что сохранить</legend>
+          <label><input type="radio" name="abRange" value="chapter" checked> Эта глава <span id="abChapter" class="muted"></span></label>
+          <label><input type="radio" name="abRange" value="pages"> Страницы с <input id="abFrom" type="number" min="1" value="1" aria-label="С какой страницы"> по <input id="abTo" type="number" min="1" value="1" aria-label="По какую страницу"></label>
+          <label><input type="radio" name="abRange" value="book"> Вся книга <span id="abBook" class="muted"></span></label>
+        </fieldset>
+        <p class="popover-hint">Файл — Opus (.ogg), час речи ≈ 14 МБ; главы — в метках файла. Примечания и ударения — как при чтении вслух.</p>
+        <div id="abProgress" class="audiobook-progress" hidden>
+          <progress id="abBar" max="1" value="0"></progress>
+          <span id="abStatus"></span>
+        </div>
+        <menu>
+          <button type="button" id="abCancel" class="ghost" hidden>Отменить</button>
+          <button type="button" id="abStart" class="primary" data-icon="download">Сохранить в файл</button>
           <button value="close">Закрыть</button>
         </menu>
       </form>

@@ -35,6 +35,9 @@ export const isPiperRecord = (record) => (record.engine ?? 'piper') === 'piper';
 const keyOf = (voiceId) => (voiceId?.startsWith(PIPER_PREFIX) ? voiceId.slice(PIPER_PREFIX.length) : voiceId);
 
 /** Русские голоса получают текст с числами и сокращениями словами. */
+// Пауза между фразами в аудиокниге — как при чтении вслух.
+const SENTENCE_PAUSE = 0.25;
+
 function spokenForm(text, voiceId) {
   if (/^en/i.test(keyOf(voiceId) || '') || !/\p{Script=Cyrillic}/u.test(text)) return { text, segments: [] };
   return normalizeRussian(text);
@@ -360,6 +363,14 @@ export function createPiperProvider() {
      */
     prepare(text, options = {}) {
       return synthesize(spokenForm(text, options.voiceId).text, options).then((audio) => audio.pcm.length / audio.sampleRate);
+    },
+
+    /** Вся фраза одним звуком, с паузой после неё, — для аудиокниги. */
+    async render(text, options = {}) {
+      const audio = await synthesize(spokenForm(text, options.voiceId).text, options);
+      const pcm = new Float32Array(audio.pcm.length + Math.round(audio.sampleRate * SENTENCE_PAUSE));
+      pcm.set(audio.pcm);
+      return { pcm, sampleRate: audio.sampleRate };
     },
 
     pause() {
