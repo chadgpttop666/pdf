@@ -197,7 +197,28 @@ export function createTts(app) {
         next = { pageNumber: following.pageNumber, sentenceIndex: 1 };
       }
     }
+    // Примечания к знакам сносок в этой фразе — сразу за ней.
+    for (const note of await notesOf(parts)) {
+      const spoken = `Примечание: ${note}`;
+      const joiner = /[.!?…»"]$/.test(text.trim()) ? ' ' : '. ';
+      parts.push({ note: true, text: spoken, offset: text.length + joiner.length });
+      text += joiner + spoken;
+      if (!/[.!?…]$/.test(spoken)) text += '.';
+    }
     return { parts, text, next };
+  }
+
+  /** Тексты примечаний к знакам сносок в частях фразы — по порядку, без повторов. */
+  async function notesOf(parts) {
+    if (getSetting('ttsFootnotes') !== 'inline' || !index?.skipFurniture) return [];
+    const notes = [];
+    for (const part of parts) {
+      for (const ref of index.refsOfSentence(part.page, part.sentenceIndex)) {
+        const note = await index.noteFor(part.page.pageNumber, ref).catch(() => null);
+        if (note && !notes.includes(note)) notes.push(note);
+      }
+    }
+    return notes;
   }
 
   /**
@@ -478,6 +499,11 @@ export function createTts(app) {
         const onBoundary = (event) => {
           const part = utterance.parts.findLast((candidate) => candidate.offset <= event.charIndex);
           if (!part) return;
+          // Примечание звучит — в тексте подсвечивать нечего, фраза остаётся выделенной.
+          if (part.note) {
+            view().clearWords(currentPart.page.pageNumber);
+            return;
+          }
           if (part !== currentPart) {
             view().clearWords(currentPart.page.pageNumber);
             currentPart = part;
@@ -534,7 +560,7 @@ export function createTts(app) {
         if (myGeneration !== generation || state === 'idle') return;
         if (result === 'cancelled') return;
 
-        for (const part of utterance.parts) view().clearWords(part.page.pageNumber);
+        for (const part of utterance.parts) if (part.page) view().clearWords(part.page.pageNumber);
         const pause = getSetting('ttsSentencePauseMs');
         if (pause) await delay(pause);
         if (myGeneration !== generation) return;

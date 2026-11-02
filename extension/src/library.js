@@ -111,6 +111,22 @@ export async function updateDocument(id, patch) {
   });
 }
 
+/**
+ * Изменить запись документа по её текущему виду в базе, одной транзакцией:
+ * change(запись) → поля, которые заменить. Так две вкладки с одной книгой не
+ * затирают изменения друг друга (выделение из одной вкладки не пропадёт,
+ * когда другая сохранит свою копию).
+ * @returns запись после изменения
+ */
+export async function mutateDocument(id, change) {
+  return transaction(DOCUMENTS, 'readwrite', async (store) => {
+    const existing = (await request(store.get(id))) || { id };
+    const merged = { ...existing, ...change(existing), id };
+    await request(store.put(merged));
+    return merged;
+  });
+}
+
 export async function listRecent(limit = 20) {
   return transaction(DOCUMENTS, 'readonly', async (store) => {
     const all = await request(store.getAll());

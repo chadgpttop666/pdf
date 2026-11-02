@@ -50,7 +50,7 @@ export function createBookmarks(app) {
       createdAt: Date.now(),
     };
     focusNoteOf = openPanel ? bookmark.id : null;
-    await app.readingState.patch({ bookmarks: [...items(), bookmark].sort(byPosition) });
+    await app.readingState.mutate((stored) => ({ bookmarks: [...(stored.bookmarks || []), bookmark].sort(byPosition) }));
     // Открытая панель уже перерисована патчем; повторное открытие перерисовало
     // бы её ещё раз и сбило фокус с поля заметки.
     if (openPanel && !popover.isOpen) popover.open();
@@ -76,13 +76,13 @@ export function createBookmarks(app) {
   }
 
   async function remove(id) {
-    await app.readingState.patch({ bookmarks: items().filter((bookmark) => bookmark.id !== id) });
+    await app.readingState.mutate((stored) => ({ bookmarks: (stored.bookmarks || []).filter((bookmark) => bookmark.id !== id) }));
   }
 
   /** Заметку сохраняем без перерисовки списка, чтобы не сбить фокус и щелчок. */
   async function setNote(id, note) {
-    await app.readingState.patch(
-      { bookmarks: items().map((bookmark) => (bookmark.id === id ? { ...bookmark, note } : bookmark)) },
+    await app.readingState.mutate(
+      (stored) => ({ bookmarks: (stored.bookmarks || []).map((bookmark) => (bookmark.id === id ? { ...bookmark, note } : bookmark)) }),
       { silent: true }
     );
     renderMarkers();

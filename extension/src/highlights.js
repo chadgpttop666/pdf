@@ -141,20 +141,20 @@ export function createHighlights(app) {
       createdAt: Date.now(),
     };
     lastColor = color;
-    await app.readingState.patch({ highlights: [...items(), highlight].sort(byPosition) });
+    await app.readingState.mutate((stored) => ({ highlights: [...(stored.highlights || []), highlight].sort(byPosition) }));
     return highlight;
   }
 
   async function update(id, patch, { silent = false } = {}) {
-    await app.readingState.patch(
-      { highlights: items().map((item) => (item.id === id ? { ...item, ...patch } : item)) },
+    await app.readingState.mutate(
+      (stored) => ({ highlights: (stored.highlights || []).map((item) => (item.id === id ? { ...item, ...patch } : item)) }),
       { silent }
     );
   }
 
   async function remove(id) {
     voiceNotes.forget(find(id));
-    await app.readingState.patch({ highlights: items().filter((item) => item.id !== id) });
+    await app.readingState.mutate((stored) => ({ highlights: (stored.highlights || []).filter((item) => item.id !== id) }));
   }
 
   // ── Всплывающая панель ───────────────────────────────────────────────
@@ -594,6 +594,8 @@ export function createHighlights(app) {
     renderList();
     renderPdf();
     scheduleReflowRender();
+    // Открытая панель выделения — по свежим данным (запись удалили, текст пришёл).
+    if (!toolbar.hidden) renderVoiceRow();
   }
 
   app.readingState.onChange(() => render());

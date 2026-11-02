@@ -329,6 +329,24 @@ try {
     `начало «${page3.slice(0, 30)}», конец «${page3.slice(-40)}»`
   );
 
+  // Примечание читается сразу после фразы со знаком сноски, а не в конце страницы
+  const noteSpoken = await page.evaluate(async () => {
+    const reader = window.pdfReaderApp.tts;
+    const page3 = await reader.textIndex.page(3);
+    const sentenceIndex = page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов'));
+    const before = window.spokenSentences.length;
+    reader.start({ pageNumber: 3, sentenceIndex });
+    for (let i = 0; i < 60 && window.spokenSentences.length < before + 2; i += 1) await new Promise((r) => setTimeout(r, 100));
+    reader.stop();
+    return window.spokenSentences.slice(before, before + 2);
+  });
+  check(
+    'сноска: «Примечание: …» звучит сразу после фразы со знаком, следующая фраза — без него',
+    /микрофильмов\. Примечание: Микрофильм — фотокопия документа на плёнке в сильном уменьшении\.$/.test(noteSpoken[0] ?? '') &&
+      !/Примечание/.test(noteSpoken[1] ?? ''),
+    JSON.stringify(noteSpoken)
+  );
+
   // Таймер сна «до конца главы»: дочитали страницу перед новой главой — тишина
   const chapterStart = await page.evaluate(() => window.pdfReaderApp.outline.nextChapterStart(4));
   await page.evaluate(async () => {
@@ -776,7 +794,17 @@ try {
     await window.pdfReaderApp.tts.speakSelection();
     return window.pdfReaderApp.tts.queued;
   });
-  await page.waitForFunction(() => window.pdfReaderApp.tts.state === 'idle', null, { timeout: 30000 });
+  await page.waitForFunction(() => window.pdfReaderApp.tts.state === 'idle', null, { timeout: 30000 }).catch(async (error) => {
+    // Редко чтение не останавливается в конце куска — что читалось и где.
+    console.log('диагностика конца очереди:', JSON.stringify(await page.evaluate(() => ({
+      state: window.pdfReaderApp.tts.state,
+      position: window.pdfReaderApp.tts.position,
+      queued: window.pdfReaderApp.tts.queued,
+      status: document.getElementById('ttsStatus').textContent,
+      spoken: window.spokenSentences.map((text) => text.slice(0, 40)),
+    }))), JSON.stringify(pdfQueued));
+    throw error;
+  });
   const queueRun = await page.evaluate(() => ({ spoken: [...window.spokenSentences], status: document.getElementById('ttsStatus').textContent }));
   // На странице больше двадцати фраз: прочитай читалка текст между кусками,
   // их было бы куда больше трёх.
@@ -1648,6 +1676,47 @@ try {
     () => document.querySelectorAll('.page[data-page-number="1"] .textLayer span:not(.markedContent)').length
   );
   check('распознанное сохраняется — второй раз не распознаётся', restoredOcr > 100, `${restoredOcr} слов`);
+
+  // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──
+  const openTab = async () => {
+    const tab = await context.newPage();
+    await tab.addInitScript(speechMock);
+    tab.on('pageerror', (error) => consoleErrors.push(`вкладка: ${error.message}`));
+    await tab.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+    await tab.waitForFunction(() => window.pdfReaderApp?.readingState?.record && window.pdfReaderApp.pdfViewer.pagesCount > 0, null, { timeout: 20000 });
+    await tab.waitForTimeout(800);
+    return tab;
+  };
+  const oldTab = await openTab();
+  const newTab = await openTab();
+  await newTab.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await newTab.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
+  const sharedId = await newTab.evaluate(async () => {
+    const span = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].find((s) => s.textContent.trim().length > 20);
+    const range = new Range();
+    range.setStart(span.firstChild, 0);
+    range.setEnd(span.firstChild, Math.min(12, span.firstChild.length));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    return (await window.pdfReaderApp.highlights.markSelection())?.id;
+  });
+  // Старая вкладка листает и сохраняет своё место — со своей копией записи.
+  await oldTab.evaluate(async () => {
+    window.pdfReaderApp.container.scrollBy(0, 600);
+    await window.pdfReaderApp.readingState.save();
+  });
+  await oldTab.waitForTimeout(300);
+  const seenInOld = await oldTab.evaluate((id) => window.pdfReaderApp.highlights.items.some((item) => item.id === id), sharedId);
+  await newTab.reload();
+  await newTab.waitForFunction(() => window.pdfReaderApp?.readingState?.record, null, { timeout: 20000 });
+  const keptAfterReload = await newTab.evaluate((id) => window.pdfReaderApp.highlights.items.some((item) => item.id === id), sharedId);
+  check(
+    'книга в двух вкладках: выделение из новой не пропадает, когда старая сохраняет место, и видно в старой',
+    Boolean(sharedId) && keptAfterReload && seenInOld,
+    JSON.stringify({ sharedId: sharedId ?? null, keptAfterReload, seenInOld })
+  );
+  await oldTab.close();
+  await newTab.close();
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

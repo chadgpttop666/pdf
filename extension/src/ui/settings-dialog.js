@@ -12,9 +12,12 @@ export function createSettingsDialog(app) {
   const grid = $('settingsGrid');
 
   function control(item) {
+    // Окно не перестраиваем: переключатель уже показывает новое значение, а
+    // полная перестройка сбивала прокрутку и заново подгружала разделы
+    // голосов и библиотеки — казалось, что что-то добавилось.
     const apply = async (value) => {
       await updateSettings({ [item.key]: value });
-      render();
+      if (item.key === 'teraUseHelper') helperFlow?.refresh();
     };
 
     if (item.type === 'bool') {
@@ -284,6 +287,11 @@ export function createSettingsDialog(app) {
   }
 
   function render() {
+    // Перестройка (очистили библиотеку, скачали голос) — на том же месте прокрутки.
+    const scrollTop = dialog.scrollTop;
+    requestAnimationFrame(() => {
+      dialog.scrollTop = scrollTop;
+    });
     clear(grid);
     for (const item of SETTINGS_SCHEMA) {
       if (item.group) {

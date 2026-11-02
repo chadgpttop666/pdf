@@ -202,6 +202,8 @@ export function createVoiceNotes(app, highlights) {
     if (playing?.id === voice.id) stopPlaying();
     await library.deleteRecording(voice.id).catch(() => {});
     await highlights.update(highlightId, { voice: null });
+    changed();
+    app.hud.show('Запись удалена — текст заметки остался', { duration: 2500 });
   }
 
   /** Выделение удалили — запись больше не нужна. */

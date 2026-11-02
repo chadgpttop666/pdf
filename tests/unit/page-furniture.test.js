@@ -72,3 +72,31 @@ describe('profileFurniture и classifyFurniture', () => {
     );
   });
 });
+
+describe('сноски: тексты по номерам и места знаков', () => {
+  const profile = profileFurniture([1, 2, 3, 4, 5].map((n) => sample(bookPage(n))));
+  const line = (parts, y) => parts.map(([str, x, size = 10, width]) => ({ ...item(str, { x, y, size, width: width ?? str.length * size * 0.5 }), hasEOL: false }));
+  const filter = (lines) => classifyFurniture(lines, BOX, profile);
+
+  it('знак в тексте помнит, где стоял, а сноски разобраны по номерам', () => {
+    const items = [
+      ...line([['является Огюст Конт', 72, 14, 200], ['3', 272, 8, 4], ['. Однако', 278, 14, 60]], 500),
+      // Хвост сноски с прошлой страницы — тот же мелкий шрифт, без номера.
+      ...line([['и оказал влияние на общество.', 72]], 140),
+      ...line([['3', 72, 7, 4], ['Огюст Конт (1796–1857) — француз-', 78]], 120),
+      ...line([['ский философ.', 72]], 108),
+      // Строка-продолжение с числом в начале — не новая сноска.
+      ...line([['4', 72, 7, 4], ['Речь о докторе Уэйсе, авторе', 78]], 96),
+      ...line([['12 томов проповедей.', 72]], 84),
+    ];
+    const { text, refs, furniture } = buildPageText(items, filter);
+    assert.equal(text, 'является Огюст Конт. Однако');
+    assert.deepEqual(refs, [{ offset: 'является Огюст Конт'.length, key: '3' }]);
+    const bodies = furniture.notes.bodies.map((body) => [body.key, body.items.map((i) => i.str).join(' ')]);
+    assert.deepEqual(bodies, [
+      ['3', '3 Огюст Конт (1796–1857) — француз- ский философ.'],
+      ['4', '4 Речь о докторе Уэйсе, авторе 12 томов проповедей.'],
+    ]);
+    assert.deepEqual(furniture.notes.carry.map((i) => i.str), ['и оказал влияние на общество.']);
+  });
+});

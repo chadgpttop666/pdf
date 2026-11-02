@@ -13,6 +13,9 @@ import { classifyFurniture, profileFurniture } from './page-furniture.js';
 export const TEXT_CONTENT_PARAMS = { includeMarkedContent: true, disableNormalization: true };
 
 const MAX_SENTENCE_LENGTH = 320;
+const ENDNOTES_HEADING = /^(?:примечания|комментарии|примечания и комментарии|комментарии и примечания|notes|endnotes)\.?$/i;
+const ENDNOTE_ENTRY = /(?:^|(?<=[.!?…»")]\s))(\d{1,3})[.)]\s+(?=[\p{Lu}«"(])/u;
+const ENDNOTES_END = /^(?:список литературы|литература|библиография|указатель|именной указатель|предметный указатель|содержание|оглавление|bibliography|index|contents)\.?$/i;
 const MIN_SENTENCE_LENGTH = 3;
 
 /**
@@ -30,24 +33,28 @@ const MIN_SENTENCE_LENGTH = 3;
  * вставляет. Если их считать, подсветка отстаёт на элемент с каждой строкой.
  *
  * @param {Array} items результат getTextContent().items
- * @param {(lines: Array) => {dropLines?: Set<number>, dropSpans?: Set<number>}} [filter]
+ * @param {(lines: Array) => {dropLines?: Set<number>, dropSpans?: Set<number>, marks?: Map<number, string>}} [filter]
  *   что выбросить из текста (колонтитулы, сноски); номера спанов при этом не
  *   сдвигаются — они посчитаны по всем непустым кускам заранее
- * @returns {{ text: string, entries: Array<{spanIndex:number,start:number,end:number}> }}
+ * @returns {{ text: string, entries: Array<{spanIndex:number,start:number,end:number}>,
+ *   refs: Array<{offset:number, key:string}>, furniture: object|null }}
+ *   refs — где в тексте стоял выброшенный знак сноски; furniture — что вернул filter
  */
 export function buildPageText(items, filter) {
   const allLines = groupLines(items);
-  const { dropLines = new Set(), dropSpans = new Set() } = filter?.(allLines) ?? {};
-  const lines = allLines
-    .filter((_, index) => !dropLines.has(index))
+  const furniture = filter?.(allLines) ?? null;
+  const { dropLines = new Set(), dropSpans = new Set(), marks = new Map() } = furniture ?? {};
+  const kept = allLines.filter((_, index) => !dropLines.has(index));
+  const lines = kept
     .map((line) =>
-      dropSpans.size ? { ...line, records: line.records.filter((record) => !dropSpans.has(record.spanIndex)) } : line
+      dropSpans.size ? { ...line, all: line.records, records: line.records.filter((record) => !dropSpans.has(record.spanIndex)) } : line
     )
     .filter((line) => line.records.length);
   const layout = measureLayout(lines);
 
   let text = '';
   const entries = [];
+  const refs = [];
   lines.forEach((line, lineIndex) => {
     if (lineIndex > 0 && text) {
       const last = text.at(-1);
@@ -57,7 +64,12 @@ export function buildPageText(items, filter) {
     }
     let previous = null;
     const threshold = spaceThreshold(line.records);
-    for (const { item, spanIndex } of line.records) {
+    for (const { item, spanIndex } of line.all ?? line.records) {
+      if (dropSpans.has(spanIndex)) {
+        // Знак сноски вслух не читаем, но помним, где он стоял.
+        if (marks.has(spanIndex)) refs.push({ offset: text.length, key: marks.get(spanIndex) });
+        continue;
+      }
       if (previous) text += gapSeparator(previous, item, text, threshold);
       const start = text.length;
       text += item.str;
@@ -66,7 +78,21 @@ export function buildPageText(items, filter) {
     }
   });
 
-  return { text, entries };
+  return { text, entries, refs, furniture };
+}
+
+/** Текст сноски по её кускам — без номера в начале. */
+export function noteText(items, key = null) {
+  if (!items?.length) return '';
+  const { text } = buildPageText(items);
+  // Перенос по слогам на конце строки сноски: «перевод- чика» → «переводчика».
+  const flat = text
+    .replace(/(\p{L})-\s+(\p{Ll})/gu, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!key) return flat;
+  const escaped = key.replace(/[*]/g, '\\*');
+  return flat.replace(new RegExp(`^${escaped}[\\s.)]*`), '').trim();
 }
 
 const itemX = (item) => item.transform?.[4] ?? 0;
@@ -522,6 +548,7 @@ export class TextIndex {
    */
   forget(pageNumber) {
     this.pages.delete(pageNumber);
+    this.endnotesPromise = null;
     this.furniturePromise = null;
     this.localProfiles.clear();
   }
@@ -539,15 +566,136 @@ export class TextIndex {
         const box = pageBox(page);
         filter = (lines) => classifyFurniture(lines, box, profile);
       }
-      const { text, entries } = buildPageText(content.items, filter);
+      const { text, entries, refs, furniture } = buildPageText(content.items, filter);
       // По пустой странице (скан до распознавания) язык не определить.
       if (text.trim()) this.language ??= detectLanguage(text);
       const sentences = segmentSentences(text, this.language ?? 'ru');
-      return { pageNumber, text, entries, sentences, ...pageEdges(text) };
+      const notes = {
+        bodies: (furniture?.notes?.bodies ?? []).map(({ key, items }) => ({ key, text: noteText(items, key) })),
+        carry: noteText(furniture?.notes?.carry),
+      };
+      return { pageNumber, text, entries, sentences, refs, notes, ...pageEdges(text) };
     })();
 
     this.pages.set(pageNumber, promise);
     return promise;
+  }
+
+  /**
+   * Знаки сносок внутри предложения (и сразу после него — «…вопроса.¹»).
+   * @returns {Array<{offset:number, key:string}>}
+   */
+  refsOfSentence(page, sentenceIndex) {
+    const sentence = page?.sentences[sentenceIndex];
+    if (!sentence || !page.refs?.length) return [];
+    const nextStart = page.sentences[sentenceIndex + 1]?.start ?? Infinity;
+    // Знак ровно на стыке («…вопроса.¹ Следующее…») — у предыдущей фразы.
+    const from = sentenceIndex === 0 ? -1 : sentence.start;
+    return page.refs.filter((ref) => ref.offset > from && ref.offset <= nextStart);
+  }
+
+  /**
+   * Текст примечания к знаку сноски: внизу этой страницы (с продолжением на
+   * следующей), внизу следующей (знак у самого конца страницы) или в
+   * разделе «Примечания» в конце книги. null — не нашли.
+   */
+  async noteFor(pageNumber, ref) {
+    const page = await this.page(pageNumber);
+    const bodies = page?.notes?.bodies ?? [];
+    const found = bodies.findIndex((body) => body.key === ref.key);
+    if (found >= 0) {
+      let text = bodies[found].text;
+      // Последняя сноска страницы могла продолжиться внизу следующей.
+      if (found === bodies.length - 1) {
+        const carry = (await this.page(pageNumber + 1))?.notes?.carry;
+        if (carry) text = /-$/.test(text) && /^\p{Ll}/u.test(carry) ? text.slice(0, -1) + carry : `${text} ${carry}`;
+      }
+      return text || null;
+    }
+    const following = await this.page(pageNumber + 1);
+    const spilled = following?.notes?.bodies.find((body) => body.key === ref.key);
+    if (spilled) return spilled.text || null;
+    if (!/^\d+$/.test(ref.key)) return null;
+    return this.endnoteFor(pageNumber, ref);
+  }
+
+  /**
+   * Раздел примечаний в конце книги: страница с заголовком «Примечания»
+   * (или «Комментарии», «Notes») в последних 40% и записи «12. Текст…» до
+   * следующего раздела. Считается один раз.
+   * @returns {Promise<{ fromPage: number, entries: Array<{key:string, text:string}> }|null>}
+   */
+  endnotes() {
+    this.endnotesPromise ??= (async () => {
+      const total = this.numPages;
+      for (let number = Math.max(2, Math.floor(total * 0.6)); number <= total; number += 1) {
+        const page = await this.page(number);
+        const paragraphs = page?.text.split('\n') ?? [];
+        const heading = paragraphs.findIndex((paragraph) => ENDNOTES_HEADING.test(paragraph.trim()));
+        if (heading < 0) continue;
+        const entries = [];
+        let current = null;
+        let stop = false;
+        for (let pageNumber = number; pageNumber <= total && !stop; pageNumber += 1) {
+          const notesPage = pageNumber === number ? page : await this.page(pageNumber);
+          if (!notesPage) break;
+          // Номер записи бывает надстрочным — тогда он среди знаков сносок.
+          const starts = new Map(notesPage.refs.filter((ref) => /^\d+$/.test(ref.key)).map((ref) => [ref.offset, ref.key]));
+          let offset = 0;
+          const list = notesPage.text.split('\n');
+          list.forEach((paragraph, index) => {
+            const at = offset;
+            offset += paragraph.length + 1;
+            if (stop || (pageNumber === number && index <= heading)) return;
+            const trimmed = paragraph.trim();
+            if (ENDNOTES_END.test(trimmed)) {
+              stop = true;
+              return;
+            }
+            const leading = paragraph.length - paragraph.trimStart().length;
+            const raised = starts.get(at + leading) ?? starts.get(at);
+            // Записи «12. Текст…» — с начала абзаца или после конца фразы:
+            // абзацы в разделе примечаний не всегда разделены.
+            const pieces = trimmed.split(ENDNOTE_ENTRY);
+            if (raised) {
+              current = { key: raised, text: '' };
+              entries.push(current);
+            }
+            if (pieces[0].trim()) {
+              if (current) current.text += ` ${pieces[0].trim()}`;
+            }
+            for (let piece = 1; piece < pieces.length; piece += 2) {
+              current = { key: pieces[piece], text: (pieces[piece + 1] ?? '').trim() };
+              entries.push(current);
+            }
+          });
+        }
+        if (entries.length) return { fromPage: number, entries };
+      }
+      return null;
+    })();
+    return this.endnotesPromise;
+  }
+
+  /**
+   * Примечание в конце книги. Если нумерация идёт заново в каждой главе,
+   * одинаковых номеров несколько — берём столько-то по счёту: так же, как
+   * этот номер встречался в тексте до знака.
+   */
+  async endnoteFor(pageNumber, ref) {
+    const notes = await this.endnotes();
+    if (!notes || pageNumber >= notes.fromPage) return null;
+    const same = notes.entries.filter((entry) => entry.key === ref.key);
+    if (same.length <= 1) return same[0]?.text.trim() || null;
+    let ordinal = 0;
+    for (let number = 1; number <= pageNumber; number += 1) {
+      const page = await this.page(number);
+      for (const other of page?.refs ?? []) {
+        if (number === pageNumber && other.offset >= ref.offset) break;
+        if (other.key === ref.key) ordinal += 1;
+      }
+    }
+    return same[Math.min(ordinal, same.length - 1)]?.text.trim() || null;
   }
 
   /** Номер предложения на странице, покрывающего указанную позицию в тексте. */

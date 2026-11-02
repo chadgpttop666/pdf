@@ -6,6 +6,8 @@ import * as library from './library.js';
 import { pageOffsetRatio } from './visible-text.js';
 
 const SAVE_DELAY_MS = 1200;
+// Другие вкладки с той же книгой узнают, что выделения или закладки поменялись.
+const CHANNEL = 'pdf-reader-documents';
 
 export function createReadingState(app) {
   let record = null;
@@ -76,12 +78,35 @@ export function createReadingState(app) {
     saveTimer = setTimeout(save, SAVE_DELAY_MS);
   }
 
+  /**
+   * Место чтения — только своё поле записи: выделения и закладки в памяти
+   * этой вкладки могут быть старее, чем в базе (их меняли в другой вкладке).
+   */
   async function save() {
     if (!record) return;
     clearTimeout(saveTimer);
     record = { ...record, state: currentState() };
-    await library.putDocument(record).catch((error) => console.warn('Не удалось сохранить место чтения', error));
+    const { id, state } = record;
+    await library.mutateDocument(id, () => ({ state })).catch((error) => console.warn('Не удалось сохранить место чтения', error));
   }
+
+  // ── Несколько вкладок с одной книгой ─────────────────────────────────
+
+  const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null;
+
+  /** Перечитать выделения и закладки из базы; место чтения у вкладки своё. */
+  async function refresh() {
+    const id = record?.id;
+    if (!id) return;
+    const fresh = await library.getDocument(id).catch(() => null);
+    if (!fresh || record?.id !== id) return;
+    record = { ...fresh, state: record.state };
+    notify();
+  }
+
+  channel?.addEventListener('message', ({ data }) => {
+    if (data?.id && data.id === record?.id) refresh();
+  });
 
   /** Прокрутка к сохранённому месту: страница плюс доля её высоты. */
   function scrollToSaved(state) {
@@ -188,6 +213,7 @@ export function createReadingState(app) {
   app.eventBus.on('viewmodechanged', scheduleSave);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') save();
+    else refresh(); // пока вкладка была в фоне, книгу могли править в другой
   });
   window.addEventListener('pagehide', () => save());
 
@@ -200,13 +226,24 @@ export function createReadingState(app) {
     get documentId() {
       return record?.id || null;
     },
-    /** Изменение полей записи мимо состояния чтения — например, закладок. */
-    async patch(patch, { silent = false } = {}) {
+    /**
+     * Изменить поля записи по её виду в базе: change(запись) → поля.
+     * Например, добавить выделение к тем, что есть, — включая сделанные в
+     * другой вкладке.
+     */
+    async mutate(change, { silent = false } = {}) {
       if (!record) return null;
-      record = { ...record, ...patch };
-      await library.putDocument(record);
+      const id = record.id;
+      const stored = await library.mutateDocument(id, change);
+      if (record?.id !== id) return stored;
+      record = { ...stored, state: record.state };
+      channel?.postMessage({ id });
       if (!silent) notify();
       return record;
+    },
+    /** Изменение полей записи мимо состояния чтения — например, закладок. */
+    patch(patch, options) {
+      return this.mutate(() => patch, options);
     },
     onChange(listener) {
       listeners.add(listener);
