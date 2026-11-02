@@ -87,13 +87,23 @@
           <div id="outlinePanel" data-panel="outline" class="panel active"></div>
           <div id="thumbsPanel" data-panel="thumbs" class="panel"></div>
           <div data-panel="bookmarks" class="panel notes-panel">
-            <h4>Закладки</h4>
-            <div id="bookmarksPanel"></div>
-            <div class="notes-head">
-              <h4>Выделения</h4>
-              <button id="exportNotes" data-icon="download" title="Выделения, заметки и закладки одним файлом Markdown — по главам" disabled>Конспект .md</button>
+            <div class="notes-search">
+              <input id="notesSearch" type="search" placeholder="Найти в заметках всех книг" aria-label="Найти в выделениях, заметках и закладках всех книг" autocomplete="off" />
+              <button id="exportAllNotes" class="icon" data-icon="download" title="Заметки всех книг одним архивом: конспект каждой книги и голосовые записи"></button>
             </div>
-            <div id="highlightsPanel"></div>
+            <div id="notesLocal">
+              <h4>Закладки</h4>
+              <div id="bookmarksPanel"></div>
+              <div class="notes-head">
+                <h4>Выделения</h4>
+                <div class="notes-export">
+                  <button id="exportNotes" data-icon="download" title="Выделения, заметки и закладки одним файлом Markdown — по главам" disabled>Конспект .md</button>
+                  <button id="exportNotesZip" data-icon="download" title="Конспект и голосовые записи одним архивом: записи — отдельными файлами, в конспекте — ссылки на них" hidden>С записями .zip</button>
+                </div>
+              </div>
+              <div id="highlightsPanel"></div>
+            </div>
+            <div id="notesResults" hidden></div>
           </div>
           <div id="recentPanel" data-panel="recent" class="panel"></div>
         </div>

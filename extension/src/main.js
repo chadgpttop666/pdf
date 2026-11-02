@@ -23,6 +23,7 @@ import { createHighlights } from './highlights.js';
 import { createStats } from './stats.js';
 import { createOcr } from './ocr.js';
 import { createRecent } from './ui/recent.js';
+import { createNotesSearch } from './ui/notes-search.js';
 import { createSettingsDialog } from './ui/settings-dialog.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
@@ -346,6 +347,7 @@ async function main() {
   app.stats = createStats(app);
   app.ocr = createOcr(app);
   app.recent = createRecent(app);
+  app.notesSearch = createNotesSearch(app);
   app.settingsDialog = createSettingsDialog(app);
   await app.recent.render();
 

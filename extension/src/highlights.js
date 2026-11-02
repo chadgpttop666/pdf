@@ -5,7 +5,7 @@
 // выбрасываются ли колонтитулы, и одинаково переводится и в слой поверх
 // страницы PDF, и в предложения режима «только текст».
 
-import { $, clear, el, formatDate, on, safeFileName, saveBlob } from './dom.js';
+import { $, clear, el, formatDate, on, saveBlob } from './dom.js';
 import { icon } from './ui/icons.js';
 import { cleanForSpeech, cleanedIndexForRaw, offsetToSpanPoint, spanPointToOffset } from './text-index.js';
 import { locateInSpan, offsetInSpan, textSpansOfPage } from './visible-text.js';
@@ -13,6 +13,9 @@ import { mergeRectsByLine } from './tts/highlighter.js';
 import { formatSeconds } from './voice/recorder.js';
 import { createVoiceNotes } from './voice/voice-notes.js';
 import { createStressEditor, stressableWord } from './ui/stress-editor.js';
+import * as library from './library.js';
+import { bookArchiveFiles, bookFileName, byPosition, notesMarkdown } from './notes-export.js';
+import { makeZip } from './zip.js';
 
 export const MARK_COLORS = { yellow: 'жёлтый', green: 'зелёный', blue: 'голубой', pink: 'розовый' };
 const NOTE_SAVE_DELAY = 500;
@@ -46,11 +49,6 @@ export function createHighlights(app) {
       if (word && piece) app.tts?.speakPiece(await piece);
     },
   });
-
-  function byPosition(a, b) {
-    const [pa, pb] = [a.pieces[0], b.pieces[0]];
-    return pa.pageNumber - pb.pageNumber || pa.from.span - pb.from.span || pa.from.offset - pb.from.offset;
-  }
 
   // ── Выделение → координаты ───────────────────────────────────────────
 
@@ -543,6 +541,7 @@ export function createHighlights(app) {
     clear(list);
     const sorted = [...items()].sort(byPosition);
     $('exportNotes').disabled = !sorted.length && !(app.readingState.record?.bookmarks || []).length;
+    $('exportNotesZip').hidden = !sorted.some((item) => item.voice);
     if (!sorted.length) {
       list.append(el('p', { class: 'panel-empty' }, 'Выделите текст мышью и выберите цвет маркера — выделение появится здесь.'));
       return;
@@ -580,43 +579,33 @@ export function createHighlights(app) {
     list.append(ul);
   }
 
+  const chapterAt = (pageNumber) => app.outline?.chapterTitleAt(pageNumber) ?? null;
+
   /** Конспект: выделения по главам, с номерами страниц и заметками, затем закладки. */
   function buildMarkdown() {
     const record = app.readingState.record;
-    const title = record?.title || record?.name || 'Документ';
-    const lines = [`# ${title}`, '', `_Конспект из PDF-читалки, ${new Date().toLocaleDateString('ru-RU')}_`, ''];
-    let chapter;
-    for (const item of [...items()].sort(byPosition)) {
-      const pageNumber = item.pieces[0].pageNumber;
-      const itemChapter = app.outline?.chapterTitleAt(pageNumber) ?? null;
-      if (itemChapter !== chapter || lines.length === 4) {
-        chapter = itemChapter;
-        lines.push(`## ${chapter ?? 'Выделения'}`, '');
-      }
-      lines.push(`> ${item.text}`, `> — с. ${pageNumber}`, '');
-      if (item.note) lines.push(item.note, '');
-      if (item.voice) lines.push(`_Голосовая заметка, ${formatSeconds(item.voice.seconds)}${item.voice.transcribed && !item.voice.empty ? ' — текст выше' : ''}_`, '');
-    }
-    const bookmarks = record?.bookmarks || [];
-    if (bookmarks.length) {
-      lines.push('## Закладки', '');
-      for (const bookmark of bookmarks) {
-        lines.push(`- с. ${bookmark.pageNumber} — ${bookmark.label}${bookmark.note ? ` — ${bookmark.note}` : ''}`);
-      }
-      lines.push('');
-    }
-    return lines.join('\n');
+    return notesMarkdown({ ...record, highlights: items() }, { chapterAt });
   }
 
   function exportMarkdown() {
     const record = app.readingState.record;
-    const base = (record?.name || 'документ').replace(/\.pdf$/i, '');
-    const filename = `${safeFileName(base)} — конспект.md`;
+    const filename = `${bookFileName(record || {})} — конспект.md`;
     saveBlob(new Blob([buildMarkdown()], { type: 'text/markdown;charset=utf-8' }), filename);
     app.hud.show(`Сохраняю «${filename}»`);
   }
 
+  /** Конспект и голосовые записи одним архивом: в конспекте — ссылки на файлы записей. */
+  async function exportArchive() {
+    const record = app.readingState.record;
+    if (!record) return;
+    const { files, missing } = await bookArchiveFiles({ ...record, highlights: items() }, { loadRecording: library.getRecording, chapterAt });
+    const filename = `${bookFileName(record)} — конспект с записями.zip`;
+    saveBlob(await makeZip(files), filename);
+    app.hud.show(`Сохраняю «${filename}»${missing ? ` — записей не нашлось: ${missing}` : ''}`, { duration: 3500 });
+  }
+
   on($('exportNotes'), 'click', exportMarkdown);
+  on($('exportNotesZip'), 'click', () => exportArchive().catch((error) => app.hud.show(`Архив не собрался: ${error.message}`)));
 
   function render() {
     renderList();
@@ -639,6 +628,14 @@ export function createHighlights(app) {
     render,
     buildMarkdown,
     exportMarkdown,
+    exportArchive,
+    chapterAt,
+    /** Перейти к выделению по id (из поиска по всем книгам). */
+    goToId(id) {
+      const item = items().find((candidate) => candidate.id === id);
+      if (item) goTo(item);
+      return Boolean(item);
+    },
     hideToolbar,
     /** Клавиша H: выделить маркером последнего цвета то, что выделено мышью. */
     async markSelection() {

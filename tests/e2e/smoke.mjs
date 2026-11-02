@@ -27,6 +27,24 @@ function check(name, condition, details = '') {
   console.log(`${mark} ${name}${details ? ` — ${details}` : ''}`);
 }
 
+/** Имена и размеры файлов ZIP (без сжатия) — по центральному каталогу. */
+function zipNames(buffer) {
+  const end = buffer.length - 22;
+  if (buffer.readUInt32LE(end) !== 0x06054b50) return [];
+  const entries = [];
+  let at = buffer.readUInt32LE(end + 16);
+  for (let i = 0; i < buffer.readUInt16LE(end + 10); i += 1) {
+    const size = buffer.readUInt32LE(at + 24);
+    const nameLength = buffer.readUInt16LE(at + 28);
+    const local = buffer.readUInt32LE(at + 42);
+    const name = buffer.toString('utf8', at + 46, at + 46 + nameLength);
+    const dataAt = local + 30 + buffer.readUInt16LE(local + 26) + buffer.readUInt16LE(local + 28);
+    entries.push({ name, size, text: name.endsWith('.md') ? buffer.toString('utf8', dataAt, dataAt + size) : '' });
+    at += 46 + nameLength;
+  }
+  return entries;
+}
+
 async function waitForServer(url, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
     try {
@@ -672,6 +690,21 @@ try {
       markdown.includes('_Голосовая заметка, 0:0') &&
       markdown.includes('## Закладки'),
     `${notesName}\n${markdown.slice(0, 300)}`
+  );
+  // Конспект с записями — архивом: Markdown со ссылкой и сам файл записи.
+  const zipVisible = await page.isVisible('#exportNotesZip');
+  const [zipDownload] = await Promise.all([page.waitForEvent('download', { timeout: 10000 }), page.click('#exportNotesZip')]);
+  const zipEntries = zipNames(readFileSync(await zipDownload.path()));
+  const zipName = await page.evaluate(() => document.getElementById('hud').textContent);
+  check(
+    'конспект с записями .zip: конспект со ссылкой и файл записи',
+    zipVisible &&
+      zipName.includes('«russian — конспект с записями.zip»') &&
+      zipEntries[0]?.name === 'russian — конспект.md' &&
+      /^записи\/с\. 3 — 0-0\d\.(webm|ogg)$/.test(zipEntries[1]?.name ?? '') &&
+      zipEntries[1].size > 1000 &&
+      zipEntries[0].text.includes(`(<${zipEntries[1].name}>)`),
+    JSON.stringify({ zipVisible, zipName, entries: zipEntries.map(({ name, size }) => ({ name, size })) })
   );
   // Запись убирают — текст заметки остаётся, файл из библиотеки удалён.
   const voiceId = await page.evaluate(() => window.pdfReaderApp.readingState.record.highlights[0].voice.id);
@@ -1740,6 +1773,56 @@ try {
     JSON.stringify({ stressWord, ...stressResult, spokenAfter })
   );
   await stressTab.close();
+
+  // ── Поиск по заметкам всех книг: находка в другой книге открывает её на месте ──
+  const searchTab = await context.newPage();
+  await searchTab.addInitScript(speechMock);
+  searchTab.on('pageerror', (error) => consoleErrors.push(`поиск заметок: ${error.message}`));
+  await searchTab.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+  await searchTab.waitForFunction(() => window.pdfReaderApp?.readingState?.record && window.pdfReaderApp.pdfViewer.pagesCount > 0, null, { timeout: 20000 });
+  await searchTab.waitForFunction(() => !document.getElementById('app').classList.contains('booting'), null, { timeout: 10000 });
+  // Другой книге (sample.pdf, открывалась в начале) — выделение с заметкой на с. 4.
+  const otherBook = await searchTab.evaluate(async () => {
+    const library = await import('./src/library.js');
+    const sample = (await library.listRecent(50)).find((record) => record.name === 'sample.pdf');
+    await library.mutateDocument(sample.id, (stored) => ({
+      highlights: [
+        ...(stored.highlights || []),
+        { id: 'search-e2e', color: 'blue', pieces: [{ pageNumber: 4, from: { span: 0, offset: 0 }, to: { span: 0, offset: 4 } }], text: 'Какой-то текст', note: 'Мысль философа о ёлке', createdAt: Date.now() },
+      ],
+    }));
+    window.pdfReaderApp.toggleSidebar(true);
+    document.querySelector('#sidebar [data-tab="bookmarks"]').click();
+    return sample.id;
+  });
+  await searchTab.fill('#notesSearch', 'моя заметка');
+  await searchTab.waitForFunction(() => document.querySelectorAll('#notesResults .notes-hit').length > 0, null, { timeout: 5000 });
+  const ownFound = await searchTab.evaluate(() => ({
+    local: document.getElementById('notesLocal').hidden,
+    found: document.querySelector('#notesResults .notes-found')?.textContent,
+    here: document.querySelector('#notesResults .notes-here')?.textContent,
+    mark: document.querySelector('#notesResults mark')?.textContent,
+  }));
+  await searchTab.fill('#notesSearch', 'ФИЛОСОФА елке');
+  await searchTab.waitForFunction(() => document.querySelector('#notesResults mark')?.textContent.toLowerCase() === 'философа', null, { timeout: 5000 });
+  const otherFound = await searchTab.evaluate(() => [...document.querySelectorAll('#notesResults .notes-book')].map((node) => node.textContent));
+  await searchTab.click('#notesResults .notes-hit .mark-jump');
+  await searchTab.waitForFunction((id) => window.pdfReaderApp.readingState.documentId === id, otherBook, { timeout: 15000 });
+  await searchTab.waitForFunction(() => window.pdfReaderApp.pdfViewer.currentPageNumber === 4, null, { timeout: 8000 }).catch(() => {});
+  const opened = await searchTab.evaluate(() => ({ name: window.pdfReaderApp.readingState.record.name, page: window.pdfReaderApp.pdfViewer.currentPageNumber }));
+  check(
+    'поиск по заметкам всех книг: своя находка с подсветкой, чужая книга открывается на месте выделения',
+    ownFound.local && /^1 находка в 1 книге$/.test(ownFound.found) && ownFound.here === 'открыта' && ownFound.mark === 'моя' && otherFound.length === 1 && opened.name === 'sample.pdf' && opened.page === 4,
+    JSON.stringify({ ownFound, otherFound, opened })
+  );
+  const [allDownload] = await Promise.all([searchTab.waitForEvent('download', { timeout: 10000 }), searchTab.click('#exportAllNotes')]);
+  const allEntries = zipNames(readFileSync(await allDownload.path())).map((entry) => entry.name);
+  check(
+    'заметки всех книг одним архивом — по папке на книгу',
+    allEntries.includes('russian/russian — конспект.md') && allEntries.includes('sample/sample — конспект.md'),
+    JSON.stringify(allEntries)
+  );
+  await searchTab.close();
 
   // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──
   const openTab = async () => {

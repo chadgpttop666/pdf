@@ -737,6 +737,14 @@ li.collapsed > .outline-tree { display: none; }
 .notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .notes-head h4 { margin: 0 2px; }
 .notes-head button { font-size: 12px; }
+.notes-export { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.notes-search { display: flex; gap: 4px; align-items: center; margin: 2px 0 10px; }
+.notes-search input { flex: 1; min-width: 0; }
+.notes-found { margin: 0 2px 8px; color: var(--fg-muted); font-size: 12px; }
+.notes-book { margin: 12px 2px 6px; font-size: 13px; font-weight: 600; }
+.notes-book .notes-here { margin-left: 6px; font-weight: 400; color: var(--fg-muted); font-size: 11px; }
+.notes-hit .mark-text mark, .notes-hit .mark-note mark { background: var(--mark-yellow, #ffe066); color: #1a1a1a; border-radius: 2px; padding: 0 1px; }
+.notes-hit.bookmark-hit { border-left-color: var(--accent); }
 .mark-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .mark-item {
   display: grid;
