@@ -255,6 +255,36 @@ try {
     );
   }
 
+  // ── Номер страницы: набрали + Enter, потом другой файл в той же вкладке ──
+  await page.click('#pageNumber');
+  await page.fill('#pageNumber', '4');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(400);
+  const typedPage = await page.evaluate(() => ({
+    current: window.pdfReaderApp.pdfViewer.currentPageNumber,
+    input: document.getElementById('pageNumber').value,
+    focus: document.activeElement?.id,
+  }));
+  await page.evaluate(() => window.pdfReaderApp.openUrl('/fixtures/russian.pdf'));
+  await page.waitForFunction(() => window.pdfReaderApp.pdfViewer.pagesCount === 6, null, { timeout: 20000 });
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => window.pdfReaderApp.container.scrollBy(0, 1200));
+  await page.waitForTimeout(500);
+  const otherFile = await page.evaluate(() => ({
+    current: window.pdfReaderApp.pdfViewer.currentPageNumber,
+    input: document.getElementById('pageNumber').value,
+    count: document.getElementById('pageCount').textContent,
+  }));
+  check(
+    'номер страницы: после Enter фокус в документе, в другом файле — его страница, а не старая',
+    typedPage.current === 4 &&
+      typedPage.input === '4' &&
+      typedPage.focus === 'viewerContainer' &&
+      otherFile.input === String(otherFile.current) &&
+      otherFile.count === '/ 6',
+    JSON.stringify({ typedPage, otherFile })
+  );
+
   // ── Книжная вёрстка на русском: здесь всплывало то, чего не видно на простом PDF ──
   await page.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
   await page.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0, null, { timeout: 20000 });

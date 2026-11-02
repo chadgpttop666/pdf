@@ -51,10 +51,29 @@ export function createToolbar(app) {
     app.setZoom(String(next), { fromUser: true, announce: true });
   }
 
+  // Номер в поле не трогаем, только пока в нём печатают. Раньше поле не
+  // обновлялось всё время, пока было в фокусе, — а фокус после Enter
+  // оставался в нём, и старый номер висел и при прокрутке, и в другом файле.
+  let typing = false;
+  const showCurrentPage = () => {
+    typing = false;
+    if (app.pdfViewer.pagesCount) pageInput.value = String(app.pdfViewer.currentPageNumber);
+  };
+  on(pageInput, 'input', () => {
+    typing = true;
+  });
   on(pageInput, 'change', () => {
     const value = Number(pageInput.value);
-    if (Number.isFinite(value)) app.pdfViewer.currentPageNumber = Math.min(Math.max(1, value), app.pdfViewer.pagesCount || 1);
+    if (Number.isFinite(value) && value > 0) app.pdfViewer.currentPageNumber = Math.min(Math.max(1, value), app.pdfViewer.pagesCount || 1);
+    showCurrentPage();
   });
+  on(pageInput, 'keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== 'Escape') return;
+    if (event.key === 'Escape') showCurrentPage();
+    // Перешли (или передумали) — клавиши снова листают документ.
+    requestAnimationFrame(() => app.activeContainer.focus({ preventScroll: true }));
+  });
+  on(pageInput, 'blur', showCurrentPage);
   on($('btnPrevPage'), 'click', () => app.pdfViewer.previousPage());
   on($('btnNextPage'), 'click', () => app.pdfViewer.nextPage());
   on($('btnZoomIn'), 'click', () => zoomBy(1));
@@ -63,10 +82,13 @@ export function createToolbar(app) {
 
   app.eventBus.on('pagesinit', () => {
     setPageCount(app.pdfViewer.pagesCount);
+    // Новый документ: номер — его, даже если поле было в фокусе.
+    if (document.activeElement === pageInput) pageInput.blur();
+    showCurrentPage();
     syncZoomSelect();
   });
   app.eventBus.on('pagechanging', ({ pageNumber }) => {
-    if (document.activeElement !== pageInput) pageInput.value = String(pageNumber);
+    if (!typing) pageInput.value = String(pageNumber);
   });
   app.eventBus.on('scalechanging', () => syncZoomSelect());
   app.eventBus.on('documentopened', ({ title }) => {
