@@ -1692,7 +1692,10 @@ try {
   await newTab.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
   await newTab.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
   const sharedId = await newTab.evaluate(async () => {
-    const span = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].find((s) => s.textContent.trim().length > 20);
+    // Только «листья» с текстом: у pdf.js бывают и обёртки из span.
+    const span = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].find(
+      (candidate) => candidate.firstChild?.nodeType === Node.TEXT_NODE && candidate.textContent.trim().length > 20
+    );
     const range = new Range();
     range.setStart(span.firstChild, 0);
     range.setEnd(span.firstChild, Math.min(12, span.firstChild.length));
