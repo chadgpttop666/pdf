@@ -62,3 +62,22 @@ describe('примечания для озвучки', () => {
     assert.equal(await index.noteFor(2, second.refs[0]), 'Вторая глава: отчёт Церковного конгресса.');
   });
 });
+
+describe('колонтитулы, которые чередуются через страницу', () => {
+  it('убираются оба — и на чётных, и на нечётных страницах', async () => {
+    const pages = Array.from({ length: 24 }, (_, i) => {
+      const journal = 400 + i;
+      const head = i % 2 ? `Т. 8, № 2] АГНОСТИЦИЗМ ${journal}` : `${journal} [ПЕРЕВОДЫ] ТОМАС ГЕНРИ ГЕКСЛИ [2024`;
+      return [
+        item(head, { x: 60, y: 800, size: 8, width: 300 }),
+        body(`Длинная строка основного текста страницы ${i + 1}, набранная по ширине полосы.`, 700),
+        body('Ещё одна строка основного текста, тоже до самого края полосы набора.', 680),
+      ];
+    });
+    const index = new TextIndex(fakeDocument(pages), { skipFurniture: true });
+    for (const number of [1, 2, 7, 8, 23, 24]) {
+      const { text } = await index.page(number);
+      assert.ok(text.startsWith('Длинная строка'), `стр. ${number}: ${text.slice(0, 50)}`);
+    }
+  });
+});

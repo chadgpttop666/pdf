@@ -494,10 +494,17 @@ export class TextIndex {
   /** Профиль колонтитулов по выборке страниц равномерно по документу; считается один раз. */
   furnitureProfile() {
     this.furniturePromise ||= (async () => {
+      // Парами соседних страниц: колонтитулы часто чередуются (чётная —
+      // «404 [Переводы] Гексли», нечётная — «Т. 8, № 2] Агностицизм 405»),
+      // и выборка через страницу видела бы только один из них.
       const total = this.numPages;
-      const step = Math.max(1, Math.floor(total / FURNITURE_SAMPLE));
+      const pairs = Math.ceil(FURNITURE_SAMPLE / 2);
+      const step = Math.max(2, Math.floor(total / pairs));
       const numbers = [];
-      for (let number = 1; number <= total && numbers.length < FURNITURE_SAMPLE; number += step) numbers.push(number);
+      for (let number = 1; number <= total && numbers.length < FURNITURE_SAMPLE; number += step) {
+        numbers.push(number);
+        if (number + 1 <= total) numbers.push(number + 1);
+      }
       return this.profileOf(numbers);
     })();
     return this.furniturePromise;

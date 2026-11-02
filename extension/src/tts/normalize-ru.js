@@ -279,6 +279,16 @@ const ABBREVIATIONS = [
   [/см\./iuy, 'смотри'],
   [/напр\./iuy, 'например'],
   [/проф\./iuy, 'профессор'],
+  // «д-р Уэйс», «о д-ре Уэйсе», «у д-ра», «с д-ром» — доктор в нужном падеже.
+  [/д-рами/iuy, 'докторами'],
+  [/д-рах/iuy, 'докторах'],
+  [/д-ром/iuy, 'доктором'],
+  [/д-ров/iuy, 'докторов'],
+  [/д-рам/iuy, 'докторам'],
+  [/д-ре/iuy, 'докторе'],
+  [/д-ра/iuy, 'доктора'],
+  [/д-ру/iuy, 'доктору'],
+  [/д-р/iuy, 'доктор'],
   [/акад\./iuy, 'академик'],
   [/доц\./iuy, 'доцент'],
   [/рис\./iuy, 'рисунок'],
@@ -531,6 +541,54 @@ function matchAbbreviation(text, i) {
  * @returns {{ text: string, segments: { start: number, end: number, spoken: string }[] }}
  *   text — что произносить; segments — какие куски исходного текста заменены
  */
+const YEAR_RANGE = /(\d{4})\s?[-–—]\s?(\d{4})(?!\d)/y;
+const RANGE = /(\d+)\s?[–—-]\s?(\d+)(?![\d,.]\d)/y;
+const DECIMAL = /(\d+)[,.](\d{1,2})(?!\d)/y;
+const isYear = (n) => n >= 1000 && n <= 2100;
+
+/**
+ * Число, у которого нет слова-подсказки рядом. Годы жизни и периоды
+ * «(1796–1857)» — порядковыми («тысяча семьсот девяносто шестой —
+ * тысяча восемьсот пятьдесят седьмой»), диапазон «253–254» и всё прочее —
+ * количественными, дробь «2,5» — «две целых пять десятых».
+ */
+function plainNumber(text, start) {
+  const words = (n) => cardinal(n);
+  YEAR_RANGE.lastIndex = start;
+  let match = YEAR_RANGE.exec(text);
+  if (match && isYear(Number(match[1])) && isYear(Number(match[2]))) {
+    return { end: YEAR_RANGE.lastIndex, spoken: `${ordinal(Number(match[1]))} — ${ordinal(Number(match[2]))}` };
+  }
+  DECIMAL.lastIndex = start;
+  match = DECIMAL.exec(text);
+  // «2,5» — дробь; «1,2,3» и «2.5.1» (номера пунктов) — нет.
+  const inSequence = /\d[,.]$/.test(text.slice(Math.max(0, start - 2), start));
+  if (match && !inSequence && !/[,.]\d/.test(text.slice(DECIMAL.lastIndex, DECIMAL.lastIndex + 2))) {
+    const whole = Number(match[1]);
+    const part = Number(match[2]);
+    const unit = match[2].length === 1 ? ['десятая', 'десятых', 'десятых'] : ['сотая', 'сотых', 'сотых'];
+    return {
+      end: DECIMAL.lastIndex,
+      spoken: `${cardinal(whole, 'f')} ${plural(whole, ['целая', 'целых', 'целых'])} ${cardinal(part, 'f')} ${plural(part, unit)}`,
+    };
+  }
+  RANGE.lastIndex = start;
+  match = RANGE.exec(text);
+  if (match && !/^0\d/.test(match[1]) && !/^0\d/.test(match[2])) {
+    return { end: RANGE.lastIndex, spoken: `${words(Number(match[1]))} — ${words(Number(match[2]))}` };
+  }
+  NUMBER.lastIndex = start;
+  const plain = NUMBER.exec(text)[0];
+  const end = start + plain.length;
+  // Номер с ведущим нулём («0002», код, ORCID) — по цифрам.
+  if (/^0\d/.test(plain)) return { end, spoken: [...plain.replace(/\D/g, '')].map((digit) => cardinal(Number(digit))).join(' ') };
+  const value = Number(plain.replace(/\D/g, ''));
+  // Год сам по себе — «(1882)», «М., 2010.» — порядковым: «тысяча восемьсот
+  // восемьдесят второй». Если за числом слово («2000 рублей») — это счёт.
+  if (isYear(value) && !/^\s*\p{L}/u.test(text.slice(end, end + 3))) return { end, spoken: ordinal(value) };
+  return { end, spoken: words(value) };
+}
+
 export function normalizeRussian(text) {
   const segments = [];
   let out = '';
@@ -551,13 +609,13 @@ export function normalizeRussian(text) {
       i = match.end;
       continue;
     }
-    // Число без контекста espeak прочтёт сам; пропускаем его целиком, чтобы
-    // хвост «1928» не разобрался как отдельное «928».
+    // Число без контекста — тоже словами: у TeraTTS в словаре нет цифр, и
+    // «39 статей» или годы жизни «(1796–1857)» она бы просто пропустила.
     if (atWordStart && /\d/.test(text[i])) {
-      NUMBER.lastIndex = i;
-      const plain = NUMBER.exec(text)[0];
-      out += plain;
-      i += plain.length;
+      const plain = plainNumber(text, i);
+      segments.push({ start: i, end: plain.end, spoken: plain.spoken });
+      out += plain.spoken;
+      i = plain.end;
       continue;
     }
     out += text[i];

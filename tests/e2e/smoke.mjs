@@ -756,7 +756,11 @@ try {
   const selectSpans = (from, to) =>
     page.evaluate(
       ({ from: a, to: b }) => {
-        const spans = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].filter((span) => span.textContent.trim().length > 3);
+        // Только «листья» с текстом: обёртки pdf.js дали бы пустое выделение,
+        // и панель над ним иногда не появлялась.
+        const spans = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].filter(
+          (span) => span.firstChild?.nodeType === Node.TEXT_NODE && span.textContent.trim().length > 3
+        );
         const range = document.createRange();
         range.setStart(spans[a].firstChild, 0);
         range.setEnd(spans[b].firstChild, spans[b].firstChild.length);

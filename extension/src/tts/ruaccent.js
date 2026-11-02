@@ -205,7 +205,10 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
   async function processSentence(text) {
     // Для нейросетей — фраза в том виде, как её чистит RUAccent; слова
     // в ней те же, поэтому правки переносятся обратно по порядку слов.
-    const clean = text.replace(NOT_KEPT, '');
+    // Выброшенный знак — пробел, а не пусто: из «Москва–Петербург» или
+    // «1796–1857» иначе выходило одно слово, слова не совпадали, и вся фраза
+    // оставалась без ударений («фИлософ»).
+    const clean = text.replace(NOT_KEPT, ' ');
     const items = tokens(clean);
     const original = tokens(text).filter((item) => item.word);
     const cleanWords = items.filter((item) => item.word);
@@ -233,7 +236,9 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
      * трогаем — ручное ударение главнее. Контекст для нейросетей — одно
      * предложение, как в RUAccent.
      */
-    async process(text) {
+    async process(raw) {
+      // Ударение знаком над гласной («за́мок») — то же, что ручное «+».
+      const text = raw.replace(/([аеёиоуыэюяАЕЁИОУЫЭЮЯ])\u0301/g, '+$1');
       let out = '';
       let cursor = 0;
       for (const match of text.matchAll(SENTENCE)) {
