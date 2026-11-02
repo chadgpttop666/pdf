@@ -190,6 +190,7 @@ export const SETTINGS_SCHEMA = [
   { custom: 'teraVoices' },
   // Ускоритель — тоже не настройка, а установка программы: helper-install.js.
   { custom: 'teraHelper' },
+  { custom: 'userStress' },
   {
     key: 'teraUseHelper',
     type: 'bool',

@@ -5,6 +5,7 @@ import { $, clear, closeOnBackdropClick, el, formatBytes, on } from '../dom.js';
 import { SETTINGS_SCHEMA, get as getSetting, updateSettings } from '../settings.js';
 import * as library from '../library.js';
 import { createHelperFlow, describeHelper, helperButton } from '../tts/helper-install.js';
+import { loadUserStress, onUserStressChange, removeUserStress, showStress, userStressEntries } from '../tts/user-stress.js';
 
 export function createSettingsDialog(app) {
   const dialog = $('settingsDialog');
@@ -286,6 +287,36 @@ export function createSettingsDialog(app) {
     );
   }
 
+  /** Свои ударения: что исправлено, где действует, убрать. */
+  async function renderUserStress(section) {
+    await loadUserStress();
+    clear(section);
+    const entries = [...userStressEntries()].sort((a, b) => a.key.localeCompare(b.key, 'ru'));
+    section.append(
+      el('span', { class: 'label' }, [
+        el('span', {}, 'Мои ударения'),
+        el('span', { class: 'hint' }, 'Выделите слово в книге и нажмите «А́» — голос TeraTTS будет читать его так. Исправление главнее словаря'),
+      ])
+    );
+    if (!entries.length) {
+      section.append(el('p', { class: 'panel-empty' }, 'Пока ни одного.'));
+      return;
+    }
+    const list = el('ul', { class: 'user-stress-list' });
+    for (const entry of entries) {
+      const remove = el('button', { type: 'button', class: 'ghost', title: 'Убрать — читать как в словаре' }, 'Убрать');
+      on(remove, 'click', () => removeUserStress(entry.key, entry.docId));
+      list.append(
+        el('li', {}, [
+          el('span', {}, [showStress(entry.stressed), ' ', el('span', { class: 'stress-scope-label' }, entry.docId ? '· в одной книге' : '· во всех книгах')]),
+          remove,
+        ])
+      );
+    }
+    section.append(list);
+  }
+  onUserStressChange(() => document.querySelectorAll('.user-stress').forEach(renderUserStress));
+
   function render() {
     // Перестройка (очистили библиотеку, скачали голос) — на том же месте прокрутки.
     const scrollTop = dialog.scrollTop;
@@ -314,6 +345,12 @@ export function createSettingsDialog(app) {
         const section = el('div', { class: 'setting piper-voices tera-helper' });
         grid.append(section);
         renderTeraHelper(section);
+        continue;
+      }
+      if (item.custom === 'userStress') {
+        const section = el('div', { class: 'setting piper-voices user-stress' });
+        grid.append(section);
+        renderUserStress(section);
         continue;
       }
       if (item.custom === 'piperVoices') {

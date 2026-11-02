@@ -12,6 +12,7 @@ import { locateInSpan, offsetInSpan, textSpansOfPage } from './visible-text.js';
 import { mergeRectsByLine } from './tts/highlighter.js';
 import { formatSeconds } from './voice/recorder.js';
 import { createVoiceNotes } from './voice/voice-notes.js';
+import { createStressEditor, stressableWord } from './ui/stress-editor.js';
 
 export const MARK_COLORS = { yellow: 'жёлтый', green: 'зелёный', blue: 'голубой', pink: 'розовый' };
 const NOTE_SAVE_DELAY = 500;
@@ -34,6 +35,17 @@ export function createHighlights(app) {
   const find = (id) => items().find((item) => item.id === id) ?? null;
   const voiceNotes = createVoiceNotes(app, { find, update: (id, patch) => update(id, patch) });
   let recTimer = 0;
+  let pendingWord = null; // выделено одно слово — ему можно исправить ударение
+  let stressPiece = null; // его место — прослушать после исправления
+  const stressEditor = createStressEditor(app, {
+    onSaved: async (word) => {
+      const piece = stressPiece;
+      hideToolbar();
+      window.getSelection()?.removeAllRanges();
+      // Прослушать слово с новым ударением (нейроголос TeraTTS).
+      if (word && piece) app.tts?.speakPiece(await piece);
+    },
+  });
 
   function byPosition(a, b) {
     const [pa, pb] = [a.pieces[0], b.pieces[0]];
@@ -159,7 +171,9 @@ export function createHighlights(app) {
 
   // ── Всплывающая панель ───────────────────────────────────────────────
 
+  let anchorRect = null; // над чем стоит панель — чтобы переставить, когда она выросла
   function placeToolbar(rect) {
+    anchorRect = rect;
     toolbar.hidden = false;
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
@@ -174,6 +188,9 @@ export function createHighlights(app) {
     editingId = null;
     deleteButton.hidden = true;
     $('markSpeak').hidden = false;
+    pendingWord = stressableWord(range.toString());
+    $('markStress').hidden = !pendingWord;
+    stressEditor.close();
     noteInput.hidden = true;
     noteInput.value = '';
     markActiveSwatch(null);
@@ -186,6 +203,8 @@ export function createHighlights(app) {
     editingId = highlight.id;
     deleteButton.hidden = false;
     $('markSpeak').hidden = true;
+    $('markStress').hidden = true;
+    stressEditor.close();
     noteInput.hidden = !highlight.note;
     noteInput.value = highlight.note || '';
     markActiveSwatch(highlight.color);
@@ -204,6 +223,7 @@ export function createHighlights(app) {
     // Панель закрывают посреди записи (Esc, другое выделение) — запись сохраняем.
     if (voiceNotes.recording) finishRecording();
     flushNote();
+    stressEditor.close();
     toolbar.hidden = true;
     pendingRange = null;
     editingId = null;
@@ -244,6 +264,8 @@ export function createHighlights(app) {
       editingId = created.id;
       deleteButton.hidden = false;
       $('markSpeak').hidden = true;
+      $('markStress').hidden = true;
+      stressEditor.close();
       markActiveSwatch(created.color);
     }
     return editingId;
@@ -314,6 +336,12 @@ export function createHighlights(app) {
     on(swatch, 'click', () => chooseColor(swatch.dataset.color));
   }
   on($('markNoteToggle'), 'click', openNote);
+  on($('markStress'), 'click', () => {
+    if (!pendingWord) return;
+    stressPiece = pendingPiece;
+    stressEditor.open(pendingWord);
+    if (anchorRect) placeToolbar(anchorRect); // панель выросла — пусть не вылезает за край
+  });
   on($('markVoice'), 'click', startRecordingNote);
   on($('markRecStop'), 'click', finishRecording);
   on($('markRecCancel'), 'click', () => {

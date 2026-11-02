@@ -13,6 +13,7 @@ ort.env.wasm.numThreads = 1;
 ort.env.wasm.proxy = false;
 
 let accentuator = null;
+let dictionaries = null; // для вопроса «есть ли такое слово»
 let queue = Promise.resolve();
 let currentEpoch = 0;
 
@@ -56,15 +57,13 @@ async function load(files) {
     accentVocab: await files.accentVocab.text(),
     accentLabels: (await json(files.accentConfig)).id2label,
   });
-  accentuator = createAccentuator(
-    {
-      stress: new StressIndex(await files.stressIndex.arrayBuffer()),
-      yoWords: new Map(Object.entries(yoWords)),
-      yoHomographs: new Map(Object.entries(yoHomographs)),
-      omographs: new Map(Object.entries(omographs)),
-    },
-    models
-  );
+  dictionaries = {
+    stress: new StressIndex(await files.stressIndex.arrayBuffer()),
+    yoWords: new Map(Object.entries(yoWords)),
+    yoHomographs: new Map(Object.entries(yoHomographs)),
+    omographs: new Map(Object.entries(omographs)),
+  };
+  accentuator = createAccentuator(dictionaries, models);
 }
 
 self.onmessage = ({ data: message }) => {
@@ -87,6 +86,15 @@ self.onmessage = ({ data: message }) => {
         }
         if (!accentuator) throw new Error('Ударения не загружены');
         self.postMessage({ id: message.id, type: 'accented', text: await accentuator.process(message.text) });
+      } else if (message.type === 'known') {
+        // Какие слова есть в словарях — для склейки слов, разорванных
+        // переносом строки без дефиса («сооб» + «щает»).
+        if (!dictionaries) throw new Error('Ударения не загружены');
+        const known = message.words.filter((word) => {
+          const key = word.toLowerCase();
+          return dictionaries.stress.accent(key) != null || dictionaries.omographs.has(key) || dictionaries.yoWords.has(key);
+        });
+        self.postMessage({ id: message.id, type: 'known', words: known });
       }
     } catch (error) {
       self.postMessage({ id: message.id, type: 'error', message: error?.message || String(error) });

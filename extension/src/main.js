@@ -29,6 +29,7 @@ import { createHud } from './ui/hud.js';
 import { createHelp } from './ui/help.js';
 import { createToolbar } from './ui/toolbar.js';
 import { hydrateIcons, setIcon } from './ui/icons.js';
+import { setStressDocument } from './tts/user-stress.js';
 
 const appEl = $('app');
 
@@ -326,6 +327,8 @@ async function main() {
     if (tab === 'thumbs') app.thumbnails.refresh();
   });
   app.readingState = createReadingState(app);
+  // Свои ударения «только в этой книге» — для открытой книги.
+  app.readingState.onChange((record) => setStressDocument(record?.id ?? null));
   app.bookmarks = createBookmarks(app);
   app.highlights = createHighlights(app);
   // «Озвучить выделенное» из меню или Alt+Shift+S в этой вкладке: скрипт в

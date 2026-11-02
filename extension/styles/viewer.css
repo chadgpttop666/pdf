@@ -702,6 +702,22 @@ li.collapsed > .outline-tree { display: none; }
 #markDelete:hover { color: var(--danger); }
 #markNote { width: 260px; resize: vertical; font: inherit; font-size: 13px; }
 
+/* Своё ударение: буквы слова, гласные — кнопки. */
+.stress-button { font-size: 16px; font-weight: 600; }
+.mark-stress { display: grid; gap: 8px; margin-top: 8px; max-width: 340px; }
+.stress-hint { color: var(--fg-muted); font-size: 12px; }
+.stress-word { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; font-size: 22px; line-height: 1; }
+.stress-word .letter { padding: 6px 1px; }
+.stress-word .vowel { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.stress-word button { font-size: 22px; min-height: 36px; padding: 0 6px; }
+.stress-word button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.stress-word button.yo { font-size: 12px; min-height: 20px; padding: 0 5px; }
+.stress-scope { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+.stress-actions { display: flex; gap: 8px; }
+.user-stress-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.user-stress-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.user-stress-list .stress-scope-label { color: var(--fg-muted); font-size: 12px; }
+
 /* Голосовая заметка: запись и прослушивание прямо в панели выделения. */
 .mark-recorder, .mark-voice { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .mark-recorder button, .mark-voice button { min-height: 28px; padding: 2px 10px; }

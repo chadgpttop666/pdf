@@ -83,6 +83,143 @@ export function cardinal(n, gender = 'm') {
   return words.join(' ');
 }
 
+// ── Количественные в косвенных падежах ────────────────────────────────
+// «в двух тысячах рублях», «из пяти книг», «с двадцатью книгами». Склоняются
+// все части составного числа; падеж — винительный как именительный
+// (неодушевлённые), кроме «одну».
+
+const ONE = {
+  m: { gen: 'одного', dat: 'одному', acc: 'один', ins: 'одним', prep: 'одном' },
+  f: { gen: 'одной', dat: 'одной', acc: 'одну', ins: 'одной', prep: 'одной' },
+};
+const SMALL = {
+  2: { gen: 'двух', dat: 'двум', ins: 'двумя', prep: 'двух' },
+  3: { gen: 'трёх', dat: 'трём', ins: 'тремя', prep: 'трёх' },
+  4: { gen: 'четырёх', dat: 'четырём', ins: 'четырьмя', prep: 'четырёх' },
+};
+// 5–20 и 30: «пяти» во всех косвенных, кроме творительного «пятью».
+const SOFT = {
+  5: ['пяти', 'пятью'], 6: ['шести', 'шестью'], 7: ['семи', 'семью'], 8: ['восьми', 'восемью'], 9: ['девяти', 'девятью'],
+  10: ['десяти', 'десятью'], 11: ['одиннадцати', 'одиннадцатью'], 12: ['двенадцати', 'двенадцатью'], 13: ['тринадцати', 'тринадцатью'],
+  14: ['четырнадцати', 'четырнадцатью'], 15: ['пятнадцати', 'пятнадцатью'], 16: ['шестнадцати', 'шестнадцатью'],
+  17: ['семнадцати', 'семнадцатью'], 18: ['восемнадцати', 'восемнадцатью'], 19: ['девятнадцати', 'девятнадцатью'],
+  20: ['двадцати', 'двадцатью'], 30: ['тридцати', 'тридцатью'],
+  50: ['пятидесяти', 'пятьюдесятью'], 60: ['шестидесяти', 'шестьюдесятью'], 70: ['семидесяти', 'семьюдесятью'], 80: ['восьмидесяти', 'восемьюдесятью'],
+};
+const HUNDREDS_CASE = {
+  2: ['двухсот', 'двумстам', 'двумястами', 'двухстах'], 3: ['трёхсот', 'трёмстам', 'тремястами', 'трёхстах'],
+  4: ['четырёхсот', 'четырёмстам', 'четырьмястами', 'четырёхстах'], 5: ['пятисот', 'пятистам', 'пятьюстами', 'пятистах'],
+  6: ['шестисот', 'шестистам', 'шестьюстами', 'шестистах'], 7: ['семисот', 'семистам', 'семьюстами', 'семистах'],
+  8: ['восьмисот', 'восьмистам', 'восемьюстами', 'восьмистах'], 9: ['девятисот', 'девятистам', 'девятьюстами', 'девятистах'],
+};
+const CASE_INDEX = { gen: 0, dat: 1, ins: 2, prep: 3 };
+
+function unitCase(n, grammaticalCase, feminine) {
+  if (n === 1) return ONE[feminine ? 'f' : 'm'][grammaticalCase];
+  if (grammaticalCase === 'acc') return (feminine ? UNITS_F : UNITS)[n];
+  if (SMALL[n]) return SMALL[n][grammaticalCase];
+  const [oblique, instrumental] = SOFT[n];
+  return grammaticalCase === 'ins' ? instrumental : oblique;
+}
+
+function belowThousandCase(n, grammaticalCase, feminine) {
+  if (grammaticalCase === 'nom' || (grammaticalCase === 'acc' && !(feminine && n % 10 === 1 && n % 100 !== 11))) return belowThousand(n, feminine);
+  const words = [];
+  const hundreds = Math.floor(n / 100);
+  const rest = n % 100;
+  if (hundreds === 1) words.push(grammaticalCase === 'acc' ? 'сто' : 'ста');
+  else if (hundreds) words.push(grammaticalCase === 'acc' ? HUNDREDS[hundreds] : HUNDREDS_CASE[hundreds][CASE_INDEX[grammaticalCase]]);
+  if (rest >= 10 && rest < 20) words.push(grammaticalCase === 'acc' ? TEENS[rest - 10] : unitCase(rest, grammaticalCase, feminine));
+  else {
+    const tens = Math.floor(rest / 10) * 10;
+    if (tens >= 20) {
+      if (grammaticalCase === 'acc') words.push(TENS[tens / 10]);
+      else if (tens === 40) words.push('сорока');
+      else if (tens === 90) words.push('девяноста');
+      else words.push(unitCase(tens, grammaticalCase, feminine));
+    }
+    if (rest % 10) words.push(unitCase(rest % 10, grammaticalCase, feminine));
+  }
+  return words;
+}
+
+const THOUSAND = { sing: { gen: 'тысячи', dat: 'тысяче', acc: 'тысячу', ins: 'тысячей', prep: 'тысяче' }, plural: { gen: 'тысяч', dat: 'тысячам', ins: 'тысячами', prep: 'тысячах' } };
+const MILLION = { sing: { gen: 'миллиона', dat: 'миллиону', acc: 'миллион', ins: 'миллионом', prep: 'миллионе' }, plural: { gen: 'миллионов', dat: 'миллионам', ins: 'миллионами', prep: 'миллионах' } };
+
+/**
+ * Количественное в падеже: «двух тысячах», «пятью», «одной».
+ * @param {'nom'|'gen'|'dat'|'acc'|'ins'|'prep'} grammaticalCase
+ */
+export function cardinalCase(n, grammaticalCase = 'nom', gender = 'm') {
+  if (grammaticalCase === 'nom' || !Number.isInteger(n) || n < 0 || n >= 1e9) return cardinal(n, gender);
+  if (n === 0) return 'ноль';
+  const words = [];
+  let rest = n;
+  for (const [size, forms, feminine, nominative] of [
+    [1e6, MILLION, false, ['миллион', 'миллиона', 'миллионов']],
+    [1e3, THOUSAND, true, ['тысяча', 'тысячи', 'тысяч']],
+  ]) {
+    const count = Math.floor(rest / size);
+    rest %= size;
+    if (!count) continue;
+    const single = count % 10 === 1 && count % 100 !== 11;
+    if (grammaticalCase === 'acc') {
+      // «тысячу», «две тысячи», «пять тысяч» — винительный у самого слова.
+      if (!(count === 1 && size === 1e3)) words.push(...belowThousandCase(count, 'acc', feminine));
+      words.push(single ? forms.sing.acc : plural(count, nominative));
+      continue;
+    }
+    if (!(count === 1 && size === 1e3)) words.push(...belowThousandCase(count, grammaticalCase, feminine));
+    words.push(single ? forms.sing[grammaticalCase] : forms.plural[grammaticalCase]);
+  }
+  if (rest) words.push(...belowThousandCase(rest, grammaticalCase, gender === 'f'));
+  return words.join(' ');
+}
+
+// Предлог перед числом → падеж. «в», «на», «с» неоднозначны — решает
+// окончание слова после числа («в 2000 рублях», но «в 5 часов»).
+const NUMBER_GENITIVE = new Set(['из', 'изо', 'от', 'ото', 'до', 'у', 'без', 'для', 'около', 'после', 'кроме', 'против', 'вместо', 'вокруг', 'возле', 'среди', 'свыше', 'более', 'менее', 'больше', 'меньше', 'порядка']);
+const NUMBER_DATIVE = new Set(['к', 'ко', 'благодаря', 'согласно', 'вопреки']);
+const NUMBER_PREPOSITIONAL = new Set(['в', 'во', 'на', 'о', 'об', 'обо', 'при']);
+const NUMBER_INSTRUMENTAL = new Set(['с', 'со', 'над', 'под', 'перед', 'между', 'за']);
+
+/**
+ * Падеж числа по предлогу перед ним и слову после него.
+ * @param single число кончается на 1 (не 11): после него — единственное число
+ */
+export function caseAround(before, after, single = false) {
+  const prev = (before || '').toLowerCase();
+  const next = (after || '').toLowerCase();
+  if (NUMBER_GENITIVE.has(prev)) return 'gen';
+  if (NUMBER_DATIVE.has(prev)) return 'dat';
+  // «с 5 до 7», «с 3 по 9» — родительный.
+  if ((prev === 'с' || prev === 'со') && (next === 'до' || next === 'по')) return 'gen';
+  if (NUMBER_PREPOSITIONAL.has(prev) && (single ? /[еиу]$/ : /(?:ах|ях)$/).test(next)) return 'prep';
+  if (NUMBER_INSTRUMENTAL.has(prev) && (single ? /(?:ой|ей|ью|ом|ем|ём)$/ : /(?:ами|ями)$/).test(next)) return 'ins';
+  return 'nom';
+}
+
+/**
+ * Род для «один/одна» по слову после числа: «одной книге», «одном году».
+ * ⚠️ «книге» и «доме» по окончанию не различить — для «-е» берём женский:
+ * в книгах так чаще («на 1 странице», «в 1 главе»).
+ */
+export function genderAround(grammaticalCase, after) {
+  const next = (after || '').toLowerCase();
+  switch (grammaticalCase) {
+    case 'gen':
+      return /[ыи]$/.test(next) ? 'f' : 'm';
+    case 'dat':
+      return /[еи]$/.test(next) ? 'f' : 'm';
+    case 'ins':
+      return /(?:ой|ей|ью)$/.test(next) ? 'f' : 'm';
+    case 'prep':
+      return /[еи]$/.test(next) ? 'f' : 'm';
+    default:
+      return 'm';
+  }
+}
+
 /** Форма слова после числа: 1 страница, 2 страницы, 5 страниц. */
 export function plural(n, [one, few, many]) {
   const lastTwo = Math.abs(n) % 100;
@@ -586,7 +723,12 @@ function plainNumber(text, start) {
   // Год сам по себе — «(1882)», «М., 2010.» — порядковым: «тысяча восемьсот
   // восемьдесят второй». Если за числом слово («2000 рублей») — это счёт.
   if (isYear(value) && !/^\s*\p{L}/u.test(text.slice(end, end + 3))) return { end, spoken: ordinal(value) };
-  return { end, spoken: words(value) };
+  // Падеж — по предлогу перед числом и слову после: «в двух тысячах рублях».
+  const before = text.slice(Math.max(0, start - 20), start).match(/(\p{L}+)\s+$/u)?.[1];
+  const after = text.slice(end, end + 30).match(/^\s+(\p{L}+)/u)?.[1];
+  const single = value % 10 === 1 && value % 100 !== 11;
+  const grammaticalCase = caseAround(before, after, single);
+  return { end, spoken: cardinalCase(value, grammaticalCase, single ? genderAround(grammaticalCase, after) : 'm') };
 }
 
 export function normalizeRussian(text) {

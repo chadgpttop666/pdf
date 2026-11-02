@@ -258,9 +258,19 @@
         <button class="mark-swatch mark-pink" data-color="pink" title="Розовый маркер" aria-label="Розовый"></button>
         <span class="mark-sep"></span>
         <button id="markSpeak" class="icon" data-icon="speak" title="Озвучить выделенное; во время чтения — в очередь (Alt+Shift+S)" aria-label="Озвучить выделенное"></button>
+        <button id="markStress" class="icon stress-button" title="Ударение в этом слове: как его читать голосом" aria-label="Ударение" hidden>А́</button>
         <button id="markNoteToggle" class="icon" data-icon="note" title="Заметка к выделению" aria-label="Заметка"></button>
         <button id="markVoice" class="icon" data-icon="mic" title="Голосовая заметка: скажите мысль вслух — запись сохранится, а с ускорителем станет и текстом" aria-label="Голосовая заметка"></button>
         <button id="markDelete" class="icon" data-icon="trash" title="Убрать выделение" aria-label="Убрать выделение" hidden></button>
+      </div>
+      <div id="markStressPanel" class="mark-stress" hidden>
+        <span class="stress-hint">Нажмите на ударную гласную</span>
+        <div id="markStressWord" class="stress-word"></div>
+        <label class="stress-scope"><input type="checkbox" id="markStressThisBook"> только в этой книге (для слов вроде «мук+у» / «м+уку»)</label>
+        <div class="stress-actions">
+          <button id="markStressSave" class="primary" disabled>Сохранить и прослушать</button>
+          <button id="markStressRemove" class="ghost" hidden>Убрать моё ударение</button>
+        </div>
       </div>
       <div id="markRecorder" class="mark-recorder" hidden>
         <span class="rec-dot" aria-hidden="true"></span>

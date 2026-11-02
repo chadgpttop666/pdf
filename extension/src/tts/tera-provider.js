@@ -19,6 +19,7 @@
 
 import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
+import { applyUserStress, loadUserStress, onUserStressChange } from './user-stress.js';
 import { updateIfOld } from './helper-install.js';
 import { estimateWordTimings } from './piper-math.js';
 import { HELPER_PROTOCOL, connectHelper, missingModels, syncModels } from './tera-native.js';
@@ -72,6 +73,9 @@ function withPause(pcm, sampleRate, seconds) {
 export function createTeraProvider({ threads = () => 'auto', rate = () => 1, quality = () => 'max', useHelper = () => true } = {}) {
   const player = createAudioPlayer();
   const cache = new Map(); // голос|текст → { pieces, fastStart }
+  // Исправили ударение — заготовленные фразы звучали бы по-старому.
+  loadUserStress();
+  onUserStressChange(() => cache.clear());
   const waiting = new Map();
   const workers = { samplers: [], vocoder: null, accent: null };
   let seq = 0;
@@ -387,8 +391,11 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   function synthesizePiece(piece, style, jobEpoch) {
     const spoken = piece.lang === 'ru' ? normalizeRussian(piece.text) : { text: piece.text, segments: [] };
     piece.segments = spoken.segments;
+    // Свой словарь читателя — до RUAccent: слова с «+» он не трогает.
     const accented =
-      piece.lang === 'ru' ? call(workers.accent, { type: 'accent', text: spoken.text, epoch: jobEpoch }).then((reply) => reply.text) : Promise.resolve(spoken.text);
+      piece.lang === 'ru'
+        ? call(workers.accent, { type: 'accent', text: applyUserStress(spoken.text), epoch: jobEpoch }).then((reply) => reply.text)
+        : Promise.resolve(spoken.text);
     // В сэмплер куски уходят строго в порядке создания: английскому куску
     // следующей фразы ударения не нужны, и иначе он обгонял бы русский кусок
     // текущей — а читатель ждал бы звука. Куда отправить — в ускоритель или в
@@ -687,6 +694,22 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
         offset += part.length;
       }
       return { pcm, sampleRate, pieces: pieces.map(({ lang, text: pieceText }) => ({ lang, text: pieceText })) };
+    },
+
+    /**
+     * Какие из слов есть в словаре ударений. null — словарь ещё не
+     * загружен (грузить ради этого модели незачем) или не ответил.
+     * @returns {Promise<Set<string>|null>}
+     */
+    async knownWords(words) {
+      // Модели как раз грузятся (чтение начинается) — дождаться: иначе первые
+      // фразы прозвучали бы без склейки, а потом синтезировались заново.
+      if (!ready && loading) await loading.catch(() => {});
+      const slot = workers.accent;
+      if (!ready || !slot) return null;
+      if (!words.length) return new Set();
+      const reply = await call(slot, { type: 'known', words }).catch(() => null);
+      return reply ? new Set(reply.words) : null;
     },
 
     /** Как разметились ударения — для проверок. */

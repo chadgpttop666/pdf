@@ -10,6 +10,8 @@ import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead 
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
 import { createHighlighter } from './highlighter.js';
 import { createSleepTimer } from './sleep-timer.js';
+import { onUserStressChange } from './user-stress.js';
+import { createWordJoiner } from './word-breaks.js';
 import { firstVisibleSpanIndex, offsetInSpan, textPointAt, textSpanOf, textSpansOfPage } from '../visible-text.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -172,6 +174,20 @@ export function createTts(app) {
     return cleanForSpeech(page.text.slice(sentence.start, sentence.end));
   }
 
+  // Перенос без знака («сооб␤щает») — склеить по словарю ударений TeraTTS.
+  // Своя склейка у каждого документа: потерял ли он дефисы, судим по нему.
+  // Пока говорит другой голос, а TeraTTS не загружена, её не ждём.
+  const newWordJoiner = () =>
+    createWordJoiner((words) => (provider === tera || tera.isVoiceReady?.() ? tera.knownWords(words) : null));
+  let wordJoiner = newWordJoiner();
+
+  /** Текст предложения для голоса: очищенный и со склеенными переносами без знака. */
+  async function spokenSentence(page, sentenceIndex) {
+    const cleaned = sentenceText(page, sentenceIndex);
+    if (!page.softBreaks?.length) return cleaned;
+    return wordJoiner.join(page, page.sentences[sentenceIndex], cleaned).catch(() => cleaned);
+  }
+
   /**
    * Что произнести с этого места. Обычно одно предложение; но если страница
    * обрывается посреди фразы, а следующая продолжает её со строчной, — обе
@@ -180,18 +196,23 @@ export function createTts(app) {
    * @returns {Promise<{ parts: object[], text: string, next: { pageNumber: number, sentenceIndex: number } }>}
    */
   async function buildUtterance(page, sentenceIndex) {
-    const first = sentenceText(page, sentenceIndex);
+    const first = await spokenSentence(page, sentenceIndex);
     const parts = [{ page, sentenceIndex, text: first.text, map: first.map, offset: 0 }];
     let text = first.text;
     let next = { pageNumber: page.pageNumber, sentenceIndex: sentenceIndex + 1 };
     if (sentenceIndex === page.sentences.length - 1 && page.runsOn && page.pageNumber < index.numPages) {
       const following = await index.page(page.pageNumber + 1);
       if (following?.runsIn && following.sentences.length) {
-        const second = sentenceText(following, 0);
+        const second = await spokenSentence(following, 0);
         // Перенос по слогам на стыке страниц: «окку-» + «пационными».
         const hyphenated = /\p{L}[-\u00ad\u2010\u2011]$/u.test(text) && /^\p{Ll}/u.test(second.text);
         if (hyphenated) text = text.slice(0, -1);
-        const joiner = hyphenated ? '' : ' ';
+        // Без знака переноса — «сооб» + «щает», если по словарю это одно слово.
+        const split =
+          !hyphenated &&
+          /^\p{Ll}/u.test(second.text) &&
+          (await wordJoiner.joins(text.match(/\p{L}+$/u)?.[0] ?? '', second.text.match(/^\p{L}+/u)?.[0] ?? '').catch(() => false));
+        const joiner = hyphenated || split ? '' : ' ';
         parts.push({ page: following, sentenceIndex: 0, text: second.text, map: second.map, offset: text.length + joiner.length });
         text += joiner + second.text;
         next = { pageNumber: following.pageNumber, sentenceIndex: 1 };
@@ -891,6 +912,7 @@ export function createTts(app) {
     finish();
     sleepTimer.reset();
     index = buildIndex(pdfDocument);
+    wordJoiner = newWordJoiner();
     voicesLoaded = false;
     setStatus('');
   });
@@ -921,6 +943,11 @@ export function createTts(app) {
 
   // Страницу распознали — её текст другой, перечитываем при следующем обращении.
   app.eventBus.on('ocrpagedone', ({ pageNumber }) => index?.forget(pageNumber));
+
+  // Своё ударение исправили — заготовки впереди синтезируются заново.
+  onUserStressChange(() => {
+    if (state !== 'idle') prefetchAhead(upcoming);
+  });
 
   onSettingsChanged(async (_all, changed) => {
     // Другой состав текста — другие предложения: индекс строим заново.

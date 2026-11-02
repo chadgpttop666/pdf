@@ -59,6 +59,7 @@ export function buildPageText(items, filter) {
   let text = '';
   const entries = [];
   const refs = [];
+  const softBreaks = []; // строка оборвалась на букве, следующая — со строчной: может быть разрыв слова
   lines.forEach((line, lineIndex) => {
     if (lineIndex > 0 && text) {
       const last = text.at(-1);
@@ -66,7 +67,9 @@ export function buildPageText(items, filter) {
         // Строка кончается переносом, следующая — со строчной: это одно слово,
         // а не конец абзаца (иначе половинки ушли бы в разные фразы).
         const hyphenated = HYPHENATED_END.test(text) && /^\p{Ll}/u.test(line.firstText);
-        text += !hyphenated && isParagraphBreak(lines[lineIndex - 1], line, layout) ? '\n' : ' ';
+        const separator = !hyphenated && isParagraphBreak(lines[lineIndex - 1], line, layout) ? '\n' : ' ';
+        if (separator === ' ' && !hyphenated && /\p{L}$/u.test(text) && /^\p{Ll}/u.test(line.firstText)) softBreaks.push(text.length);
+        text += separator;
       }
     }
     let previous = null;
@@ -85,7 +88,7 @@ export function buildPageText(items, filter) {
     }
   });
 
-  return { text, entries, refs, furniture };
+  return { text, entries, refs, softBreaks, furniture };
 }
 
 /** Текст сноски по её кускам — без номера в начале. */
@@ -603,7 +606,7 @@ export class TextIndex {
         const box = pageBox(page);
         filter = (lines) => classifyFurniture(lines, box, profile);
       }
-      const { text, entries, refs, furniture } = buildPageText(content.items, filter);
+      const { text, entries, refs, softBreaks, furniture } = buildPageText(content.items, filter);
       // По пустой странице (скан до распознавания) язык не определить.
       if (text.trim()) this.language ??= detectLanguage(text);
       const sentences = segmentSentences(text, this.language ?? 'ru');
@@ -611,7 +614,7 @@ export class TextIndex {
         bodies: (furniture?.notes?.bodies ?? []).map(({ key, items }) => ({ key, text: noteText(items, key) })),
         carry: noteText(furniture?.notes?.carry),
       };
-      return { pageNumber, text, entries, sentences, refs, notes, ...pageEdges(text) };
+      return { pageNumber, text, entries, sentences, refs, notes, softBreaks, ...pageEdges(text) };
     })();
 
     this.pages.set(pageNumber, promise);

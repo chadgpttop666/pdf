@@ -1681,6 +1681,66 @@ try {
   );
   check('распознанное сохраняется — второй раз не распознаётся', restoredOcr > 100, `${restoredOcr} слов`);
 
+  // ── Своё ударение: выделить слово → «А́» → гласная → сохранить ──
+  const stressTab = await context.newPage();
+  await stressTab.addInitScript(speechMock);
+  stressTab.on('pageerror', (error) => consoleErrors.push(`ударения: ${error.message}`));
+  await stressTab.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+  await stressTab.waitForFunction(() => window.pdfReaderApp?.readingState?.record && window.pdfReaderApp.pdfViewer.pagesCount > 0, null, { timeout: 20000 });
+  // Сначала читалка вернётся на сохранённое место, потом листаем сами.
+  await stressTab.waitForFunction(() => !document.getElementById('app').classList.contains('booting'), null, { timeout: 10000 });
+  await stressTab.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await stressTab.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
+  const stressWord = await stressTab.evaluate(() => {
+    const span = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].find(
+      (candidate) => candidate.firstChild?.nodeType === Node.TEXT_NODE && /[а-яё]{6,}/i.test(candidate.textContent)
+    );
+    const node = span.firstChild;
+    const match = node.data.match(/[а-яё]{6,}/i);
+    const range = new Range();
+    range.setStart(node, match.index);
+    range.setEnd(node, match.index + match[0].length);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return match[0];
+  });
+  await stressTab.waitForFunction(() => !document.getElementById('markStress').hidden, null, { timeout: 5000 });
+  await stressTab.click('#markStress');
+  await stressTab.waitForFunction(() => !document.getElementById('markStressPanel').hidden);
+  const stressSpokenFrom = await stressTab.evaluate(() => {
+    // Сообщения HUD сменяют друг друга (слово успевает прозвучать) — записываем все.
+    window.hudLog = [];
+    const hud = document.getElementById('hud');
+    new MutationObserver(() => window.hudLog.push(hud.textContent)).observe(hud, { childList: true, characterData: true, subtree: true });
+    return window.spokenSentences.length;
+  });
+  // Ударение на вторую гласную слова.
+  await stressTab.locator('#markStressWord .vowel > button:first-child').nth(1).click();
+  await stressTab.click('#markStressSave');
+  await stressTab.waitForTimeout(1500);
+  const stressResult = await stressTab.evaluate(async (word) => {
+    const module = await import('./src/tts/user-stress.js');
+    const entry = module.userStressFor(word);
+    await window.pdfReaderApp.settingsDialog.open();
+    await new Promise((r) => setTimeout(r, 400));
+    const listed = document.querySelector('.user-stress-list')?.textContent ?? '';
+    window.pdfReaderApp.settingsDialog.close();
+    return { entry, applied: module.applyUserStress(`Это ${word}.`), listed, hud: window.hudLog.join(' | '), panel: !document.getElementById('markStressPanel').hidden };
+  }, stressWord);
+  const spokenAfter = await stressTab.evaluate((n) => window.spokenSentences.slice(n), stressSpokenFrom);
+  check(
+    'своё ударение: слово → «А́» → гласная → сохранено, применяется, видно в настройках, слово прозвучало',
+    stressResult.entry?.stressed.split('+').length === 2 &&
+      stressResult.applied.includes('+') &&
+      stressResult.listed.includes('\u0301') &&
+      /Ударение: .* во всех книгах/.test(stressResult.hud) &&
+      !stressResult.panel &&
+      spokenAfter.some((text) => text.toLowerCase().includes(stressWord.toLowerCase())),
+    JSON.stringify({ stressWord, ...stressResult, spokenAfter })
+  );
+  await stressTab.close();
+
   // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──
   const openTab = async () => {
     const tab = await context.newPage();
