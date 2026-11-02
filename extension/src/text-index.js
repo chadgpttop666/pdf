@@ -13,6 +13,10 @@ import { classifyFurniture, profileFurniture } from './page-furniture.js';
 export const TEXT_CONTENT_PARAMS = { includeMarkedContent: true, disableNormalization: true };
 
 const MAX_SENTENCE_LENGTH = 320;
+const SOFT_HYPHEN = '\u00ad';
+/** Знаки переноса в конце строки: дефис, мягкий перенос, типографские дефисы. */
+const HYPHENS = ['-', SOFT_HYPHEN, '\u2010', '\u2011'];
+const HYPHENATED_END = /\p{L}[-\u00ad\u2010\u2011]$/u;
 const ENDNOTES_HEADING = /^(?:примечания|комментарии|примечания и комментарии|комментарии и примечания|notes|endnotes)\.?$/i;
 const ENDNOTE_ENTRY = /(?:^|(?<=[.!?…»")]\s))(\d{1,3})[.)]\s+(?=[\p{Lu}«"(])/u;
 const ENDNOTES_END = /^(?:список литературы|литература|библиография|указатель|именной указатель|предметный указатель|содержание|оглавление|bibliography|index|contents)\.?$/i;
@@ -59,7 +63,10 @@ export function buildPageText(items, filter) {
     if (lineIndex > 0 && text) {
       const last = text.at(-1);
       if (last !== ' ' && last !== '\n') {
-        text += isParagraphBreak(lines[lineIndex - 1], line, layout) ? '\n' : ' ';
+        // Строка кончается переносом, следующая — со строчной: это одно слово,
+        // а не конец абзаца (иначе половинки ушли бы в разные фразы).
+        const hyphenated = HYPHENATED_END.test(text) && /^\p{Ll}/u.test(line.firstText);
+        text += !hyphenated && isParagraphBreak(lines[lineIndex - 1], line, layout) ? '\n' : ' ';
       }
     }
     let previous = null;
@@ -87,7 +94,8 @@ export function noteText(items, key = null) {
   const { text } = buildPageText(items);
   // Перенос по слогам на конце строки сноски: «перевод- чика» → «переводчика».
   const flat = text
-    .replace(/(\p{L})-\s+(\p{Ll})/gu, '$1$2')
+    .replace(/(\p{L})[-\u00ad\u2010\u2011]\s+(\p{Ll})/gu, '$1$2')
+    .replace(/\u00ad/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!key) return flat;
@@ -364,14 +372,36 @@ export function cleanForSpeech(raw) {
   while (index < raw.length) {
     const char = raw[index];
 
-    // Перенос по слогам: «пере-\nнос» читается как одно слово.
-    if (char === '-' && /\s/.test(raw[index + 1] || '') && /\p{L}/u.test(raw[index - 1] || '')) {
+    // Перенос по слогам: «пере-\nнос» читается как одно слово. Знак переноса
+    // бывает разный: дефис, мягкий перенос (U+00AD), типографский дефис
+    // (U+2010, U+2011) — синтезатор незнакомый знак выбросил бы, и вышло бы
+    // «направ ленной».
+    if (HYPHENS.includes(char) && /\s/.test(raw[index + 1] || '') && /\p{L}/u.test(raw[index - 1] || '')) {
       let lookahead = index + 1;
       while (lookahead < raw.length && /\s/.test(raw[lookahead])) lookahead += 1;
-      if (/\p{L}/u.test(raw[lookahead] || '')) {
+      if (/\p{Ll}/u.test(raw[lookahead] || '')) {
         index = lookahead;
         continue;
       }
+      // «Санкт-␤Петербург» — составное слово: дефис остаётся, пробел — нет.
+      if (/\p{Lu}/u.test(raw[lookahead] || '')) {
+        out.push('-');
+        map.push(index);
+        index = lookahead;
+        continue;
+      }
+    }
+    // Мягкий перенос внутри слова невидим — не читаем его вовсе.
+    if (char === SOFT_HYPHEN) {
+      index += 1;
+      continue;
+    }
+    // Типографский дефис посреди слова — обычный: «северо‐западный».
+    if (char === '\u2010' || char === '\u2011') {
+      out.push('-');
+      map.push(index);
+      index += 1;
+      continue;
     }
 
     if (/\s/.test(char)) {

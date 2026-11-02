@@ -189,7 +189,7 @@ export function createTts(app) {
       if (following?.runsIn && following.sentences.length) {
         const second = sentenceText(following, 0);
         // Перенос по слогам на стыке страниц: «окку-» + «пационными».
-        const hyphenated = /\p{L}-$/u.test(text) && /^\p{L}/u.test(second.text);
+        const hyphenated = /\p{L}[-\u00ad\u2010\u2011]$/u.test(text) && /^\p{Ll}/u.test(second.text);
         if (hyphenated) text = text.slice(0, -1);
         const joiner = hyphenated ? '' : ' ';
         parts.push({ page: following, sentenceIndex: 0, text: second.text, map: second.map, offset: text.length + joiner.length });

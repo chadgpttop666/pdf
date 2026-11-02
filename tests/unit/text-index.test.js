@@ -176,6 +176,28 @@ describe('cleanForSpeech', () => {
     assert.equal(text, 'перенос слова');
   });
 
+  it('перенос любым знаком — дефис, мягкий перенос, типографский дефис — одно слово', () => {
+    assert.equal(cleanForSpeech('направ\u2010\nленной').text, 'направленной');
+    assert.equal(cleanForSpeech('сооб\u00ad щает').text, 'сообщает');
+    assert.equal(cleanForSpeech('сооб\u00adщает').text, 'сообщает', 'мягкий перенос внутри слова невидим');
+    assert.equal(cleanForSpeech('северо\u2010западный').text, 'северо-западный');
+    assert.equal(cleanForSpeech('Санкт-\nПетербург').text, 'Санкт-Петербург', 'с заглавной — составное слово');
+    assert.equal(cleanForSpeech('слово - другое').text, 'слово - другое', 'тире между словами — не перенос');
+    const raw = 'сооб\u00ad щает';
+    const { text, map } = cleanForSpeech(raw);
+    assert.equal(map.length, text.length);
+    assert.equal(raw[map[text.indexOf('щ')]], 'щ', 'подсветка слова — по исходным позициям');
+  });
+
+  it('строка, кончающаяся переносом, не становится концом абзаца', () => {
+    const line = (str, y, x = 72, width = 450) => ({ str, transform: [14, 0, 0, 14, x, y], width, height: 14, hasEOL: true });
+    // Короткая строка с переносом выглядела бы концом абзаца; следующая — с отступом.
+    const items = [line('Длинная строка текста, в которой есть слово направ\u2010', 700), line('ленной мысли и ещё много других слов до края.', 680, 90)];
+    const { text } = buildPageText(items);
+    assert.ok(!text.includes('\n'), JSON.stringify(text));
+    assert.ok(cleanForSpeech(text).text.includes('направленной мысли'), cleanForSpeech(text).text);
+  });
+
   it('схлопывает пробелы и переводы строк', () => {
     const { text } = cleanForSpeech('первая\n  вторая\tтретья');
     assert.equal(text, 'первая вторая третья');
