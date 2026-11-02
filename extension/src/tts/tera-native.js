@@ -179,6 +179,15 @@ export function createHelperClient(port) {
      * @returns {Promise<{ text: string, seconds: number }>}
      */
     transcribe: (samples, language = 'ru') => request({ type: 'transcribe', pcm: toBase64(pcm16Bytes(samples)), language }),
+    /**
+     * Сеть ударений (remote-ort.js): номера токенов → логиты.
+     * @returns {Promise<{ dims: number[], data: Float32Array }>}
+     */
+    async infer(model, inputs) {
+      const reply = await request({ type: 'infer', model, inputs });
+      const bytes = fromBase64(reply.data);
+      return { dims: reply.dims, data: new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4) };
+    },
     /** Новая версия помощника: он поставит её себе сам. */
     update: (blob, sha256, onProgress) => upload('update', { sha256 }, blob, onProgress),
     uninstall: () => request({ type: 'uninstall' }),
@@ -205,15 +214,19 @@ export function createHelperClient(port) {
  * @param files размеры у помощника (ответ hello)
  * @param sizes размеры частей пакета в браузере
  */
-export function missingModels(files, sizes) {
-  return HELPER_MODELS.filter((name) => (files?.[name] ?? -1) !== sizes[name]);
+export function missingModels(files, sizes, names = HELPER_MODELS) {
+  return names.filter((name) => (files?.[name] ?? -1) !== sizes[name]);
 }
 
-/** Передать помощнику недостающие модели. */
-export async function syncModels(client, files, blobs, onProgress) {
+/**
+ * Передать помощнику недостающие модели.
+ * @param blobs { имя у помощника: Blob } — по умолчанию модели синтеза (HELPER_MODELS)
+ */
+export async function syncModels(client, files, blobs, onProgress, names = HELPER_MODELS) {
   const missing = missingModels(
     files,
-    Object.fromEntries(HELPER_MODELS.map((name) => [name, blobs[name].size]))
+    Object.fromEntries(names.map((name) => [name, blobs[name].size])),
+    names
   );
   const total = missing.reduce((sum, name) => sum + blobs[name].size, 0);
   let done = 0;

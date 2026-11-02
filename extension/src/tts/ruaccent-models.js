@@ -29,18 +29,19 @@ const argmax = (values) => values.reduce((best, value, i) => (value > values[bes
  * @param ort модуль onnxruntime-web
  * @param Tokenizer класс из @huggingface/tokenizers
  * @param files {
- *   yoModel, omographModel, accentModel: Uint8Array|ArrayBuffer,
+ *   yoModel, omographModel, accentModel: Uint8Array|ArrayBuffer (или имя модели у ускорителя),
  *   yoTokenizer, yoTokenizerConfig, omographTokenizer, omographTokenizerConfig: объекты JSON,
  *   yoLabels: { [номер]: метка }, accentVocab: string (vocab.txt), accentLabels: { [номер]: метка }
  * }
  */
 export async function createAccentModels(ort, Tokenizer, files) {
   const options = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' };
-  const bytes = (data) => (data instanceof Uint8Array ? data : new Uint8Array(data));
+  // Модель — байты или, когда сети считает ускоритель (remote-ort.js), её имя там.
+  const model = (data) => (typeof data === 'string' ? data : data instanceof Uint8Array ? data : new Uint8Array(data));
   const [yo, omograph, accent] = await Promise.all([
-    ort.InferenceSession.create(bytes(files.yoModel), options),
-    ort.InferenceSession.create(bytes(files.omographModel), options),
-    ort.InferenceSession.create(bytes(files.accentModel), options),
+    ort.InferenceSession.create(model(files.yoModel), options),
+    ort.InferenceSession.create(model(files.omographModel), options),
+    ort.InferenceSession.create(model(files.accentModel), options),
   ]);
   const yoTokenizer = new Tokenizer(files.yoTokenizer, files.yoTokenizerConfig);
   const omographTokenizer = new Tokenizer(files.omographTokenizer, files.omographTokenizerConfig);

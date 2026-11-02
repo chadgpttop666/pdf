@@ -7,6 +7,7 @@
 // Без консоли: окно не мелькает, когда её запускает браузер.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod accent;
 mod host;
 mod install;
 mod noise;

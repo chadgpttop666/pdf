@@ -1,16 +1,36 @@
 // Ударения для TeraTTS в отдельном потоке: словари RUAccent и три небольшие
 // нейросети (см. ruaccent.js). Здесь же один раз, при скачивании голоса,
 // строится компактный индекс словаря ударений из его 175 МБ JSON.
+//
+// С ускорителем нейросети считает он (remote-ort.js): воркер спрашивает
+// страницу, страница — ускоритель. Тогда ONNX Runtime сюда даже не грузится.
 
-import * as ort from '../../vendor/ort/ort.wasm.min.mjs';
 import { Tokenizer } from '../../vendor/tokenizers/tokenizers.min.mjs';
+import { createRemoteOrt } from './remote-ort.js';
 import { createAccentuator } from './ruaccent.js';
 import { createAccentModels } from './ruaccent-models.js';
 import { StressIndex, buildStressIndex, splitLines } from './stress-index.js';
 
-ort.env.wasm.wasmPaths = new URL('../../vendor/ort/', import.meta.url).href;
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.proxy = false;
+/** ONNX Runtime в WebAssembly — только когда сети считаются здесь. */
+async function wasmOrt() {
+  const ort = await import('../../vendor/ort/ort.wasm.min.mjs');
+  ort.env.wasm.wasmPaths = new URL('../../vendor/ort/', import.meta.url).href;
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+  return ort;
+}
+
+// Вопросы к сетям в ускорителе: ответ приходит от страницы мимо очереди.
+const inferring = new Map(); // номер → { resolve, reject }
+let inferSeq = 0;
+const remoteOrt = createRemoteOrt(
+  (model, inputs) =>
+    new Promise((resolve, reject) => {
+      const rid = (inferSeq += 1);
+      inferring.set(rid, { resolve, reject });
+      self.postMessage({ type: 'infer', rid, model, inputs });
+    })
+);
 
 let accentuator = null;
 let dictionaries = null; // для вопроса «есть ли такое слово»
@@ -42,18 +62,21 @@ async function* iterate(stream) {
 const gunzipJson = async (blob) => JSON.parse((await streamChunks(gunzipText(blob))).join(''));
 const json = async (blob) => JSON.parse(await blob.text());
 
-async function load(files) {
+/** Модель — байты из пакета или, с ускорителем, её имя там. */
+const modelOf = async (file) => (typeof file === 'string' ? file : file.arrayBuffer());
+
+async function load(files, remote) {
   const [yoWords, yoHomographs, omographs] = await Promise.all([gunzipJson(files.yoWords), gunzipJson(files.yoHomographs), gunzipJson(files.omographs)]);
   omographs['коса'] ??= ['к+оса', 'кос+а']; // так дополняет словарь и сам RUAccent
-  const models = await createAccentModels(ort, Tokenizer, {
-    yoModel: await files.yoModel.arrayBuffer(),
+  const models = await createAccentModels(remote ? remoteOrt : await wasmOrt(), Tokenizer, {
+    yoModel: await modelOf(files.yoModel),
     yoTokenizer: await json(files.yoTokenizer),
     yoTokenizerConfig: await json(files.yoTokenizerConfig),
     yoLabels: (await json(files.yoConfig)).id2label,
-    omographModel: await files.omographModel.arrayBuffer(),
+    omographModel: await modelOf(files.omographModel),
     omographTokenizer: await json(files.omographTokenizer),
     omographTokenizerConfig: await json(files.omographTokenizerConfig),
-    accentModel: await files.accentModel.arrayBuffer(),
+    accentModel: await modelOf(files.accentModel),
     accentVocab: await files.accentVocab.text(),
     accentLabels: (await json(files.accentConfig)).id2label,
   });
@@ -71,13 +94,20 @@ self.onmessage = ({ data: message }) => {
     currentEpoch = message.epoch;
     return;
   }
+  if (message.type === 'infer-result') {
+    const entry = inferring.get(message.rid);
+    inferring.delete(message.rid);
+    if (message.error) entry?.reject(new Error(message.error));
+    else entry?.resolve({ dims: message.dims, data: message.data });
+    return;
+  }
   queue = queue.then(async () => {
     try {
       if (message.type === 'build-index') {
         const index = await buildStressIndex(splitLines(iterate(gunzipText(message.blob))));
         self.postMessage({ id: message.id, type: 'index', index }, [index]);
       } else if (message.type === 'load') {
-        await load(message.files);
+        await load(message.files, Boolean(message.remote));
         self.postMessage({ id: message.id, type: 'loaded' });
       } else if (message.type === 'accent') {
         if (message.epoch < currentEpoch) {

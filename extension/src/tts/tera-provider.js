@@ -22,7 +22,8 @@ import { normalizeRussian } from './normalize-ru.js';
 import { applyUserStress, loadUserStress, onUserStressChange } from './user-stress.js';
 import { updateIfOld } from './helper-install.js';
 import { estimateWordTimings } from './piper-math.js';
-import { HELPER_PROTOCOL, connectHelper, missingModels, syncModels } from './tera-native.js';
+import { HELPER_MODELS, HELPER_PROTOCOL, connectHelper, missingModels, syncModels } from './tera-native.js';
+import { HELPER_ACCENT_MODELS } from './remote-ort.js';
 import { encodeText, keepSupported, modelText, planPieces, voicedRange } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
 import {
@@ -100,6 +101,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let table = null; // символ → номер: с ускорителем текст для модели готовит страница
   let switching = false; // идёт переход к ускорителю посреди работы
   let helperError = null; // почему ускоритель не подключился в последний раз
+  let accentRemote = false; // сети ударений считает ускоритель
 
   function touch() {
     lastUsed = Date.now();
@@ -127,6 +129,11 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     const url = kind === 'accent' ? new URL('./accent-worker.js', import.meta.url) : new URL('./tera-worker.js', import.meta.url);
     const slot = { worker: new Worker(url, { type: 'module' }), pending: 0, loaded: false };
     slot.worker.onmessage = ({ data }) => {
+      // Воркер ударений спрашивает сеть, которую считает ускоритель.
+      if (data.type === 'infer') {
+        answerInfer(slot, data);
+        return;
+      }
       const entry = waiting.get(data.id);
       if (!entry) return;
       waiting.delete(data.id);
@@ -143,6 +150,16 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     return slot;
   }
 
+  /** Вопрос воркера ударений к сети в ускорителе → ответ ему же. */
+  function answerInfer(slot, { rid, model, inputs }) {
+    const client = helper?.client;
+    const reply = client ? client.infer(model, inputs) : Promise.reject(new Error('Ускоритель отключился'));
+    reply.then(
+      ({ dims, data }) => slot.worker.postMessage({ type: 'infer-result', rid, dims, data }),
+      (error) => slot.worker.postMessage({ type: 'infer-result', rid, error: error.message || String(error) })
+    );
+  }
+
   function call(slot, message, transfer = []) {
     const id = (seq += 1);
     return new Promise((resolve, reject) => {
@@ -155,6 +172,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     for (const slot of [...workers.samplers, workers.vocoder, workers.accent]) slot?.worker.terminate();
     helper?.client.close(); // помощник завершится сам и освободит память
     helper = null;
+    accentRemote = false;
     table = null;
     for (const [id, entry] of waiting) {
       waiting.delete(id);
@@ -184,14 +202,41 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     slot.loaded = true;
   }
 
-  /** Файлы воркера ударений — с той моделью омографов, что собралась. */
-  async function loadAccentParts() {
-    const files = await loadParts(ACCENT_PARTS.map((name) => (name === 'omographModel' ? omographPart : name)));
-    if (omographPart !== 'omographModel') {
+  /**
+   * Файлы воркера ударений — с той моделью омографов, что собралась.
+   * remote: сети считает ускоритель — вместо моделей их имена там.
+   */
+  async function loadAccentParts({ remote = false } = {}) {
+    const modelParts = Object.values(HELPER_ACCENT_MODELS);
+    const names = ACCENT_PARTS.filter((name) => !remote || !modelParts.includes(name)).map((name) => (name === 'omographModel' ? omographPart : name));
+    const files = await loadParts(names);
+    if (files[omographPart] && omographPart !== 'omographModel') {
       files.omographModel = files[omographPart];
       delete files[omographPart];
     }
+    if (remote) for (const [helperName, part] of Object.entries(HELPER_ACCENT_MODELS)) files[part] = helperName;
     return files;
+  }
+
+  /**
+   * Сети ударений — в ускоритель (с версии 1.3.0): передать модели, если их
+   * там ещё нет. false — считаем в браузере, как раньше.
+   */
+  async function accentBlobs() {
+    const parts = await loadParts(['yoModel', omographPart, 'accentModel']);
+    return { accentYo: parts.yoModel, accentOmograph: parts[omographPart], accentStress: parts.accentModel };
+  }
+
+  async function helperAccent(connection, onProgress) {
+    if (!connection?.hello.features?.includes('accent')) return false;
+    try {
+      const sent = await syncModels(connection.client, connection.hello.files, await accentBlobs(), onProgress, Object.keys(HELPER_ACCENT_MODELS));
+      if (sent.length) connection.hello = await connection.client.hello();
+      return true;
+    } catch (error) {
+      console.warn('TeraTTS: ударения остаются в браузере — ускоритель не принял модели', error);
+      return false;
+    }
   }
 
   /**
@@ -294,9 +339,11 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       // Облегчённая модель омографов на звук не влияет — она всегда; сэмплер — по настройке.
       omographPart = (await ensureDerived('omographLight')) ? 'omographLight' : 'omographModel';
       workers.accent = spawn('accent');
-      const accent = loadAccentParts().then((files) => call(workers.accent, { type: 'load', files }));
-      accent.catch(() => {}); // ошибку разберём ниже, когда дождёмся
       helper = await attachHelper();
+      // С ускорителем и сети ударений там: во вкладке остаются только словари.
+      accentRemote = await helperAccent(helper);
+      const accent = loadAccentParts({ remote: accentRemote }).then((files) => call(workers.accent, { type: 'load', files, remote: accentRemote }));
+      accent.catch(() => {}); // ошибку разберём ниже, когда дождёмся
       if (!helper) {
         const wanted = SAMPLER_PARTS[quality()] ?? SAMPLER_PARTS.max;
         // Не собралась — исходный с вынесенными весами, а нет и его — как скачан.
@@ -772,7 +819,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
 
     /** Для проверок: какие модели в памяти; sampler: 'helper' — синтез у ускорителя. */
     get models() {
-      return ready ? { sampler: helper ? 'helper' : samplerPart, omograph: omographPart } : null;
+      return ready ? { sampler: helper ? 'helper' : samplerPart, omograph: omographPart, accent: accentRemote ? 'helper' : 'browser' } : null;
     },
 
     /**
@@ -806,7 +853,15 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       if (!connection) throw new Error('Ускоритель не отвечает');
       try {
         if (connection !== helper) connection = await updateIfOld(connection);
-        await syncModels(connection.client, connection.hello.files, await helperBlobs(), onProgress);
+        let blobs = await helperBlobs();
+        let names = HELPER_MODELS;
+        // Ускоритель считает и ударения — их модели передаём заодно, одним прогрессом.
+        if (connection.hello.features?.includes('accent')) {
+          omographPart = (await ensureDerived('omographLight')) ? 'omographLight' : 'omographModel';
+          blobs = { ...blobs, ...(await accentBlobs()) };
+          names = [...HELPER_MODELS, ...Object.keys(HELPER_ACCENT_MODELS)];
+        }
+        await syncModels(connection.client, connection.hello.files, blobs, onProgress, names);
       } finally {
         if (connection !== helper) connection.client.close();
       }

@@ -20,6 +20,8 @@ on:
       - 'extension/src/tts/tera-text.js'
       - 'extension/src/tts/tera-noise.js'
       - 'extension/src/tts/onnx-quantize.js'
+      - 'extension/src/tts/remote-ort.js'
+      - 'extension/src/tts/ruaccent-models.js'
       - 'extension/src/voice/whisper.js'
       - '.github/workflows/helper.yml'
   workflow_dispatch:
@@ -143,8 +145,18 @@ jobs:
           path: teratts/whisper
           key: whisper-small-q5_1-5359861c-vad-9ffd54a1
 
-      - name: Синтез и расшифровка через установленный ускоритель
-        run: node scripts/helper-check.mjs --helper "$INSTALLED" --models teratts --download --hoist --compare --transcribe --wav check-${{ runner.os }}.wav
+      # Сети ударений RUAccent (с 1.3.0 их считает ускоритель): ответы
+      # сверяются с onnxruntime-web — тем же, что в расширении.
+      - name: Модели ударений
+        uses: actions/cache@v4
+        with:
+          path: |
+            teratts/ruaccent
+            teratts/omograph-int8
+          key: ruaccent-75983ac96062591d06ecd2ddb2aefb894104bc9e-omograph-d5c4eb68
+
+      - name: Синтез, ударения и расшифровка через установленный ускоритель
+        run: node scripts/helper-check.mjs --helper "$INSTALLED" --models teratts --download --hoist --compare --transcribe --accent --wav check-${{ runner.os }}.wav
 
       - name: Удаление
         run: |

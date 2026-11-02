@@ -10,6 +10,9 @@
 // расшифровку Whisper (голосовые заметки): модель — <папка>/whisper/, с
 // --download скачается.
 //
+// С --accent — сети ударений RUAccent (ruaccent/ в папке моделей): их
+// ответы в помощнике сверяются с onnxruntime-web на одних и тех же фразах.
+//
 // Папка моделей — как в репозитории TeraTTSv2 на HuggingFace (models/,
 // styles/, unicode_indexer.json); --download скачает недостающее.
 
@@ -20,6 +23,8 @@ import { parseArgs } from 'node:util';
 import { quantizeModel } from '../extension/src/tts/onnx-quantize.js';
 import { PACK_URLS } from '../extension/src/tts/tera-pack.js';
 import { createHelperClient, syncModels } from '../extension/src/tts/tera-native.js';
+import { HELPER_ACCENT_MODELS, createRemoteOrt } from '../extension/src/tts/remote-ort.js';
+import { createAccentModels } from '../extension/src/tts/ruaccent-models.js';
 import { noise } from '../extension/src/tts/tera-noise.js';
 import { encodeText, keepSupported, maxSecondsFor, modelText, parseNpy, voicedRange } from '../extension/src/tts/tera-text.js';
 import { SPEECH_MODELS, WHISPER_MODEL, resample } from '../extension/src/voice/whisper.js';
@@ -37,6 +42,8 @@ const { values: args } = parseArgs({
     // Вынести веса сэмплера из цикла здесь же — как это делает расширение перед передачей.
     hoist: { type: 'boolean', default: false },
     transcribe: { type: 'boolean', default: false },
+    // Сети ударений RUAccent в помощнике — те же ответы, что в WebAssembly.
+    accent: { type: 'boolean', default: false },
   },
 });
 
@@ -47,6 +54,20 @@ const FILES = {
   sampler: 'models/sampler_distilled_cfg3_8step.onnx',
   vocoder: 'models/vocoder.onnx',
 };
+/** Файлы RUAccent: где лежат в папке моделей и откуда скачать. */
+const ACCENT_FILES = {
+  yoModel: 'ruaccent/nn/nn_yo_homograph_resolver/model.onnx',
+  yoTokenizer: 'ruaccent/nn/nn_yo_homograph_resolver/tokenizer.json',
+  yoTokenizerConfig: 'ruaccent/nn/nn_yo_homograph_resolver/tokenizer_config.json',
+  yoConfig: 'ruaccent/nn/nn_yo_homograph_resolver/config.json',
+  accentModel: 'ruaccent/nn/nn_accent/model.onnx',
+  accentVocab: 'ruaccent/nn/nn_accent/vocab.txt',
+  accentConfig: 'ruaccent/nn/nn_accent/config.json',
+  omographModel: 'omograph-int8/turbo3.1/model.onnx',
+  omographTokenizer: 'omograph-int8/turbo3.1/tokenizer.json',
+  omographTokenizerConfig: 'omograph-int8/turbo3.1/tokenizer_config.json',
+};
+
 // Текст уже с ударениями: ударения расставляет расширение, здесь проверяется синтез.
 const TEXTS = [
   'Прив+ет! Это пр+оверка ускор+ителя озв+учки.',
@@ -256,6 +277,7 @@ if (args.wav) {
 }
 
 if (args.transcribe) await checkTranscription();
+if (args.accent) await checkAccent();
 
 client.close();
 console.log('✓ ускоритель работает');
@@ -304,4 +326,102 @@ async function checkTranscription() {
   const quiet = await client.transcribe(hush, 'ru');
   if (quiet.text) fail(`на тишине «расшифровано»: «${quiet.text}»`);
   console.log('на тишине — пусто, как и должно');
+}
+
+
+/** Сети ударений: помощник против onnxruntime-web — одни и те же ответы. */
+async function checkAccent() {
+  if (!hello.features?.includes('accent')) fail('помощник не умеет ударения');
+  for (const relative of Object.values(ACCENT_FILES)) {
+    if (fs.existsSync(local(relative))) continue;
+    if (!args.download) fail(`нет ${local(relative)} (или --download)`);
+    const tail = relative.replace(/^ruaccent\//, 'ruaccent/').replace(/^omograph-int8\//, '');
+    const url = PACK_URLS.find((item) => item.endsWith(`/${tail}`));
+    if (!url) fail(`не знаю, откуда скачать ${relative}`);
+    console.log(`скачиваю ${relative}`);
+    const response = await fetch(url);
+    if (!response.ok) fail(`${url}: ${response.status}`);
+    fs.mkdirSync(path.dirname(local(relative)), { recursive: true });
+    fs.writeFileSync(local(relative), Buffer.from(await response.arrayBuffer()));
+  }
+  const read = (name) => fs.readFileSync(local(ACCENT_FILES[name]));
+  const json = (name) => JSON.parse(read(name).toString('utf8'));
+  // Модель омографов — облегчённая, как её собирает расширение (tera-pack.js, omographLight).
+  const omograph = quantizeModel(new Uint8Array(read('omographModel')), { int8Weights: true, dynamic: true, exclude: (name) => name.includes('attention') }).model;
+  const files = {
+    yoTokenizer: json('yoTokenizer'),
+    yoTokenizerConfig: json('yoTokenizerConfig'),
+    yoLabels: json('yoConfig').id2label,
+    omographTokenizer: json('omographTokenizer'),
+    omographTokenizerConfig: json('omographTokenizerConfig'),
+    accentVocab: read('accentVocab').toString('utf8'),
+    accentLabels: json('accentConfig').id2label,
+  };
+  const blobs = { accentYo: new Blob([read('yoModel')]), accentOmograph: new Blob([omograph]), accentStress: new Blob([read('accentModel')]) };
+  let started = performance.now();
+  const sent = await syncModels(client, (await client.hello()).files, blobs, null, Object.keys(HELPER_ACCENT_MODELS));
+  console.log(sent.length ? `передал модели ударений (${sent.join(', ')}) за ${((performance.now() - started) / 1000).toFixed(1)} с` : 'модели ударений уже у помощника');
+
+  const ort = await import('onnxruntime-web');
+  ort.env.wasm.numThreads = 1;
+  const { Tokenizer } = await import('../extension/vendor/tokenizers/tokenizers.min.mjs');
+  const wasm = await createAccentModels(ort, Tokenizer, { ...files, yoModel: read('yoModel'), omographModel: omograph, accentModel: read('accentModel') });
+  let worst = 0;
+  const times = [];
+  const remoteOrt = createRemoteOrt(async (model, inputs) => {
+    const begin = performance.now();
+    const reply = await client.infer(model, inputs);
+    times.push(performance.now() - begin);
+    return reply;
+  });
+  const remote = await createAccentModels(remoteOrt, Tokenizer, { ...files, yoModel: 'accentYo', omographModel: 'accentOmograph', accentModel: 'accentStress' });
+
+  const sentences = [
+    'Все ещё ждали, когда он придёт, и все же она пришла первой.',
+    'На берегу стоял старинный замок, а на двери висел тяжёлый замок.',
+    'Мука была белой, а мука ожидания — невыносимой.',
+    'Философ писал о свободе, справедливости и долге.',
+  ];
+  const omographCases = [
+    ['На берегу стоял старинный <w>замок</w>.', ['з+амок', 'зам+ок']],
+    ['На двери висел тяжёлый <w>замок</w>.', ['з+амок', 'зам+ок']],
+    ['Он испытывал настоящую <w>муку</w> ожидания.', ['м+уку', 'мук+у']],
+  ];
+  const words = ['коммунитаризм', 'деконструкция', 'постмодернистский', 'нейросеть', 'квазиобъект'];
+  const differences = [];
+  for (const sentence of sentences) {
+    const [a, b] = [await wasm.yoLabels(sentence), await remote.yoLabels(sentence)];
+    if (JSON.stringify(a) !== JSON.stringify(b)) differences.push(`ё: ${sentence} ${a} ≠ ${b}`);
+  }
+  for (const [context, variants] of omographCases) {
+    const [a, b] = [await wasm.chooseOmograph(context, variants), await remote.chooseOmograph(context, variants)];
+    if (a !== b) differences.push(`омограф: ${context} ${a} ≠ ${b}`);
+    console.log(`омограф «${context}» → ${b}`);
+  }
+  for (const word of words) {
+    const [a, b] = [await wasm.accentWord(word), await remote.accentWord(word)];
+    if (a !== b) differences.push(`ударение: ${a} ≠ ${b}`);
+    console.log(`незнакомое слово → ${b}`);
+  }
+  // Сами логиты: тот же граф, тот же вход — расхождение на уровне округления.
+  const sessions = { accentStress: read('accentModel'), accentOmograph: omograph };
+  for (const [model, bytes] of Object.entries(sessions)) {
+    const session = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+    const ids = model === 'accentStress' ? [1, 5, 9, 12, 7, 2] : [1, 300, 4500, 222, 2];
+    const tensor = (values) => new ort.Tensor('int64', BigInt64Array.from(values, BigInt), [1, values.length]);
+    const feeds = { input_ids: tensor(ids), attention_mask: tensor(ids.map(() => 1)), token_type_ids: tensor(ids.map(() => 0)) };
+    const local = (await session.run(Object.fromEntries(session.inputNames.map((name) => [name, feeds[name]])))).logits.data;
+    const { data } = await client.infer(model, { input_ids: ids, attention_mask: ids.map(() => 1), token_type_ids: ids.map(() => 0) });
+    for (let i = 0; i < local.length; i += 1) worst = Math.max(worst, Math.abs(local[i] - data[i]));
+  }
+  const sorted = [...times].sort((a, b) => a - b);
+  console.log(
+    `сети ударений в помощнике: ${times.length} вопросов, первый (с загрузкой) ${times[0].toFixed(0)} мс, ` +
+      `обычный ${sorted[Math.floor(sorted.length / 2)].toFixed(1)} мс; наибольшее расхождение логитов ${worst.toExponential(1)}`
+  );
+  if (differences.length) fail(`ответы помощника отличаются от WebAssembly:\n${differences.join('\n')}`);
+  if (worst > 1e-2) fail(`логиты расходятся на ${worst}`);
+  const unknown = await client.infer('accentNothing', { input_ids: [1] }).then(() => null, (error) => error.message);
+  if (!/незнакомая модель/.test(unknown || '')) fail(`незнакомая модель не отвергнута: ${unknown}`);
+  console.log('✓ ударения в помощнике — как в браузере');
 }

@@ -3,6 +3,7 @@
 //! представление следующей фразы, другой делает звук предыдущей), звук —
 //! кусками меньше 1 МБ.
 
+use crate::accent::{self, Accents, Inputs};
 use crate::install;
 use crate::protocol::{self, Outbox};
 use crate::speech;
@@ -37,6 +38,8 @@ struct Shared {
     epoch: AtomicU64,
     /// Растёт, когда модель заменили: загруженные устарели.
     models: AtomicU64,
+    /// То же для моделей ударений.
+    accents: AtomicU64,
 }
 
 impl Shared {
@@ -53,6 +56,13 @@ enum Job {
     Synth { id: Value, epoch: u64, request: Request },
     Load { id: Value },
     Unload,
+}
+
+/// Вопрос к сети ударений.
+struct Ask {
+    id: Value,
+    model: String,
+    inputs: Inputs,
 }
 
 enum Sound {
@@ -101,7 +111,7 @@ fn model_path(name: &str) -> Option<PathBuf> {
         speech::MODEL_FILE.to_string()
     } else if name == VAD {
         speech::VAD_FILE.to_string()
-    } else if MODEL_NAMES.contains(&name) {
+    } else if MODEL_NAMES.contains(&name) || accent::MODEL_NAMES.contains(&name) {
         format!("{name}.onnx")
     } else {
         return None;
@@ -114,6 +124,7 @@ fn model_files() -> serde_json::Map<String, Value> {
     MODEL_NAMES
         .iter()
         .chain([&WHISPER, &VAD])
+        .chain(accent::MODEL_NAMES.iter())
         .filter_map(|name| {
             let path = model_path(name)?;
             fs::metadata(path).ok().map(|meta| (name.to_string(), json!(meta.len())))
@@ -215,6 +226,50 @@ fn vocoder_loop(shared: Arc<Shared>, jobs: Receiver<Sound>) {
     }
 }
 
+/// Сети ударений — своим потоком: короткие вопросы не ждут синтеза фразы.
+fn accent_loop(shared: Arc<Shared>, asks: Receiver<Ask>) {
+    let mut accents = Accents::default();
+    let mut generation = shared.accents.load(Ordering::SeqCst);
+    loop {
+        let ask = match asks.recv_timeout(IDLE_UNLOAD) {
+            Ok(ask) => ask,
+            Err(RecvTimeoutError::Timeout) => {
+                accents.clear();
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        // Модели заменили — загруженные устарели.
+        let current = shared.accents.load(Ordering::SeqCst);
+        if current != generation {
+            accents.clear();
+            generation = current;
+        }
+        let result = environment().and_then(|env| accents.run(&env, &install::models_dir(), &ask.model, &ask.inputs));
+        match result {
+            Ok(logits) => {
+                let bytes: Vec<u8> = logits.data.iter().flat_map(|value| value.to_le_bytes()).collect();
+                shared
+                    .out
+                    .send(json!({ "type": "logits", "id": ask.id, "dims": logits.dims, "data": BASE64.encode(bytes) }));
+            }
+            Err(error) => shared.error(&ask.id, &error, false),
+        }
+    }
+}
+
+/// Входы сети ударений: { имя: [числа] }.
+fn inputs(message: &Value) -> Result<Inputs, String> {
+    let object = message.get("inputs").and_then(Value::as_object).ok_or("нет поля inputs")?;
+    object
+        .keys()
+        .map(|name| {
+            let values = integers(object, name)?;
+            Ok((name.clone(), values))
+        })
+        .collect()
+}
+
 /// Звук фразы — float32 little-endian в base64, кусками.
 fn send_audio(shared: &Shared, id: &Value, pcm: &[f32]) {
     let parts = pcm.len().div_ceil(AUDIO_CHUNK).max(1);
@@ -235,6 +290,23 @@ fn send_audio(shared: &Shared, id: &Value, pcm: &[f32]) {
 }
 
 // ── Разбор сообщений ─────────────────────────────────────────────────────
+
+/// Поле сообщения — и у самого сообщения, и у вложенного объекта.
+trait MessageFields {
+    fn field(&self, key: &str) -> Option<&Value>;
+}
+
+impl MessageFields for Value {
+    fn field(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+}
+
+impl MessageFields for serde_json::Map<String, Value> {
+    fn field(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+}
 
 fn text<'a>(message: &'a Value, key: &str) -> Result<&'a str, String> {
     message.get(key).and_then(Value::as_str).ok_or_else(|| format!("нет поля {key}"))
@@ -267,9 +339,9 @@ fn pcm16(message: &Value, key: &str) -> Result<Vec<f32>, String> {
     Ok(chunks.iter().map(|chunk| f32::from(i16::from_le_bytes(*chunk)) / 32768.0).collect())
 }
 
-fn integers(message: &Value, key: &str) -> Result<Vec<i64>, String> {
+fn integers(message: &(impl MessageFields + ?Sized), key: &str) -> Result<Vec<i64>, String> {
     message
-        .get(key)
+        .field(key)
         .and_then(Value::as_array)
         .ok_or_else(|| format!("нет поля {key}"))?
         .iter()
@@ -315,7 +387,7 @@ fn receive(message: &Value, partial: &Path) -> Result<Option<u64>, String> {
     Ok(None)
 }
 
-fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>) -> Result<(), String> {
+fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Sender<Ask>) -> Result<(), String> {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     match text(message, "type")? {
         // Ответ — сразу, без загрузки ONNX Runtime: при первом запуске на
@@ -329,7 +401,7 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>) -> Result<(
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-                "features": if speech::supported().is_ok() { json!(["transcribe"]) } else { json!([]) },
+                "features": if speech::supported().is_ok() { json!(["transcribe", "accent"]) } else { json!(["accent"]) },
             }));
         }
         // Голосовая заметка → текст. Отдельным потоком: синтез и отмены
@@ -381,10 +453,21 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>) -> Result<(
                 if MODEL_NAMES.contains(&name) {
                     shared.models.fetch_add(1, Ordering::SeqCst);
                 }
+                if accent::MODEL_NAMES.contains(&name) {
+                    shared.accents.fetch_add(1, Ordering::SeqCst);
+                }
             }
             shared.out.send(json!({ "type": "file-ok", "id": id, "name": name, "done": done.is_some() }));
         }
         "load" => jobs.send(Job::Load { id }).map_err(|_| "синтез остановлен".to_string())?,
+        // Ударения: логиты сети по номерам токенов (воркер ударений расширения).
+        "infer" => asks
+            .send(Ask {
+                id,
+                model: text(message, "model")?.to_string(),
+                inputs: inputs(message)?,
+            })
+            .map_err(|_| "ударения остановлены".to_string())?,
         "unload" => {
             let _ = jobs.send(Job::Unload);
             shared.out.send(json!({ "type": "unloaded", "id": id }));
@@ -438,6 +521,7 @@ pub fn run() -> i32 {
         out: Outbox::new(io::stdout()),
         epoch: AtomicU64::new(0),
         models: AtomicU64::new(0),
+        accents: AtomicU64::new(0),
     });
     let (jobs, job_queue) = mpsc::channel();
     let (sounds, sound_queue) = mpsc::channel();
@@ -449,6 +533,11 @@ pub fn run() -> i32 {
         let shared = Arc::clone(&shared);
         std::thread::spawn(move || vocoder_loop(shared, sound_queue));
     }
+    let (asks, ask_queue) = mpsc::channel();
+    {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || accent_loop(shared, ask_queue));
+    }
     let mut input = io::stdin().lock();
     loop {
         let message = match protocol::read(&mut input) {
@@ -459,8 +548,34 @@ pub fn run() -> i32 {
                 return 1;
             }
         };
-        if let Err(error) = handle(&message, &shared, &jobs) {
+        if let Err(error) = handle(&message, &shared, &jobs, &asks) {
             shared.error(&message.get("id").cloned().unwrap_or(Value::Null), &error, false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accent_inputs_are_parsed_by_name() {
+        let message = json!({ "type": "infer", "model": "accentStress", "inputs": { "input_ids": [1, 5, 2], "attention_mask": [1, 1, 1] } });
+        let mut parsed = inputs(&message).expect("входы разобраны");
+        parsed.sort();
+        assert_eq!(
+            parsed,
+            vec![("attention_mask".to_string(), vec![1, 1, 1]), ("input_ids".to_string(), vec![1, 5, 2])]
+        );
+        assert!(inputs(&json!({ "inputs": { "input_ids": ["x"] } })).is_err());
+        assert!(inputs(&json!({})).is_err());
+    }
+
+    #[test]
+    fn accent_models_have_paths() {
+        for name in accent::MODEL_NAMES {
+            assert!(model_path(name).expect("известная модель").ends_with(format!("{name}.onnx")));
+        }
+        assert!(model_path("accentNothing").is_none());
     }
 }
