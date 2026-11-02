@@ -106,6 +106,7 @@ self.onmessage = ({ data: message }) => {
           int8Weights: Boolean(message.int8Weights),
           dynamic: message.dynamic ?? true,
           hoist: Boolean(message.hoist),
+          unsignedWeights: Boolean(message.unsignedWeights),
           exclude: (name) => exclude.some((part) => name.includes(part)),
         });
         self.postMessage({ id: message.id, type: 'quantized', model: model.buffer }, [model.buffer]);

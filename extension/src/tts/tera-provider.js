@@ -222,9 +222,14 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
    * Сети ударений — в ускоритель (с версии 1.3.0): передать модели, если их
    * там ещё нет. false — считаем в браузере, как раньше.
    */
+  /**
+   * Модели ударений для ускорителя. Омографы — своя версия (omographHelper,
+   * веса uint8): не собралась — исходная, в ней веса разворачиваются во float.
+   */
   async function accentBlobs() {
-    const parts = await loadParts(['yoModel', omographPart, 'accentModel']);
-    return { accentYo: parts.yoModel, accentOmograph: parts[omographPart], accentStress: parts.accentModel };
+    const omograph = (await ensureDerived('omographHelper')) ? 'omographHelper' : 'omographModel';
+    const parts = await loadParts(['yoModel', omograph, 'accentModel']);
+    return { accentYo: parts.yoModel, accentOmograph: parts[omograph], accentStress: parts.accentModel };
   }
 
   async function helperAccent(connection, onProgress) {
@@ -248,9 +253,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     if (pack.derived?.[name] === DERIVED_VERSION) return true;
     const slot = spawn('synth');
     try {
-      const { from, steps, exclude, int8Weights, dynamic, hoist } = DERIVED_PARTS[name];
+      const { from, steps, exclude, int8Weights, dynamic, hoist, unsignedWeights } = DERIVED_PARTS[name];
       const model = await (await loadParts([from]))[from].arrayBuffer();
-      const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights, dynamic, hoist }, [model]);
+      const reply = await call(slot, { type: 'quantize', model, steps, exclude, int8Weights, dynamic, hoist, unsignedWeights }, [model]);
       await storeDerivedPart(name, new Blob([reply.model]));
       pack = await getPack();
       return true;
@@ -857,7 +862,6 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
         let names = HELPER_MODELS;
         // Ускоритель считает и ударения — их модели передаём заодно, одним прогрессом.
         if (connection.hello.features?.includes('accent')) {
-          omographPart = (await ensureDerived('omographLight')) ? 'omographLight' : 'omographModel';
           blobs = { ...blobs, ...(await accentBlobs()) };
           names = [...HELPER_MODELS, ...Object.keys(HELPER_ACCENT_MODELS)];
         }

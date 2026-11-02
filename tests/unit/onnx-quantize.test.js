@@ -208,4 +208,17 @@ describe('быстрая версия ONNX-модели (onnx-quantize.js)', () 
     const test = (await run(fast, { ids })).out;
     assert.ok(snr(reference, test) > 25, `SNR ${snr(reference, test).toFixed(1)} дБ`);
   });
+
+  it('для ускорителя веса uint8 с нулевой точкой 128 — ответ тот же до бита, int8-копия убрана', async () => {
+    const source = int8Net();
+    const signed = quantizeModel(new Uint8Array(source), { int8Weights: true }).model;
+    const { model: unsigned, quantized } = quantizeModel(new Uint8Array(source), { int8Weights: true, unsignedWeights: true });
+    assert.equal(quantized, 2);
+    const ids = new ort.Tensor('int64', BigInt64Array.from([0, 3, 5, 1, 2], BigInt), [1, 5]);
+    const a = (await run(signed, { ids })).out;
+    const b = (await run(unsigned, { ids })).out;
+    assert.deepEqual(Array.from(b), Array.from(a));
+    const text = new TextDecoder().decode(unsigned);
+    assert.ok(text.includes('::u8_zero'), 'нулевая точка весов на месте');
+  });
 });

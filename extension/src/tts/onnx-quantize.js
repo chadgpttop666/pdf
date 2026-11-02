@@ -14,6 +14,12 @@
 // занимал 1,1 ГБ. Режим int8Weights переписывает их потребителей на целые
 // числа (MatMulInteger, Gather по int8-таблице), и веса остаются int8.
 //
+// unsignedWeights — те же веса, но uint8 с нулевой точкой 128 (для
+// ускорителя). Нативный ONNX Runtime на процессорах с AVX2 без VNNI
+// (Haswell…Skylake) умножает uint8 на int8 командой vpmaddubsw, которая
+// насыщается на 16 битах, — и омографы выбирались неверно («з+амок» на
+// двери). uint8 × uint8 считается без переполнения, а результат тот же.
+//
 // Сэмплеру можно задать число шагов потока: модель — цикл из 8 шагов Эйлера
 // (sampler_trip_count и total_step внутри цикла). 6 шагов — на четверть
 // меньше работы, на слух и для распознавания речи разницы нет.
@@ -226,9 +232,10 @@ function transpose(values, rows, cols) {
  *   float-веса при этом не трогаются
  * @param options.dynamic переводить float-веса в uint8; false — только число шагов
  * @param options.hoist вынести веса из тела цикла в основной граф (см. ниже)
+ * @param options.unsignedWeights int8-веса для MatMulInteger — в uint8 с нулевой точкой 128 (см. начало файла)
  * @returns {{ model: Uint8Array, quantized: number }}
  */
-export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false, dynamic = true, hoist = false } = {}) {
+export function quantizeModel(model, { steps = null, exclude = () => false, int8Weights = false, dynamic = true, hoist = false, unsignedWeights = false } = {}) {
   let quantized = 0;
   // Веса сэмплера лежат в теле цикла (Loop), и onnxruntime держит такие в
   // памяти трижды: 244 МБ файла — 750 МБ памяти. Вынесенные в основной граф
@@ -391,12 +398,30 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
     }
     const packedNodes = new Set([...packed.values()].flatMap(({ cast, mul }) => [cast, mul]));
 
+    // uint8-копии int8-весов (unsignedWeights): имя → [веса, нулевая точка].
+    const unsignedCopies = new Map();
+    const int8ForGather = new Set();
+    function unsignedWeight(name) {
+      if (!unsignedCopies.has(name)) {
+        const tensor = tensors.get(name);
+        if (!tensor?.raw) return null;
+        const signed = buf.subarray(tensor.raw.start, tensor.raw.end);
+        // int8 v (байт v & 0xff) → uint8 v + 128: старший бит наоборот.
+        const shifted = signed.map((byte) => byte ^ 0x80);
+        newTensors.push(tensorProto(`${name}::u8`, UINT8, tensor.dims, shifted));
+        newTensors.push(tensorProto(`${name}::u8_zero`, UINT8, [], Uint8Array.of(128)));
+        unsignedCopies.set(name, [`${name}::u8`, `${name}::u8_zero`]);
+      }
+      return unsignedCopies.get(name);
+    }
+
     function packedMatMul(node, out) {
       const { q: w, scale } = packed.get(node.inputs[1]);
       const [q, qScale, qZero] = quantizedInput(node.inputs[0], out);
       const base = node.name || node.outputs[0];
-      // B — int8 с нулевой точкой 0: её можно не передавать.
-      out.push(nodeProto('MatMulInteger', [q, w, qZero], [`${base}::q8_int`], `${base}::q8_matmul`));
+      const unsigned = unsignedWeights ? unsignedWeight(w) : null;
+      // B — int8 с нулевой точкой 0: её можно не передавать; uint8 — с нулевой точкой 128.
+      out.push(nodeProto('MatMulInteger', unsigned ? [q, unsigned[0], qZero, unsigned[1]] : [q, w, qZero], [`${base}::q8_int`], `${base}::q8_matmul`));
       out.push(nodeProto('Cast', [`${base}::q8_int`], [`${base}::q8_float`], `${base}::q8_cast`, [intAttribute('to', FLOAT)]));
       out.push(nodeProto('Mul', [`${base}::q8_float`, qScale], [`${base}::q8_scaled`], `${base}::q8_input_mul`));
       // Масштаб весов — по столбцам [1, N]: ложится на последнюю ось.
@@ -405,6 +430,7 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
 
     function packedGather(node, out) {
       const { q: table, scale } = packed.get(node.inputs[0]);
+      int8ForGather.add(table);
       const base = node.name || node.outputs[0];
       const attributes = node.attributes.map((attribute) => buf.subarray(attribute.start, attribute.end));
       out.push(nodeProto('Gather', [table, node.inputs[1]], [`${base}::q8_rows`], `${base}::q8_gather`, attributes));
@@ -453,6 +479,9 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
       }
       nodeBytes.push(node.bytes);
     }
+
+    // int8-оригиналы, которые теперь читает только uint8-копия, — из модели.
+    for (const name of unsignedCopies.keys()) if (!int8ForGather.has(name)) unit(name);
 
     function rewriteSubgraphs(node) {
       const parts = [];

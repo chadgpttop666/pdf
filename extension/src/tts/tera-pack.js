@@ -82,6 +82,10 @@ export const DERIVED_PARTS = {
   // ударений — 1,1 ГБ, вдвое больше нужного). На звук не влияет — нужна
   // всегда. Внимание оставляем во float: целочисленное меняло спорные решения.
   omographLight: { from: 'omographModel', int8Weights: true, exclude: ['attention'] },
+  // Она же для ускорителя: веса uint8 с нулевой точкой 128. Нативный ONNX
+  // Runtime на AVX2 без VNNI (Haswell и др.) переполняется на uint8 × int8 и
+  // выбирает омографы неверно; uint8 × uint8 — без переполнения (onnx-quantize.js).
+  omographHelper: { from: 'omographModel', int8Weights: true, unsignedWeights: true, exclude: ['attention'] },
   // Исходный сэмплер, только веса вынесены из тела цикла: звук тот же до
   // бита, а памяти onnxruntime берёт в 2,5 раза меньше (750 МБ → 280 МБ).
   samplerLight: { from: 'sampler', hoist: true, dynamic: false },

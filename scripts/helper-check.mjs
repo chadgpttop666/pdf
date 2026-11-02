@@ -357,7 +357,15 @@ async function checkAccent() {
     accentVocab: read('accentVocab').toString('utf8'),
     accentLabels: json('accentConfig').id2label,
   };
-  const blobs = { accentYo: new Blob([read('yoModel')]), accentOmograph: new Blob([omograph]), accentStress: new Blob([read('accentModel')]) };
+  // Ускорителю — та же модель с весами uint8 (tera-pack.js, omographHelper): на AVX2 без VNNI
+  // нативный uint8 × int8 переполняется, и омографы выбирались неверно.
+  const omographHelper = quantizeModel(new Uint8Array(read('omographModel')), {
+    int8Weights: true,
+    unsignedWeights: true,
+    dynamic: true,
+    exclude: (name) => name.includes('attention'),
+  }).model;
+  const blobs = { accentYo: new Blob([read('yoModel')]), accentOmograph: new Blob([omographHelper]), accentStress: new Blob([read('accentModel')]) };
   let started = performance.now();
   const sent = await syncModels(client, (await client.hello()).files, blobs, null, Object.keys(HELPER_ACCENT_MODELS));
   console.log(sent.length ? `передал модели ударений (${sent.join(', ')}) за ${((performance.now() - started) / 1000).toFixed(1)} с` : 'модели ударений уже у помощника');
