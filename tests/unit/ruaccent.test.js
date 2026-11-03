@@ -130,7 +130,7 @@ describe('ударения RUAccent: разметка фразы', () => {
     assert.equal(await acc.process('Кто звонит? Щавель!'), 'Кто звон+ит? Щав+ель!');
     assert.equal(asked, 0);
     // «Века» после «двадцатого» — единственное число.
-    assert.equal(await acc.process('начала двадцатого века'), 'начала двадцатого в+ека');
+    assert.equal(await acc.process('начала двадцатого века'), 'нач+ала двадцатого в+ека');
   });
 
   it('редкий вариант омографа не выбирается: «была́», «своему́», «душа́» — без сети', async () => {
@@ -192,13 +192,24 @@ describe('ударения RUAccent: разметка фразы', () => {
       return variants[0];
     };
     const marker = createAccentuator(
-      { stress: dictionary, yoWords: new Map(), yoHomographs: new Map(), omographs: new Map([['руки', ['р+уки', 'рук+и']]]) },
+      {
+        stress: dictionary,
+        yoWords: new Map(),
+        yoHomographs: new Map(),
+        omographs: new Map([
+          ['руки', ['р+уки', 'рук+и']],
+          ['лица', ['л+ица', 'лиц+а']],
+        ]),
+      },
       { chooseOmograph }
     );
     assert.match(await marker.process('Взяла себя в руки.'), / в р\+уки\.$/);
     assert.equal(await marker.process('Ручка выпала из руки.'), 'Ручка выпала из рук+и.');
+    assert.equal(await marker.process('Выражение лица.'), 'Выражение лиц+а.', 'после существительного — родительный');
+    assert.equal(await marker.process('Лица дрожали.'), 'Л+ица дрожали.', 'глагол во множественном после — множественное');
+    assert.equal(await marker.process('Руки его.'), 'Р+уки его.', '«руки» без подсказки — как обычно, множественное');
     assert.deepEqual(asked, []);
-    await marker.process('Руки дрожали.');
+    await marker.process('Лица его.');
     assert.equal(asked.length, 1);
   });
 

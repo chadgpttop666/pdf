@@ -119,7 +119,7 @@ export function yoByContext(word, previous, next, afterNext, last = false) {
 // только ударением: «стороны́ / сто́роны», «го́рода / города́», «руки́ / ру́ки».
 // Какое из них нужно, обычно видно по слову перед ним, а сеть омографов в
 // этих словах ошибалась чаще всего (корпус SynTagRus).
-const FEW = new Set('два две три четыре оба обе полтора полторы'.split(' '));
+const FEW = new Set('два две три четыре оба обе полтора полторы нет много мало немного немало сколько столько'.split(' '));
 const GENITIVE_PREPOSITIONS = new Set(
   'из от у до без для около возле после вокруг среди мимо кроме вместо против напротив ради с со посреди внутри вдоль из-за из-под'.split(' ')
 );
@@ -127,14 +127,39 @@ const GENITIVE_ADJECTIVE = /(?:ого|его|ой|ей)$/u;
 const NOT_GENITIVE_ADJECTIVE = new Set('него кого чего ничего никого людей детей'.split(' '));
 const PLURAL_BEFORE = new Set('все эти те мои твои свои наши ваши чьи'.split(' '));
 const ACCUSATIVE_PREPOSITIONS = new Set('в во на за под через про сквозь'.split(' '));
+// Существительное перед ним — значит, это родительный при нём: «движении Земли́»,
+// «население страны́», «положение те́ла», «в течение го́да». Узнаём по
+// окончаниям, которых у прилагательных не бывает.
+const NOUN_BEFORE = /(?:[аеяу]ние|[аеяу]нием|ия|ии|ию|ией|ость|ости|остью|ство|ства|стве|ству|ством|[ие]тие)$/u;
+// Без подсказки рядом — как чаще всего бывает в текстах.
+const CASE_DEFAULT = { года: 'genitive', глаза: 'plural', руки: 'plural' };
+// Начало фразы или её части: глагол после — скорее всего, при этом слове.
+const CLAUSE_START = new Set(['', 'и', 'а', 'но', 'что', 'когда', 'где', 'если', 'чтобы', 'потому', 'хотя']);
 
 /** Падеж по слову перед существительным: 'genitive' | 'plural' | undefined. */
-export function caseBefore(previous) {
+export function caseBefore(previous, beforePrevious = '') {
+  // «Из-под земли́», «из-за горы́» — родительный, хоть «под» и «за» обычно со множественным.
+  if ((previous === 'под' || previous === 'за') && beforePrevious === 'из') return 'genitive';
   if (FEW.has(previous) || GENITIVE_PREPOSITIONS.has(previous)) return 'genitive';
+  if (previous.length > 3 && NOUN_BEFORE.test(previous)) return 'genitive';
   if (previous.length > 3 && GENITIVE_ADJECTIVE.test(previous) && !NOT_GENITIVE_ADJECTIVE.has(previous)) return 'genitive';
   if (PLURAL_BEFORE.has(previous) || ACCUSATIVE_PREPOSITIONS.has(previous)) return 'plural';
   if (previous.length > 3 && PLURAL_ADJECTIVE.test(previous)) return 'plural';
   return undefined;
+}
+
+/**
+ * Родительный или множественное: по слову перед ним, по глаголу после в
+ * начале фразы («Глаза́ бегают», «и руки дрожали») или как чаще всего у
+ * этого слова.
+ * @param previous слово перед ним; '' — его нет или их разделяет знак
+ */
+export function caseOf(word, previous, beforePrevious, next) {
+  const before = caseBefore(previous, beforePrevious);
+  if (before) return before;
+  if (CASE_DEFAULT[word] === 'genitive') return 'genitive';
+  if (CLAUSE_START.has(previous) && pluralVerb(next)) return 'plural';
+  return CASE_DEFAULT[word];
 }
 
 /** Номер ударной гласной в «з+амок» / «звёзды» (с нуля); -1 — не помечена. */
@@ -163,7 +188,7 @@ export function caseForms(word, variants, stress) {
   const known = (form) => stress.accent(form);
   const feminine = /[ыи]$/u.test(word);
   // Краткое прилагательное («нужны́ / ну́жны», «права́») и третье склонение («в связи́») — не сюда.
-  if ((known(`${base}ая`) && known(`${base}ое`)) || (feminine && known(`${base}ь`))) return null;
+  if ((known(`${base}ая`) && known(`${base}ое`)) || (feminine && known(`${base}ью`))) return null;
   for (const end of feminine ? ['ой', 'ей', 'ёй'] : ['ом', 'ем', 'ём']) {
     const instrumental = known(base + end);
     if (!instrumental) continue;
@@ -176,6 +201,8 @@ export function caseForms(word, variants, stress) {
 // наречие («а потом пошли») читает «пот+ом», а «покрылся потом» — «п+отом»
 // (видимо, варианты перепутаны в её обучающих данных). Наречие — почти всегда.
 const SELF = { самому: 'самом+у', самого: 'самог+о', самом: 'сам+ом', самой: 'сам+ой' };
+// «Того са́мого», «этой са́мой» — «самый».
+const DEMONSTRATIVE = new Set('тот того тому том той ту тем этот этого этому этом этой эту этим'.split(' '));
 const SWEAT_BEFORE = /^(?:покры|обли|исход|залит|пропит|пахн|пахл|запах|мокр)/u;
 
 /** Ударение по соседним словам; undefined — решает сеть. */
@@ -184,17 +211,35 @@ export function contextStress(word, previous, next, afterNext = '') {
   if (word === 'году') return /(?:ому|ему)$/u.test(previous) || previous === 'к' || previous === 'по' ? 'г+оду' : 'год+у';
   // «Стоит ли», «стоит начать» — «сто́ит».
   if (word === 'стоит' && (next === 'ли' || (INFINITIVE.test(next) && next.length > 3))) return 'ст+оит';
-  // «Самому себе», «самого себя» — от «сам».
-  if (next.startsWith('себ') && SELF[word]) return SELF[word];
+  // «Самому себе», «самого себя» — от «сам»; перед прилагательным и «до са́мого
+  // горизонта», «на са́мом деле» — от «самый»; перед существительным — «сам»
+  // («угрожать самому́ существованию»).
+  if (SELF[word]) {
+    if (next.startsWith('себ')) return SELF[word];
+    const adjectiveNext = /(?:ого|его|ому|ему|ой|ей|ом|ем)$/u.test(next) && !DEMONSTRATIVE.has(next);
+    if (word === 'самом' || adjectiveNext || DEMONSTRATIVE.has(previous) || ['до', 'с', 'со'].includes(previous)) return `с+${word.slice(1)}`;
+    // «Самому́» без подсказки — почти всегда «сам»; «самого», «самой» — решает сеть.
+    return word === 'самому' ? SELF[word] : undefined;
+  }
   // Третье склонение: «в сети́», «в связи́ с» — но «торговой се́ти», «средства свя́зи».
   if (word === 'сети') return previous === 'в' || previous === 'во' || previous === 'на' ? 'сет+и' : 'с+ети';
-  if (word === 'связи') return previous === 'в' || previous === 'во' ? 'связ+и' : 'св+язи';
+  if (word === 'связи') return ['в', 'во', 'о', 'об', 'этой'].includes(previous) ? 'связ+и' : 'св+язи';
+  // «Над уровнем мо́ря», «о́браза жизни», «чистое по́ле».
+  if (word === 'моря' && previous.startsWith('уровн')) return 'м+оря';
+  if (word === 'образа' && next === 'жизни') return '+образа';
+  if (word === 'поле') return 'п+оле';
   if (word === 'потом') return SWEAT_BEFORE.test(previous) || (next === 'и' && afterNext.startsWith('кров')) ? 'пот+ом' : 'п+отом';
-  if (word === 'уже') return next === 'чем' || NARROWER_BEFORE.has(previous) ? '+уже' : 'уж+е';
+  // «Стала у́же» — в конце фразы или перед «и»/«чем»; «стал уже́ не своим» — наречие.
+  if (word === 'уже') return next === 'чем' || (NARROWER_BEFORE.has(previous) && (next === '' || next === 'и')) ? '+уже' : 'уж+е';
   if (word === 'начала' || word === 'начало') {
     if (INFINITIVE.test(next) && next.length > 3) return word === 'начала' ? 'начал+а' : 'н+ачало';
     if (NOUN_AFTER.has(previous)) return word === 'начала' ? 'нач+ала' : 'нач+ало';
+    // Глагол «на́чало» бывает почти только перед инфинитивом; «начала двадцатого века» — существительное.
+    if (word === 'начало') return 'нач+ало';
+    if (/(?:ого|его)$/u.test(next) || /(?:ого|его)$/u.test(previous)) return 'нач+ала';
   }
+  // «И начал говорить» — глагол; «нача́л» (родительный множественного) редок.
+  if (word === 'начал') return 'н+ачал';
   return undefined;
 }
 
@@ -332,7 +377,15 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
     const texts = items.map((item) => item.text);
     for (const [i, item] of items.entries()) {
       if (!item.word || item.text.includes('+')) continue;
-      const previous = items.slice(0, i).findLast((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
+      const before = items
+        .slice(0, i)
+        .filter((other) => other.word)
+        .map((other) => other.text.toLowerCase().replace(/\+/g, ''));
+      const previous = before.at(-1) ?? '';
+      const beforePrevious = before.at(-2) ?? '';
+      // Слово перед ним за знаком («…реального, глаза сами…») к нему не относится.
+      const previousIndex = items.slice(0, i).findLastIndex((other) => other.word);
+      const separated = previousIndex >= 0 && items.slice(previousIndex + 1, i).some((other) => /[^+]/u.test(other.text));
       const [next = '', afterNext = ''] = items
         .slice(i + 1)
         .filter((other) => other.word)
@@ -353,7 +406,7 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
       if (!variants?.length) continue;
       // «Из го́рода», «две стороны́», «все города́» — падеж виден по слову перед ним.
       const forms = caseForms(lower, variants, stress);
-      const wanted = forms ? caseBefore(previous) : undefined;
+      const wanted = forms ? caseOf(lower, separated ? '' : previous, beforePrevious, next) : undefined;
       if (!wanted && !models.chooseOmograph) continue;
       const chosen = wanted ? forms[wanted] : variants.length === 1 ? variants[0] : await models.chooseOmograph(omographContext(texts, i), variants);
       item.text = fixCapital(item.text, chosen);
