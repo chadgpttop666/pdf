@@ -411,8 +411,14 @@ async function checkAccent() {
     if (a !== b) differences.push(`ударение: ${a} ≠ ${b}`);
     console.log(`незнакомое слово → ${b}`);
   }
-  // Сами логиты: тот же граф, тот же вход — расхождение на уровне округления.
+  // Сами логиты на одном входе. Сеть ударений — во float: расхождение на
+  // уровне округления. Сеть омографов квантует входы слоёв на лету: на другом
+  // процессоре float-часть считает в другом порядке, и значение на границе
+  // ступени квантования уходит в соседнюю — логиты сдвигаются на десятые
+  // (на серверах CI ≈ 0,13), решения при этом те же (сверены выше).
   const sessions = { accentStress: read('accentModel'), accentOmograph: omograph };
+  const tolerance = { accentStress: 1e-3, accentOmograph: 0.5 };
+  const drift = {};
   for (const [model, bytes] of Object.entries(sessions)) {
     const session = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
     const ids = model === 'accentStress' ? [1, 5, 9, 12, 7, 2] : [1, 300, 4500, 222, 2];
@@ -420,15 +426,20 @@ async function checkAccent() {
     const feeds = { input_ids: tensor(ids), attention_mask: tensor(ids.map(() => 1)), token_type_ids: tensor(ids.map(() => 0)) };
     const local = (await session.run(Object.fromEntries(session.inputNames.map((name) => [name, feeds[name]])))).logits.data;
     const { data } = await client.infer(model, { input_ids: ids, attention_mask: ids.map(() => 1), token_type_ids: ids.map(() => 0) });
-    for (let i = 0; i < local.length; i += 1) worst = Math.max(worst, Math.abs(local[i] - data[i]));
+    drift[model] = 0;
+    for (let i = 0; i < local.length; i += 1) drift[model] = Math.max(drift[model], Math.abs(local[i] - data[i]));
+    worst = Math.max(worst, drift[model]);
   }
   const sorted = [...times].sort((a, b) => a - b);
   console.log(
     `сети ударений в помощнике: ${times.length} вопросов, первый (с загрузкой) ${times[0].toFixed(0)} мс, ` +
-      `обычный ${sorted[Math.floor(sorted.length / 2)].toFixed(1)} мс; наибольшее расхождение логитов ${worst.toExponential(1)}`
+      `обычный ${sorted[Math.floor(sorted.length / 2)].toFixed(1)} мс; расхождение логитов: ` +
+      Object.entries(drift)
+        .map(([model, value]) => `${model} ${value.toExponential(1)}`)
+        .join(', ')
   );
   if (differences.length) fail(`ответы помощника отличаются от WebAssembly:\n${differences.join('\n')}`);
-  if (worst > 1e-2) fail(`логиты расходятся на ${worst}`);
+  for (const [model, value] of Object.entries(drift)) if (value > tolerance[model]) fail(`логиты ${model} расходятся на ${value}`);
   const unknown = await client.infer('accentNothing', { input_ids: [1] }).then(() => null, (error) => error.message);
   if (!/незнакомая модель/.test(unknown || '')) fail(`незнакомая модель не отвергнута: ${unknown}`);
   console.log('✓ ударения в помощнике — как в браузере');
