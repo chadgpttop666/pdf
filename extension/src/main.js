@@ -25,6 +25,7 @@ import { createOcr } from './ocr.js';
 import { createRecent } from './ui/recent.js';
 import { createNotesSearch } from './ui/notes-search.js';
 import { createAudiobookDialog } from './ui/audiobook-dialog.js';
+import { isBookName } from './books/convert.js';
 import { createSettingsDialog } from './ui/settings-dialog.js';
 import { bindKeyboard } from './keyboard.js';
 import { createHud } from './ui/hud.js';
@@ -210,14 +211,15 @@ function wireDragAndDrop() {
     depth = 0;
     overlay.hidden = true;
     const file = [...(event.dataTransfer?.files || [])].find(
-      (candidate) => candidate.type === 'application/pdf' || /\.pdf$/i.test(candidate.name)
+      (candidate) => candidate.type === 'application/pdf' || /\.pdf$/i.test(candidate.name) || isBookName(candidate.name)
     );
     if (file) await openFile(file);
-    else app.hud.show('Это не PDF-файл');
+    else app.hud.show('Это не PDF и не книга FB2/EPUB');
   });
 }
 
 function wireProgress() {
+  app.eventBus.on('bookconverting', ({ name }) => app.hud.show(`Верстаю книгу «${name}»…`, { duration: 30000 }));
   app.eventBus.on('documentprogress', ({ loaded, total }) => {
     if (!total) return;
     const percent = Math.round((loaded / total) * 100);

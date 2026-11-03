@@ -21,6 +21,8 @@ const ENDNOTES_HEADING = /^(?:примечания|комментарии|при
 const ENDNOTE_ENTRY = /(?:^|(?<=[.!?…»")]\s))(\d{1,3})[.)]\s+(?=[\p{Lu}«"(])/u;
 const ENDNOTES_END = /^(?:список литературы|литература|библиография|указатель|именной указатель|предметный указатель|содержание|оглавление|bibliography|index|contents)\.?$/i;
 const MIN_SENTENCE_LENGTH = 3;
+// Так подписывает PDF вёрстка книг (books/pdf-writer.js).
+const OWN_PRODUCER = 'PDF-chitalka';
 
 /**
  * Сборка читаемого текста страницы.
@@ -604,7 +606,10 @@ export class TextIndex {
       if (this.skipFurniture) {
         const profile = await this.profileFor(pageNumber);
         const box = pageBox(page);
-        filter = (lines) => classifyFurniture(lines, box, profile);
+        // Книгу FB2/EPUB верстала сама читалка: подстрочных сносок в ней нет —
+        // запись «Примечаний» внизу страницы ими не считать.
+        const footnotes = !(await this.ownLayout());
+        filter = (lines) => classifyFurniture(lines, box, profile, { footnotes });
       }
       const { text, entries, refs, softBreaks, furniture } = buildPageText(content.items, filter);
       // По пустой странице (скан до распознавания) язык не определить.
@@ -659,6 +664,30 @@ export class TextIndex {
     return this.endnoteFor(pageNumber, ref);
   }
 
+  /** PDF сверстан самой читалкой (книга FB2/EPUB, books/pdf-writer.js). */
+  ownLayout() {
+    this.ownLayoutPromise ??= this.pdfDocument
+      .getMetadata?.()
+      .then((meta) => meta?.info?.Producer === OWN_PRODUCER)
+      .catch(() => false) ?? Promise.resolve(false);
+    return this.ownLayoutPromise;
+  }
+
+  /** Страница пункта оглавления PDF, чьё название подходит под шаблон; null — нет такого. */
+  async outlinePage(pattern) {
+    const outline = (await this.pdfDocument?.getOutline?.()) ?? [];
+    const queue = [...outline];
+    while (queue.length) {
+      const item = queue.shift();
+      if (pattern.test(item.title?.trim() ?? '')) {
+        const dest = typeof item.dest === 'string' ? await this.pdfDocument.getDestination(item.dest) : item.dest;
+        if (Array.isArray(dest) && dest[0]) return (await this.pdfDocument.getPageIndex(dest[0])) + 1;
+      }
+      queue.push(...(item.items ?? []));
+    }
+    return null;
+  }
+
   /**
    * Раздел примечаний в конце книги: страница с заголовком «Примечания»
    * (или «Комментарии», «Notes») в последних 40% и записи «12. Текст…» до
@@ -668,7 +697,11 @@ export class TextIndex {
   endnotes() {
     this.endnotesPromise ??= (async () => {
       const total = this.numPages;
-      for (let number = Math.max(2, Math.floor(total * 0.6)); number <= total; number += 1) {
+      // Пункт «Примечания» в оглавлении PDF (так верстает книги FB2/EPUB и
+      // сама читалка) — раздел может начаться и раньше последних 40%.
+      const listed = await this.outlinePage(ENDNOTES_HEADING).catch(() => null);
+      const from = Math.min(Math.max(2, Math.floor(total * 0.6)), listed ?? Infinity);
+      for (let number = from; number <= total; number += 1) {
         const page = await this.page(number);
         const paragraphs = page?.text.split('\n') ?? [];
         const heading = paragraphs.findIndex((paragraph) => ENDNOTES_HEADING.test(paragraph.trim()));

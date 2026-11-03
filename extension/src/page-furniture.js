@@ -110,7 +110,7 @@ function noteKeyOf(line, previousKey, first) {
  *   номера строк и спанов; знаки сносок в тексте (спан → номер); тексты
  *   сносок по номерам и начало страницы сносок, перенесённое с прошлой
  */
-export function classifyFurniture(lines, box, profile) {
+export function classifyFurniture(lines, box, profile, { footnotes = true } = {}) {
   const dropLines = new Set();
   const dropSpans = new Set();
   const edges = new Set(edgeLines(lines, box));
@@ -138,7 +138,7 @@ export function classifyFurniture(lines, box, profile) {
   const noteLines = [];
   lines.forEach((line, index) => {
     if (dropLines.has(index)) return;
-    if (!inFootnotes && line.y < footnoteLimit && isSmall(line.fontSize) && FOOTNOTE_START.test(line.text)) {
+    if (footnotes && !inFootnotes && line.y < footnoteLimit && isSmall(line.fontSize) && FOOTNOTE_START.test(line.text)) {
       inFootnotes = true;
     }
     if (!inFootnotes) return;
@@ -169,7 +169,7 @@ export function classifyFurniture(lines, box, profile) {
       }
       current?.items.push(...line.records.map((record) => record.item));
     });
-  } else {
+  } else if (footnotes) {
     // Новых сносок нет, но внизу мелким шрифтом — хвост сноски с прошлой
     // страницы. Узнаём его по строчной букве в начале: фраза продолжается.
     // (Подпись к рисунку или эпиграф начинаются с заглавной — их не трогаем.)

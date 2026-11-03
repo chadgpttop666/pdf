@@ -1,6 +1,6 @@
 {
   "name": "pdf-reader-extension",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Читалка PDF для Firefox: автопрокрутка, озвучка, прокрутка по экрану",
   "private": true,
   "type": "module",
@@ -11,6 +11,7 @@
     "voice:test": "node scripts/make-dummy-voice.mjs",
     "sample:scan": "node scripts/make-scan-pdf.mjs",
     "sample:joint": "node scripts/make-joint-pdf.mjs",
+    "sample:books": "node scripts/make-book-fixtures.mjs",
     "dev": "node scripts/dev-server.mjs",
     "start": "web-ext run --source-dir extension",
     "lint": "web-ext lint --source-dir extension --self-hosted",

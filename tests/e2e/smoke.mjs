@@ -1848,6 +1848,72 @@ try {
   );
   await searchTab.close();
 
+  // ── Книги FB2 и EPUB: вёрстка в PDF прямо в браузере ──
+  const bookTab = await context.newPage();
+  await bookTab.addInitScript(speechMock);
+  bookTab.on('pageerror', (error) => consoleErrors.push(`книги: ${error.message}`));
+  await bookTab.goto(`${BASE}/viewer.html`);
+  await bookTab.waitForFunction(() => window.pdfReaderApp?.loader);
+  const openBook = async (name) => {
+    const previous = await bookTab.evaluate(() => window.pdfReaderApp.readingState?.documentId ?? null);
+    await bookTab.setInputFiles('#filePicker', join(root, 'tests', 'fixtures', name));
+    await bookTab.waitForFunction(
+      (before) => {
+        const state = window.pdfReaderApp.readingState;
+        return state?.record?.name === 'book.pdf' && state.documentId !== before && window.pdfReaderApp.pdfViewer.pagesCount > 0;
+      },
+      previous,
+      { timeout: 30000 }
+    );
+    await bookTab.waitForFunction(() => !document.getElementById('app').classList.contains('booting'), null, { timeout: 10000 });
+    return bookTab.evaluate(async (file) => {
+      const app = window.pdfReaderApp;
+      const library = await import('./src/library.js');
+      const { cleanForSpeech } = await import('./src/text-index.js');
+      const original = new Uint8Array(await (await fetch(`/fixtures/${file}`)).arrayBuffer());
+      const index = app.tts.textIndex;
+      const chapter = await index.page(2);
+      const ref = chapter.refs.find((candidate) => candidate.key === '1');
+      const notes = await index.page(app.pdfViewer.pagesCount);
+      const outline = (await app.loader.pdfDocument.getOutline()).map((item) => item.title);
+      return {
+        id: app.readingState.documentId,
+        expectedId: await library.computeDocumentId(original, original.byteLength),
+        title: app.readingState.record.title,
+        pages: app.pdfViewer.pagesCount,
+        outline,
+        joined: cleanForSpeech(chapter.text).text.includes('непрерывность') && /[а-я]- [а-я]/.test(chapter.text),
+        note: ref ? await index.noteFor(2, ref) : null,
+        notesHeading: notes.text.split('\n')[0],
+        stored: Boolean(await library.loadFile(app.readingState.documentId)),
+      };
+    }, name);
+  };
+  const fb2Book = await openBook('book.fb2');
+  check(
+    'FB2 (windows-1251) свёрстан в PDF: название, главы в оглавлении, перенос склеен, сноска читается на месте, ключ — по самой книге',
+    fb2Book.title === 'Читать с экрана' &&
+      fb2Book.outline.join('|') === 'Глава первая. Красная нить|Глава вторая. Голос и взгляд|Примечания' &&
+      fb2Book.joined &&
+      /непрерывность.*ровный цвет полосы/.test(fb2Book.note ?? '') &&
+      fb2Book.notesHeading === 'Примечания' &&
+      fb2Book.id === fb2Book.expectedId &&
+      fb2Book.stored,
+    JSON.stringify(fb2Book)
+  );
+  const epubBook = await openBook('book.epub');
+  check(
+    'EPUB свёрстан так же: сноски из отдельного файла — в «Примечаниях», текст главы цел',
+    epubBook.title === 'Читать с экрана' &&
+      epubBook.outline.join('|') === fb2Book.outline.join('|') &&
+      epubBook.joined &&
+      epubBook.note === fb2Book.note &&
+      epubBook.id === epubBook.expectedId &&
+      epubBook.id !== fb2Book.id,
+    JSON.stringify(epubBook)
+  );
+  await bookTab.close();
+
   // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──
   const openTab = async () => {
     const tab = await context.newPage();

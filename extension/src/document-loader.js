@@ -2,7 +2,9 @@
 // локальной библиотеки. Наружу отдаёт единый объект источника, по которому
 // потом считается ключ документа и заголовок окна.
 
+import { bookFormat, convertBook, pdfName } from './books/convert.js';
 import { safeFileName, saveBlob } from './dom.js';
+import { computeDocumentId } from './library.js';
 import { filenameFromUrl, pickDocumentName } from './file-name.js';
 import { documentResources, pdfjs } from './viewer-setup.js';
 
@@ -24,6 +26,12 @@ export class DocumentLoader {
 
   /** @param {{ name?: string }} options name — имя файла от сервера, если известно */
   async openUrl(url, { name } = {}) {
+    // Ссылка на книгу FB2/EPUB — скачать и сверстать.
+    if (bookFormat(name || filenameFromUrl(url) || '')) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`сервер ответил ${response.status}`);
+      return this.openBook(new Uint8Array(await response.arrayBuffer()), name || filenameFromUrl(url));
+    }
     const source = {
       kind: 'url',
       url,
@@ -35,8 +43,25 @@ export class DocumentLoader {
 
   async openFile(file) {
     const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (bookFormat(file.name, bytes.subarray(0, 512))) return this.openBook(bytes, file.name);
     const source = { kind: 'file', name: file.name, size: file.size, file };
-    return this.#open({ data: new Uint8Array(buffer), ...documentResources }, source);
+    return this.#open({ data: bytes, ...documentResources }, source);
+  }
+
+  /**
+   * Книга FB2/EPUB: сверстать в PDF (books/) и открыть его. Ключ документа —
+   * по самой книге: открыли её снова — то же место чтения, даже если вёрстка
+   * в новой версии читалки чуть другая. В библиотеку ложится готовый PDF.
+   */
+  async openBook(bytes, name) {
+    this.eventBus.dispatch('bookconverting', { source: this, name });
+    const id = await computeDocumentId(bytes, bytes.byteLength);
+    const book = await convertBook(bytes, name);
+    const pdfFileName = pdfName(name);
+    const file = new File([book.pdf], pdfFileName, { type: 'application/pdf' });
+    const source = { kind: 'file', name: pdfFileName, size: book.pdf.byteLength, file, id, book: { name, format: book.format } };
+    return this.#open({ data: book.pdf, ...documentResources }, source);
   }
 
   async openBytes(bytes, { name = 'документ.pdf', size, id } = {}) {
