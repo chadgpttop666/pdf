@@ -45,6 +45,38 @@ export const NORMATIVE_STRESS = new Map(
   })
 );
 
+// Омографы, у которых второй вариант в обычном тексте почти не встречается
+// («бы́ла», «сво́ему», «ду́ша» — это «быль», «свой» и «душ» в редких формах).
+// Сеть омографов всё же выбирала его то тут, то там — проверено на «Вии»
+// Гоголя и сборнике статей начала XX века; здесь — только частый вариант.
+export const COMMON_STRESS = new Map(
+  Object.entries({
+    была: 'был+а', своему: 'своем+у', кому: 'ком+у', тому: 'том+у', раза: 'р+аза', судя: 'с+удя',
+    душа: 'душ+а', душе: 'душ+е', отчего: 'отчег+о', моя: 'мо+я', отдали: '+отдали', одновременно: 'одновр+еменно',
+  })
+);
+
+// «Уже» — почти всегда «уже́»; «у́же» (сравнительная от «узкий») — только
+// перед «чем» или после «всё», «ещё», «стала»… («дорога становилась всё у́же»).
+const NARROWER_BEFORE = new Set(
+  'всё все ещё еще гораздо намного чуть несколько значительно куда стал стала стало стали становится становятся становился становилась становилось становились сделался сделалась сделалось сделались'.split(' ')
+);
+// «Начала» и «начало» перед инфинитивом — глагол («она начала́ понимать»,
+// «дверей на́чало представляться»), после предлога — существительное
+// («после нача́ла войны»). Сеть путала и то, и другое.
+const INFINITIVE = /(?:ть|ться|ти|тись|чь|чься)$/u;
+const NOUN_AFTER = new Set('после до с со от для без у из около вместо кроме самого самому самом начиная'.split(' '));
+
+/** Ударение по соседним словам; undefined — решает сеть. */
+export function contextStress(word, previous, next) {
+  if (word === 'уже') return next === 'чем' || NARROWER_BEFORE.has(previous) ? '+уже' : 'уж+е';
+  if (word === 'начала' || word === 'начало') {
+    if (INFINITIVE.test(next) && next.length > 3) return word === 'начала' ? 'начал+а' : 'н+ачало';
+    if (NOUN_AFTER.has(previous)) return word === 'начала' ? 'нач+ала' : 'нач+ало';
+  }
+  return undefined;
+}
+
 // «Века» после порядкового в родительном — единственное число: «двадцатого
 // в+ека», а не «век+а» (нейросеть путала с «века́» — множественным).
 const AFTER_GENITIVE_ORDINAL = new Map([
@@ -172,9 +204,13 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
     for (const [i, item] of items.entries()) {
       if (!item.word || item.text.includes('+')) continue;
       const previous = items.slice(0, i).findLast((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
+      const next = items.slice(i + 1).find((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
+      const lower = item.text.toLowerCase();
       const normative =
-        NORMATIVE_STRESS.get(item.text.toLowerCase()) ||
-        (GENITIVE_ORDINAL.test(previous) ? AFTER_GENITIVE_ORDINAL.get(item.text.toLowerCase()) : undefined);
+        NORMATIVE_STRESS.get(lower) ||
+        COMMON_STRESS.get(lower) ||
+        contextStress(lower, previous, next) ||
+        (GENITIVE_ORDINAL.test(previous) ? AFTER_GENITIVE_ORDINAL.get(lower) : undefined);
       if (normative) {
         item.text = fixCapital(item.text, normative);
         texts[i] = normative;

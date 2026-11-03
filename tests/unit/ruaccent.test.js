@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { bertWordSpans, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens } from '../../extension/src/tts/ruaccent.js';
+import { bertWordSpans, contextStress, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens } from '../../extension/src/tts/ruaccent.js';
 
 const DICTIONARY = {
   старый: 'ст+арый', стоял: 'сто+ял', холме: 'холм+е', запер: 'з+апер', дверь: 'дв+ерь', все: 'вс+е', всё: 'вс+ё',
@@ -131,5 +131,32 @@ describe('ударения RUAccent: разметка фразы', () => {
     assert.equal(asked, 0);
     // «Века» после «двадцатого» — единственное число.
     assert.equal(await acc.process('начала двадцатого века'), 'начала двадцатого в+ека');
+  });
+
+  it('редкий вариант омографа не выбирается: «была́», «своему́», «душа́» — без сети', async () => {
+    let asked = 0;
+    const acc = createAccentuator(
+      { stress, yoWords: new Map(), yoHomographs: new Map(), omographs: new Map([['была', ['б+ыла', 'был+а']], ['своему', ['св+оему', 'своем+у']], ['душа', ['д+уша', 'душ+а']]]) },
+      {
+        chooseOmograph: async (context, variants) => {
+          asked += 1;
+          return variants[0];
+        },
+      }
+    );
+    assert.equal(await acc.process('Душа была рада своему делу.'), 'Душ+а был+а рада своем+у делу.');
+    assert.equal(asked, 0);
+  });
+
+  it('«уже» и «начала» — по соседним словам', () => {
+    assert.equal(contextStress('уже', 'сегодня', 'нет'), 'уж+е');
+    assert.equal(contextStress('уже', 'всё', 'и'), '+уже');
+    assert.equal(contextStress('уже', 'стала', 'чем'), '+уже');
+    assert.equal(contextStress('уже', 'дорога', 'чем'), '+уже');
+    assert.equal(contextStress('начала', 'работница', 'понимать'), 'начал+а');
+    assert.equal(contextStress('начала', 'после', 'войны'), 'нач+ала');
+    assert.equal(contextStress('начало', 'дверей', 'представляться'), 'н+ачало');
+    assert.equal(contextStress('начала', 'конференции', 'войны'), undefined);
+    assert.equal(contextStress('замок', 'старый', 'на'), undefined);
   });
 });
