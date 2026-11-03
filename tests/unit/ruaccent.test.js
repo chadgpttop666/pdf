@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { bertWordSpans, contextStress, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens, yoByContext } from '../../extension/src/tts/ruaccent.js';
+import { bertWordSpans, caseBefore, caseForms, contextStress, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens, yoByContext } from '../../extension/src/tts/ruaccent.js';
 
 const DICTIONARY = {
   старый: 'ст+арый', стоял: 'сто+ял', холме: 'холм+е', запер: 'з+апер', дверь: 'дв+ерь', все: 'вс+е', всё: 'вс+ё',
@@ -150,7 +150,7 @@ describe('ударения RUAccent: разметка фразы', () => {
 
   it('«уже» и «начала» — по соседним словам', () => {
     assert.equal(contextStress('уже', 'сегодня', 'нет'), 'уж+е');
-    assert.equal(contextStress('уже', 'всё', 'и'), '+уже');
+    assert.equal(contextStress('уже', 'все', 'привыкли'), 'уж+е', '«все уже привыкли» — не «у́же»');
     assert.equal(contextStress('уже', 'стала', 'чем'), '+уже');
     assert.equal(contextStress('уже', 'дорога', 'чем'), '+уже');
     assert.equal(contextStress('начала', 'работница', 'понимать'), 'начал+а');
@@ -163,6 +163,43 @@ describe('ударения RUAccent: разметка фразы', () => {
     assert.equal(contextStress('потом', 'а', 'и', 'он'), 'п+отом');
     assert.equal(contextStress('потом', 'покрылся', ''), 'пот+ом');
     assert.equal(contextStress('потом', 'весь', 'и', 'кровью'), 'пот+ом');
+  });
+
+  it('родительный ед. или множественное — по слову перед существительным', async () => {
+    const forms = {
+      годом: 'г+одом', лицом: 'лиц+ом', рукой: 'рук+ой', нужная: 'н+ужная', нужное: 'н+ужное', связь: 'св+язь', связью: 'св+язью',
+    };
+    const dictionary = { accent: (word) => forms[word] ?? null };
+    assert.deepEqual(caseForms('года', ['г+ода', 'год+а'], dictionary), { genitive: 'г+ода', plural: 'год+а' });
+    assert.deepEqual(caseForms('лица', ['л+ица', 'лиц+а'], dictionary), { genitive: 'лиц+а', plural: 'л+ица' });
+    assert.deepEqual(caseForms('руки', ['р+уки', 'рук+и'], dictionary), { genitive: 'рук+и', plural: 'р+уки' });
+    assert.equal(caseForms('нужны', ['н+ужны', 'нужн+ы'], dictionary), null, 'краткое прилагательное');
+    assert.equal(caseForms('связи', ['св+язи', 'связ+и'], dictionary), null, 'третье склонение');
+    assert.equal(caseBefore('два'), 'genitive');
+    assert.equal(caseBefore('из'), 'genitive');
+    assert.equal(caseBefore('другой'), 'genitive');
+    assert.equal(caseBefore('миллионного'), 'genitive');
+    assert.equal(caseBefore('его'), undefined, '«его руки» — чаще множественное, решает сеть');
+    assert.equal(caseBefore('все'), 'plural');
+    assert.equal(caseBefore('воздетые'), 'plural');
+    assert.equal(caseBefore('в'), 'plural');
+    assert.equal(caseBefore('стояли'), undefined);
+
+    // В разметке фразы — без сети; без подсказки слева решает сеть.
+    const asked = [];
+    const chooseOmograph = async (context, variants) => {
+      asked.push(context);
+      return variants[0];
+    };
+    const marker = createAccentuator(
+      { stress: dictionary, yoWords: new Map(), yoHomographs: new Map(), omographs: new Map([['руки', ['р+уки', 'рук+и']]]) },
+      { chooseOmograph }
+    );
+    assert.match(await marker.process('Взяла себя в руки.'), / в р\+уки\.$/);
+    assert.equal(await marker.process('Ручка выпала из руки.'), 'Ручка выпала из рук+и.');
+    assert.deepEqual(asked, []);
+    await marker.process('Руки дрожали.');
+    assert.equal(asked.length, 1);
   });
 
   it('«ё» по соседним словам — до сети: «все замерли», «много лет», «о нём»', async () => {

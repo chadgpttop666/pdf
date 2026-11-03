@@ -53,13 +53,15 @@ export const COMMON_STRESS = new Map(
   Object.entries({
     была: 'был+а', своему: 'своем+у', кому: 'ком+у', тому: 'том+у', раза: 'р+аза', судя: 'с+удя',
     душа: 'душ+а', душе: 'душ+е', отчего: 'отчег+о', моя: 'мо+я', отдали: '+отдали', одновременно: 'одновр+еменно',
+    // Сеть выбирала редкий вариант и на корпусе SynTagRus: «т+акая», «мал+о», «р+авно», «+один».
+    такая: 'так+ая', мало: 'м+ало', равно: 'равн+о', широко: 'широк+о', один: 'од+ин', деньги: 'д+еньги', части: 'ч+асти',
   })
 );
 
 // «Уже» — почти всегда «уже́»; «у́же» (сравнительная от «узкий») — только
 // перед «чем» или после «всё», «ещё», «стала»… («дорога становилась всё у́же»).
 const NARROWER_BEFORE = new Set(
-  'всё все ещё еще гораздо намного чуть несколько значительно куда стал стала стало стали становится становятся становился становилась становилось становились сделался сделалась сделалось сделались'.split(' ')
+  'ещё еще гораздо намного чуть несколько значительно куда стал стала стало стали становится становятся становился становилась становилось становились сделался сделалась сделалось сделались'.split(' ')
 );
 // «Начала» и «начало» перед инфинитивом — глагол («она начала́ понимать»,
 // «дверей на́чало представляться»), после предлога — существительное
@@ -113,13 +115,80 @@ export function yoByContext(word, previous, next, afterNext, last = false) {
   return undefined;
 }
 
+// Существительные, где родительный единственного и множественное различаются
+// только ударением: «стороны́ / сто́роны», «го́рода / города́», «руки́ / ру́ки».
+// Какое из них нужно, обычно видно по слову перед ним, а сеть омографов в
+// этих словах ошибалась чаще всего (корпус SynTagRus).
+const FEW = new Set('два две три четыре оба обе полтора полторы'.split(' '));
+const GENITIVE_PREPOSITIONS = new Set(
+  'из от у до без для около возле после вокруг среди мимо кроме вместо против напротив ради с со посреди внутри вдоль из-за из-под'.split(' ')
+);
+const GENITIVE_ADJECTIVE = /(?:ого|его|ой|ей)$/u;
+const NOT_GENITIVE_ADJECTIVE = new Set('него кого чего ничего никого людей детей'.split(' '));
+const PLURAL_BEFORE = new Set('все эти те мои твои свои наши ваши чьи'.split(' '));
+const ACCUSATIVE_PREPOSITIONS = new Set('в во на за под через про сквозь'.split(' '));
+
+/** Падеж по слову перед существительным: 'genitive' | 'plural' | undefined. */
+export function caseBefore(previous) {
+  if (FEW.has(previous) || GENITIVE_PREPOSITIONS.has(previous)) return 'genitive';
+  if (previous.length > 3 && GENITIVE_ADJECTIVE.test(previous) && !NOT_GENITIVE_ADJECTIVE.has(previous)) return 'genitive';
+  if (PLURAL_BEFORE.has(previous) || ACCUSATIVE_PREPOSITIONS.has(previous)) return 'plural';
+  if (previous.length > 3 && PLURAL_ADJECTIVE.test(previous)) return 'plural';
+  return undefined;
+}
+
+/** Номер ударной гласной в «з+амок» / «звёзды» (с нуля); -1 — не помечена. */
+function stressedVowel(variant) {
+  const plus = variant.indexOf('+');
+  const at = plus >= 0 ? plus + 1 : variant.indexOf('ё');
+  return at < 0 ? -1 : vowelCount(variant.slice(0, at));
+}
+
+/**
+ * Омограф-существительное «родительный ед. / именительный мн.»: какой
+ * вариант какой. Родительный единственного ударен там же, где творительный
+ * (он в словаре однозначен): «го́дом — го́да», «лицо́м — лица́», «руко́й — руки́»;
+ * множественное — другой вариант.
+ * @param stress словарь ударений (accent(word) → «сл+ово» | null)
+ * @returns {{ genitive: string, plural: string } | null}
+ */
+export function caseForms(word, variants, stress) {
+  if (variants.length !== 2 || !/[ыиая]$/u.test(word)) return null;
+  const last = vowelCount(word) - 1;
+  if (last < 1) return null;
+  const ending = variants.find((variant) => stressedVowel(variant) === last);
+  const stem = variants.find((variant) => stressedVowel(variant) >= 0 && stressedVowel(variant) < last);
+  if (!ending || !stem) return null;
+  const base = word.slice(0, -1);
+  const known = (form) => stress.accent(form);
+  const feminine = /[ыи]$/u.test(word);
+  // Краткое прилагательное («нужны́ / ну́жны», «права́») и третье склонение («в связи́») — не сюда.
+  if ((known(`${base}ая`) && known(`${base}ое`)) || (feminine && known(`${base}ь`))) return null;
+  for (const end of feminine ? ['ой', 'ей', 'ёй'] : ['ом', 'ем', 'ём']) {
+    const instrumental = known(base + end);
+    if (!instrumental) continue;
+    return stressedVowel(instrumental) === vowelCount(instrumental) - 1 ? { genitive: ending, plural: stem } : { genitive: stem, plural: ending };
+  }
+  return null;
+}
+
 // «Потом» сеть омографов RUAccent путает наоборот — и в оригинале на Python:
 // наречие («а потом пошли») читает «пот+ом», а «покрылся потом» — «п+отом»
 // (видимо, варианты перепутаны в её обучающих данных). Наречие — почти всегда.
+const SELF = { самому: 'самом+у', самого: 'самог+о', самом: 'сам+ом', самой: 'сам+ой' };
 const SWEAT_BEFORE = /^(?:покры|обли|исход|залит|пропит|пахн|пахл|запах|мокр)/u;
 
 /** Ударение по соседним словам; undefined — решает сеть. */
 export function contextStress(word, previous, next, afterNext = '') {
+  // «В прошлом году́», но «к двадцатому го́ду», «по го́ду».
+  if (word === 'году') return /(?:ому|ему)$/u.test(previous) || previous === 'к' || previous === 'по' ? 'г+оду' : 'год+у';
+  // «Стоит ли», «стоит начать» — «сто́ит».
+  if (word === 'стоит' && (next === 'ли' || (INFINITIVE.test(next) && next.length > 3))) return 'ст+оит';
+  // «Самому себе», «самого себя» — от «сам».
+  if (next.startsWith('себ') && SELF[word]) return SELF[word];
+  // Третье склонение: «в сети́», «в связи́ с» — но «торговой се́ти», «средства свя́зи».
+  if (word === 'сети') return previous === 'в' || previous === 'во' || previous === 'на' ? 'сет+и' : 'с+ети';
+  if (word === 'связи') return previous === 'в' || previous === 'во' ? 'связ+и' : 'св+язи';
   if (word === 'потом') return SWEAT_BEFORE.test(previous) || (next === 'и' && afterNext.startsWith('кров')) ? 'пот+ом' : 'п+отом';
   if (word === 'уже') return next === 'чем' || NARROWER_BEFORE.has(previous) ? '+уже' : 'уж+е';
   if (word === 'начала' || word === 'начало') {
@@ -280,9 +349,13 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
         texts[i] = normative;
         continue;
       }
-      const variants = omographs.get(item.text.toLowerCase());
-      if (!variants?.length || !models.chooseOmograph) continue;
-      const chosen = variants.length === 1 ? variants[0] : await models.chooseOmograph(omographContext(texts, i), variants);
+      const variants = omographs.get(lower);
+      if (!variants?.length) continue;
+      // «Из го́рода», «две стороны́», «все города́» — падеж виден по слову перед ним.
+      const forms = caseForms(lower, variants, stress);
+      const wanted = forms ? caseBefore(previous) : undefined;
+      if (!wanted && !models.chooseOmograph) continue;
+      const chosen = wanted ? forms[wanted] : variants.length === 1 ? variants[0] : await models.chooseOmograph(omographContext(texts, i), variants);
       item.text = fixCapital(item.text, chosen);
       texts[i] = chosen;
     }
