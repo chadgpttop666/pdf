@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { bertWordSpans, contextStress, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens } from '../../extension/src/tts/ruaccent.js';
+import { bertWordSpans, contextStress, createAccentuator, fixCapital, groupWordPieces, omographContext, tokens, yoByContext } from '../../extension/src/tts/ruaccent.js';
 
 const DICTIONARY = {
   старый: 'ст+арый', стоял: 'сто+ял', холме: 'холм+е', запер: 'з+апер', дверь: 'дв+ерь', все: 'вс+е', всё: 'вс+ё',
@@ -158,5 +158,36 @@ describe('ударения RUAccent: разметка фразы', () => {
     assert.equal(contextStress('начало', 'дверей', 'представляться'), 'н+ачало');
     assert.equal(contextStress('начала', 'конференции', 'войны'), undefined);
     assert.equal(contextStress('замок', 'старый', 'на'), undefined);
+  });
+
+  it('«ё» по соседним словам — до сети: «все замерли», «много лет», «о нём»', async () => {
+    assert.equal(yoByContext('все', '', 'замерли', ''), false);
+    assert.equal(yoByContext('все', 'и', 'дружно', 'закричали'), false);
+    assert.equal(yoByContext('все', '', 'мы', 'должны'), false);
+    assert.equal(yoByContext('все', 'быть', '', '', true), undefined, '«как» нет — решает сеть');
+    assert.equal(yoByContext('все', 'как', '', '', true), false);
+    assert.equal(yoByContext('все', 'заказали', 'кроме', 'дмитрия'), false);
+    assert.equal(yoByContext('все', 'бросив', 'кроме', 'чемоданов'), undefined);
+    assert.equal(yoByContext('все', '', 'равно', 'ушли'), undefined, '«всё равно» — сеть');
+    assert.equal(yoByContext('все', 'он', 'еще', 'ждал'), undefined, '«всё ещё» — сеть');
+    assert.equal(yoByContext('все', 'вспоминала', 'новые', 'и'), undefined);
+    assert.equal(yoByContext('лет', 'много', '', ''), false);
+    assert.equal(yoByContext('небо', 'ясное', '', ''), false);
+    assert.equal(yoByContext('нем', 'о', 'говорили', ''), true);
+    assert.equal(yoByContext('нем', 'был', 'как', 'рыба'), false);
+    assert.equal(yoByContext('чем', 'лучше', 'вчера', ''), false);
+    assert.equal(yoByContext('полет', 'долгий', '', ''), true);
+    assert.equal(yoByContext('берет', 'он', '', ''), undefined);
+
+    // Решённое правилами в сеть не идёт; остальное — как раньше.
+    const asked = [];
+    const yoLabels = async (text) => {
+      asked.push(text);
+      return bertWordSpans(text).map(() => 'YO');
+    };
+    assert.equal(await accentuator({ yoLabels }).process('Все замерли.'), 'Вс+е замерли.');
+    assert.deepEqual(asked, []);
+    assert.equal(await accentuator({ yoLabels }).process('Все это было зря.'), 'Вс+ё +это б+ыло зр+я.');
+    assert.equal(asked.length, 1);
   });
 });

@@ -67,6 +67,52 @@ const NARROWER_BEFORE = new Set(
 const INFINITIVE = /(?:ть|ться|ти|тись|чь|чься)$/u;
 const NOUN_AFTER = new Set('после до с со от для без у из около вместо кроме самого самому самом начиная'.split(' '));
 
+// «Ё» в двояких словах (все/всё, нем/нём) по соседним словам — до сети.
+// Сеть «ё» RUAccent на корпусе SynTagRus (Universal Dependencies, где по
+// грамматике видно, какое слово) ошибалась в 7–8 % таких слов: «Вс+ё
+// замерли», «прошло много лёт», «ясное нёбо», «о нем». С правилами ниже
+// ошибок втрое меньше: 74 → 24 на тестовой части корпуса, по которой
+// правила не подбирались; испорчены два спорных места («все переврали»).
+const YO_NEVER = new Set('лет летом самое далеко небо неба небу небом небе'.split(' '));
+const YO_ALWAYS = new Set('объем счету полет полета полету полетом полете'.split(' '));
+// «О нём», «во всём», «в моём», «о чём» — после предлога; без него — «нем», «всем», «моем», «чем».
+const YO_AFTER_PREPOSITION = new Set(['нем', 'всем', 'моем', 'чем']);
+const LOCATIVE_PREPOSITIONS = new Set('о об обо в во на при'.split(' '));
+// «Все» — подлежащее во множественном числе: дальше глагол или прилагательное
+// во множественном («все замерли», «все торопятся», «все высокие»), «все мы»,
+// «все друг с другом», «все до одного», «как все.».
+const PLURAL_VERB = /(?:ли|лись|ют|ются|ят|ятся)$/u;
+const PLURAL_ADJECTIVE = /(?:ые|кие|гие|хие|шие|щие|жие|чие)$/u;
+const PLURAL_SHORT = new Set('должны нужны рады готовы правы согласны живы равны'.split(' '));
+const BEFORE_VERB = new Set('вдруг сразу дружно разом вместе тут сейчас теперь опять снова тоже давно уже'.split(' '));
+const ALL_OF = new Set('мы вы они друг до'.split(' '));
+const NOT_SUBJECT_BEFORE = new Set('на за про через в во'.split(' '));
+
+const pluralVerb = (word) => word.length > 3 && PLURAL_VERB.test(word);
+
+/**
+ * «Ё» по соседним словам (все слова строчные, без «ё»).
+ * @param last за словом — знак или конец фразы
+ * @returns {boolean|undefined} true — с «ё», false — без, undefined — решает сеть
+ */
+export function yoByContext(word, previous, next, afterNext, last = false) {
+  if (YO_NEVER.has(word)) return false;
+  if (YO_ALWAYS.has(word)) return true;
+  if (YO_AFTER_PREPOSITION.has(word)) return LOCATIVE_PREPOSITIONS.has(previous);
+  if (word === 'слезы') return previous !== 'ни';
+  if (word !== 'все') return undefined;
+  if (ALL_OF.has(next)) return false;
+  // «Все, кроме…» — но «бросив всё, кроме…», «на всё, кроме…».
+  if ((next === 'кроме' || next === 'включая') && !NOT_SUBJECT_BEFORE.has(previous) && !/в$/u.test(previous)) return false;
+  if (previous === 'как' && last) return false;
+  if (pluralVerb(next) || PLURAL_SHORT.has(next)) return false;
+  // «Всё новые и новые» — оборот; остальные прилагательные — «все высокие».
+  if (next.length > 3 && PLURAL_ADJECTIVE.test(next) && next !== 'новые') return false;
+  // «Все дружно закричали», «все удивлённо посмотрели» — но «всё равно ушли».
+  if ((BEFORE_VERB.has(next) || (next.length > 4 && next.endsWith('о') && next !== 'равно')) && pluralVerb(afterNext)) return false;
+  return undefined;
+}
+
 /** Ударение по соседним словам; undefined — решает сеть. */
 export function contextStress(word, previous, next) {
   if (word === 'уже') return next === 'чем' || NARROWER_BEFORE.has(previous) ? '+уже' : 'уж+е';
@@ -188,7 +234,15 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
       const known = yoWords.get(item.text.toLowerCase());
       if (known) item.text = fixCapital(item.text, known);
     }
-    const doubtful = words.filter((item) => yoHomographs.has(item.text.toLowerCase()));
+    const plain = (item) => item?.text.toLowerCase().replace(/ё/g, 'е') ?? '';
+    const doubtful = [];
+    for (const item of words.filter((word) => yoHomographs.has(word.text.toLowerCase()))) {
+      const at = words.indexOf(item);
+      const index = items.indexOf(item);
+      const decided = yoByContext(plain(item), plain(words[at - 1]), plain(words[at + 1]), plain(words[at + 2]), !items[index + 1]?.word);
+      if (decided === undefined) doubtful.push(item);
+      else if (decided) item.text = fixCapital(item.text, yoHomographs.get(item.text.toLowerCase()));
+    }
     if (!doubtful.length || !models.yoLabels) return;
     const lower = sentence.toLowerCase();
     const labels = await models.yoLabels(lower);
