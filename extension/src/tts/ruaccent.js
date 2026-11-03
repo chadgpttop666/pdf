@@ -113,8 +113,14 @@ export function yoByContext(word, previous, next, afterNext, last = false) {
   return undefined;
 }
 
+// «Потом» сеть омографов RUAccent путает наоборот — и в оригинале на Python:
+// наречие («а потом пошли») читает «пот+ом», а «покрылся потом» — «п+отом»
+// (видимо, варианты перепутаны в её обучающих данных). Наречие — почти всегда.
+const SWEAT_BEFORE = /^(?:покры|обли|исход|залит|пропит|пахн|пахл|запах|мокр)/u;
+
 /** Ударение по соседним словам; undefined — решает сеть. */
-export function contextStress(word, previous, next) {
+export function contextStress(word, previous, next, afterNext = '') {
+  if (word === 'потом') return SWEAT_BEFORE.test(previous) || (next === 'и' && afterNext.startsWith('кров')) ? 'пот+ом' : 'п+отом';
   if (word === 'уже') return next === 'чем' || NARROWER_BEFORE.has(previous) ? '+уже' : 'уж+е';
   if (word === 'начала' || word === 'начало') {
     if (INFINITIVE.test(next) && next.length > 3) return word === 'начала' ? 'начал+а' : 'н+ачало';
@@ -258,12 +264,16 @@ export function createAccentuator({ stress, yoWords, yoHomographs, omographs }, 
     for (const [i, item] of items.entries()) {
       if (!item.word || item.text.includes('+')) continue;
       const previous = items.slice(0, i).findLast((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
-      const next = items.slice(i + 1).find((other) => other.word)?.text.toLowerCase().replace(/\+/g, '') || '';
+      const [next = '', afterNext = ''] = items
+        .slice(i + 1)
+        .filter((other) => other.word)
+        .slice(0, 2)
+        .map((other) => other.text.toLowerCase().replace(/\+/g, ''));
       const lower = item.text.toLowerCase();
       const normative =
         NORMATIVE_STRESS.get(lower) ||
         COMMON_STRESS.get(lower) ||
-        contextStress(lower, previous, next) ||
+        contextStress(lower, previous, next, afterNext) ||
         (GENITIVE_ORDINAL.test(previous) ? AFTER_GENITIVE_ORDINAL.get(lower) : undefined);
       if (normative) {
         item.text = fixCapital(item.text, normative);

@@ -158,6 +158,11 @@ describe('ударения RUAccent: разметка фразы', () => {
     assert.equal(contextStress('начало', 'дверей', 'представляться'), 'н+ачало');
     assert.equal(contextStress('начала', 'конференции', 'войны'), undefined);
     assert.equal(contextStress('замок', 'старый', 'на'), undefined);
+    // «Потом» сеть читает наоборот — решаем без неё.
+    assert.equal(contextStress('потом', 'а', 'пошли'), 'п+отом');
+    assert.equal(contextStress('потом', 'а', 'и', 'он'), 'п+отом');
+    assert.equal(contextStress('потом', 'покрылся', ''), 'пот+ом');
+    assert.equal(contextStress('потом', 'весь', 'и', 'кровью'), 'пот+ом');
   });
 
   it('«ё» по соседним словам — до сети: «все замерли», «много лет», «о нём»', async () => {
