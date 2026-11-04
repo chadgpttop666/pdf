@@ -356,8 +356,10 @@ mod tests {
     #[test]
     fn unpacked_path_only_absolute() {
         let id = "abc";
-        let prefs = json!({ "extensions": { "settings": { "abc": { "path": "/home/u/PDF" }, "def": { "path": "def/1.0_0" } } } });
-        assert_eq!(unpacked_path(&prefs, id), Some(PathBuf::from("/home/u/PDF")));
+        // Абсолютный путь на этой системе: на Windows — с буквой диска.
+        let absolute = std::env::temp_dir().join("PDF");
+        let prefs = json!({ "extensions": { "settings": { "abc": { "path": absolute }, "def": { "path": "def/1.0_0" } } } });
+        assert_eq!(unpacked_path(&prefs, id), Some(absolute));
         assert_eq!(unpacked_path(&prefs, "def"), None);
         assert_eq!(unpacked_path(&prefs, "nope"), None);
     }
