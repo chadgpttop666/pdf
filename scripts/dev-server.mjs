@@ -37,8 +37,10 @@ const types = {
 
 // Адреса как у сайтов, где хвост ссылки — не имя файла: /download/8f2a9c.
 // По /download/ сервер называет файл в Content-Disposition, по /nameless/ — нет.
+// /attachment/ — файл просят скачать (Content-Disposition: attachment), а не открыть;
+// /octet/ — PDF как поток байтов (application/octet-stream).
 const SERVER_NAME = 'Как читать с экрана — книга.pdf';
-const disguised = { download: true, nameless: false };
+const disguised = { download: 'inline', nameless: null, attachment: 'attachment', octet: null };
 
 // Фикстуры лежат вне extension/, поэтому маппим их на отдельный префикс.
 function resolvePath(urlPath) {
@@ -50,7 +52,7 @@ function resolvePath(urlPath) {
 }
 
 const server = createServer(async (req, res) => {
-  const route = /^\/(download|nameless)\//.exec(req.url || '')?.[1];
+  const route = /^\/(download|nameless|attachment|octet)\//.exec(req.url || '')?.[1];
   const filePath = route ? join(fixturesDir, 'russian.pdf') : resolvePath(req.url || '/');
   const allowed = filePath.startsWith(extensionDir) || filePath.startsWith(fixturesDir);
   if (!allowed) {
@@ -62,11 +64,11 @@ const server = createServer(async (req, res) => {
     if (!info.isFile()) throw new Error('not a file');
     const type = extname(filePath);
     res.writeHead(200, {
-      'Content-Type': types[type] || 'application/octet-stream',
+      'Content-Type': route === 'octet' ? 'application/octet-stream' : types[type] || 'application/octet-stream',
       'Content-Length': info.size,
       'Cache-Control': 'no-store',
       ...(csp && ['.html', '.js', '.mjs'].includes(type) ? { 'Content-Security-Policy': csp } : {}),
-      ...(disguised[route] ? { 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(SERVER_NAME)}` } : {}),
+      ...(disguised[route] ? { 'Content-Disposition': `${disguised[route]}; filename*=UTF-8''${encodeURIComponent(SERVER_NAME)}` } : {}),
     });
     createReadStream(filePath).pipe(res);
   } catch {

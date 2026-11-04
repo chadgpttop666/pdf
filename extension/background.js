@@ -1,12 +1,19 @@
 // Фоновая страница: перехватывает открытие PDF и уводит их в наш вьюер, а
 // выделенный на любой странице текст читает вслух прямо там.
 //
-// Firefox, в отличие от Chrome, сохранил блокирующий webRequest — им можно
-// посмотреть на Content-Type ответа и подменить страницу до её отрисовки.
-// Если разрешение почему-то недоступно, остаётся запасной путь по адресу
-// страницы, а вручную документ всегда можно открыть из самого вьюера.
+// Firefox сохранил блокирующий webRequest — им можно посмотреть на
+// Content-Type ответа и подменить страницу до её отрисовки. В Chrome его нет:
+// там то же делают правила declarativeNetRequest (src/pdf-rules.js). Если не
+// вышло ни то ни другое, остаётся запасной путь по адресу страницы, а вручную
+// документ всегда можно открыть из самого вьюера.
+//
+// В Chrome этот файл — service worker: он засыпает через полминуты простоя и
+// просыпается на событие, поэтому слушатели регистрируются сразу при старте,
+// а состояние читается заново из хранилища.
 
+import './browser-shim.js';
 import { filenameFromContentDisposition } from './src/file-name.js';
+import { PDF_RULE_IDS, pdfRules } from './src/pdf-rules.js';
 
 const VIEWER_URL = browser.runtime.getURL('viewer.html');
 const SPEAK_URL = browser.runtime.getURL('speak.html');
@@ -25,7 +32,10 @@ async function loadSettings() {
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[SETTINGS_KEY]) {
-    interceptEnabled = changes[SETTINGS_KEY].newValue?.interceptPdfLinks !== false;
+    const enabled = changes[SETTINGS_KEY].newValue?.interceptPdfLinks !== false;
+    if (enabled === interceptEnabled) return;
+    interceptEnabled = enabled;
+    updatePdfRules();
   }
 });
 
@@ -87,26 +97,65 @@ try {
 // загрузки. Регистрация без исключения ещё не значит, что перехват работает,
 // поэтому дополнительно спрашиваем само разрешение.
 let blockingActive = blockingRegistered;
-browser.permissions
-  ?.contains({ permissions: ['webRequestBlocking'] })
-  .then((granted) => {
-    blockingActive = blockingRegistered && granted;
-    if (!blockingActive) console.info('PDF-читалка: перехват работает по адресу страницы');
-  })
-  .catch(() => {
-    blockingActive = blockingRegistered;
-  });
+if (blockingRegistered) {
+  browser.permissions
+    ?.contains({ permissions: ['webRequestBlocking'] })
+    .then((granted) => {
+      blockingActive = granted;
+      if (!blockingActive) console.info('PDF-читалка: перехват работает по адресу страницы');
+    })
+    .catch(() => {});
+}
 
-browser.tabs.onUpdated.addListener(
-  (tabId, changeInfo) => {
-    if (blockingActive || !interceptEnabled) return;
-    if (changeInfo.status !== 'loading' || !changeInfo.url) return;
-    if (changeInfo.url.startsWith(VIEWER_URL)) return;
-    if (!/^https?:/i.test(changeInfo.url) || !looksLikePdfUrl(changeInfo.url)) return;
-    browser.tabs.update(tabId, { url: viewerFor(changeInfo.url) });
-  },
-  { properties: ['status'] }
-);
+// Chrome: правила перехвата. Динамические — переживают перезапуск браузера,
+// даже если service worker после него ещё не просыпался. Поэтому считаем их
+// действующими сразу: иначе вкладка, разбудившая воркер ссылкой на .pdf, ушла
+// бы во вьюер дважды — правилом и запасным путём.
+let rulesActive = !blockingRegistered && typeof browser.declarativeNetRequest?.updateDynamicRules === 'function';
+
+// Chrome умеет пускать расширения к локальным файлам (галочка «Разрешить
+// доступ к URL файлов»): тогда и PDF, открытый двойным щелчком, — в читалку.
+let fileAccess = false;
+browser.extension
+  ?.isAllowedFileSchemeAccess?.()
+  .then((allowed) => {
+    fileAccess = Boolean(allowed);
+  })
+  .catch(() => {});
+
+async function syncPdfRules() {
+  const dnr = browser.declarativeNetRequest;
+  if (blockingRegistered || !dnr?.updateDynamicRules) return false;
+  await dnr.updateDynamicRules({ removeRuleIds: PDF_RULE_IDS, addRules: interceptEnabled ? pdfRules(VIEWER_URL) : [] });
+  return true;
+}
+
+function updatePdfRules() {
+  syncPdfRules()
+    .then((active) => {
+      rulesActive = active;
+    })
+    .catch((error) => {
+      rulesActive = false;
+      console.warn('Правила перехвата PDF не встали — перехват по адресу страницы', error);
+    });
+}
+
+function onTabUpdated(tabId, changeInfo) {
+  const { url } = changeInfo;
+  if (!interceptEnabled || changeInfo.status !== 'loading' || !url) return;
+  if (url.startsWith(VIEWER_URL) || !looksLikePdfUrl(url)) return;
+  // Локальный файл заголовков не имеет — его правила и webRequest не видят.
+  const localFile = fileAccess && /^file:/i.test(url);
+  if (!localFile && (blockingActive || rulesActive || !/^https?:/i.test(url))) return;
+  browser.tabs.update(tabId, { url: viewerFor(url) });
+}
+try {
+  // Фильтр событий есть только в Firefox; Chrome на второй аргумент ругается.
+  browser.tabs.onUpdated.addListener(onTabUpdated, { properties: ['status'] });
+} catch {
+  browser.tabs.onUpdated.addListener(onTabUpdated);
+}
 
 browser.action.onClicked.addListener(() => {
   browser.tabs.create({ url: VIEWER_URL });
@@ -133,7 +182,7 @@ browser.runtime.onInstalled.addListener(() => {
   browser.contextMenus.create({
     id: 'open-reader',
     title: 'Открыть PDF-читалку',
-    contexts: ['browser_action', 'action'],
+    contexts: ['action'],
   });
 });
 
@@ -183,7 +232,8 @@ async function speakOnPage(tab, frameId) {
     if (withSelection) {
       const frame = { tabId: tab.id, frameIds: [withSelection.frameId] };
       await browser.scripting.insertCSS({ target: frame, css: SPEAK_CSS });
-      await browser.scripting.executeScript({ target: frame, files: ['content/speak-overlay.js'] });
+      // Обёртка первой: в Chrome у скрипта на странице есть только chrome.*.
+      await browser.scripting.executeScript({ target: frame, files: ['browser-shim.js', 'content/speak-overlay.js'] });
       const [started] = await browser.scripting.executeScript({ target: frame, func: () => globalThis.__pdfReaderSpeak.fromSelection() });
       return Boolean(started?.result);
     }
@@ -256,4 +306,4 @@ browser.commands?.onCommand.addListener(async (command) => {
   if (tab) speakSelection(tab);
 });
 
-loadSettings();
+loadSettings().then(updatePdfRules);

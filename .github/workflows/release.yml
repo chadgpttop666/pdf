@@ -15,6 +15,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'scripts/make-updates-json.mjs'
+      - 'scripts/build-chrome.mjs'
+      - 'chrome/**'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 
@@ -78,14 +80,22 @@ jobs:
           --api-secret "$AMO_JWT_SECRET"
           --approval-timeout 1800000
 
+      # Тот же код для Chrome, Edge и других браузеров на Chromium (scripts/build-chrome.mjs).
+      - name: Сборка для Chrome
+        if: steps.plan.outputs.release == 'true'
+        run: node scripts/build-chrome.mjs
+
       - name: Релиз
         if: steps.plan.outputs.release == 'true'
         run: |
           version="${{ steps.plan.outputs.version }}"
           xpi="pdf-reader-$version.xpi"
+          chrome="pdf-reader-chrome-$version.zip"
           mv signed/*.xpi "$xpi"
+          mv "dist/$chrome" "$chrome"
           node scripts/make-updates-json.mjs "$xpi" > updates.json
-          gh release create "v$version" "$xpi" updates.json \
+          gh release create "v$version" "$xpi" "$chrome" updates.json \
             --target "$GITHUB_SHA" \
             --title "PDF-читалка $version" \
-            --notes "Подписанная версия для Firefox. Установка: скачайте $xpi и перетащите в окно Firefox. Уже установленная читалка обновится сама."
+            --notes "Firefox: скачайте $xpi и перетащите в окно Firefox — версия подписана Mozilla, установленная читалка обновится сама.
+          Chrome, Edge, Яндекс Браузер: скачайте $chrome, распакуйте в постоянную папку, откройте chrome://extensions, включите «Режим разработчика» и нажмите «Загрузить распакованное расширение» — подробно в README."

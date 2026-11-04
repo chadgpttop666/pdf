@@ -18,6 +18,14 @@ const WAIT_INSTALL_MS = 10 * 60 * 1000;
 
 const api = () => globalThis.browser;
 
+/**
+ * Программа регистрирует себя только для Firefox (реестр и формат Mozilla):
+ * Chrome её не найдёт, а разрешения на неё в сборке для Chrome нет.
+ */
+export function browserSupportsHelper() {
+  return globalThis.location?.protocol !== 'chrome-extension:';
+}
+
 export async function hasPermission() {
   try {
     return Boolean(await api()?.permissions?.contains(HELPER_PERMISSIONS));
@@ -156,6 +164,7 @@ export function createHelperFlow(tera) {
   const fail = (error) => set({ step: 'error', message: error?.message || String(error) });
 
   async function check() {
+    if (!browserSupportsHelper()) return set({ step: 'unsupported', browser: true });
     if (!(await platformFile())) return set({ step: 'unsupported' });
     if (!(await hasPermission())) return set({ step: 'missing' });
     const status = await tera.helperStatus();
@@ -247,7 +256,9 @@ export function describeHelper(state) {
     case 'checking':
       return 'Проверяю…';
     case 'unsupported':
-      return 'Ускоритель есть для Windows и Linux (64 бита).';
+      return state.browser
+        ? 'Ускоритель пока работает только в Firefox. Здесь голоса TeraTTS синтезируются прямо в браузере — медленнее, но так же.'
+        : 'Ускоритель есть для Windows и Linux (64 бита).';
     case 'missing':
       return state.message || 'Не установлен.';
     case 'downloading':

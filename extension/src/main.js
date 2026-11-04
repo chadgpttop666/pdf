@@ -151,8 +151,10 @@ export function openFile(file) {
 
 export function openUrl(url, options) {
   // Расширения Firefox не имеют доступа к file:// — честно скажем об этом
-  // вместо невнятной ошибки загрузки.
-  if (/^file:/i.test(url) && extensionApi) {
+  // вместо невнятной ошибки загрузки. Chrome такой доступ даёт, если в
+  // настройках расширения включено «Разрешить доступ к URL файлов»: туда
+  // локальные файлы и приходят — фоновая страница ведёт их, только когда можно.
+  if (/^file:/i.test(url) && extensionApi && location.protocol !== 'chrome-extension:') {
     stopOpening();
     app.hud.show('Локальный файл нельзя открыть по ссылке — перетащите его в окно или нажмите «Открыть»', {
       duration: 8000,
@@ -319,8 +321,14 @@ function keepTabLoaded(tabId) {
   });
 }
 
-/** Адрес документа и имя файла, которое фоновая страница узнала у сервера. */
+/**
+ * Адрес документа и имя файла, которое фоновая страница узнала у сервера.
+ * ?src=… — от правила перехвата в Chrome: оно подставляет адрес как есть, не
+ * кодируя, со своими ? и &, поэтому адрес — вся строка после «src=».
+ */
 function documentFromQuery() {
+  const raw = /^\?src=(.+)$/s.exec(location.search)?.[1];
+  if (raw) return isSafeDocumentUrl(raw) ? { url: raw } : null;
   const params = new URLSearchParams(location.search);
   const file = params.get('file');
   if (!file || !isSafeDocumentUrl(file)) return null;

@@ -170,20 +170,23 @@ export function createSettingsDialog(app) {
   /** Ускоритель TeraTTS: установить, запустить установщик, удалить. */
   function renderTeraHelper(section) {
     const state = helperFlow.state;
-    if (state.step === 'unsupported') {
-      section.hidden = true;
-      return;
-    }
+    // Нет сборки для этой системы — карточку прячем; не тот браузер — говорим прямо.
+    const otherBrowser = state.step === 'unsupported' && state.browser;
+    section.hidden = state.step === 'unsupported' && !otherBrowser;
+    if (section.hidden) return;
     const button = helperButton(state);
+    const about = 'Небольшая программа синтезирует речь вне браузера: в 4–5 раз быстрее, процессор почти свободен, памяти — на гигабайт меньше. ';
     section.replaceChildren(
       el('span', { class: 'label' }, [
         el('span', {}, `Ускоритель TeraTTS${state.step === 'working' ? ' · работает' : ''}`),
         el(
           'span',
           { class: 'hint' },
-          'Небольшая программа синтезирует речь вне браузера: в 4–5 раз быстрее, процессор почти свободен, памяти — на гигабайт меньше. ' +
-            'Ставится отсюда: «Установить» → разрешить → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. ' +
-            'Без неё TeraTTS работает в браузере, как раньше.'
+          otherBrowser
+            ? about
+            : about +
+                'Ставится отсюда: «Установить» → разрешить → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. ' +
+                'Без неё TeraTTS работает в браузере, как раньше.'
         ),
       ]),
       el('div', { class: 'piper-actions' }, [

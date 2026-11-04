@@ -11,5 +11,5 @@
     // Хранилище недоступно — тема придёт из настроек чуть позже.
   }
   app.classList.add('booting');
-  if (new URLSearchParams(location.search).has('file')) app.classList.add('opening');
+  if (/^\?(src=|.*\bfile=)/.test(location.search)) app.classList.add('opening');
 })();
