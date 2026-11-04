@@ -365,7 +365,10 @@ async function checkAccent() {
     dynamic: true,
     exclude: (name) => name.includes('attention'),
   }).model;
-  const blobs = { accentYo: new Blob([read('yoModel')]), accentOmograph: new Blob([omographHelper]), accentStress: new Blob([read('accentModel')]) };
+  // Сеть ударений — тоже с весами uint8 (tera-pack.js, accentHelper): авторы RUAccent
+  // квантовали её uint8 × int8, и на AVX2 без VNNI логиты уходили на 0,13.
+  const accentHelper = quantizeModel(new Uint8Array(read('accentModel')), { unsignedWeights: true, dynamic: false }).model;
+  const blobs = { accentYo: new Blob([read('yoModel')]), accentOmograph: new Blob([omographHelper]), accentStress: new Blob([accentHelper]) };
   let started = performance.now();
   const sent = await syncModels(client, (await client.hello()).files, blobs, null, Object.keys(HELPER_ACCENT_MODELS));
   console.log(sent.length ? `передал модели ударений (${sent.join(', ')}) за ${((performance.now() - started) / 1000).toFixed(1)} с` : 'модели ударений уже у помощника');
@@ -411,11 +414,12 @@ async function checkAccent() {
     if (a !== b) differences.push(`ударение: ${a} ≠ ${b}`);
     console.log(`незнакомое слово → ${b}`);
   }
-  // Сами логиты на одном входе. Сеть ударений — во float: расхождение на
-  // уровне округления. Сеть омографов квантует входы слоёв на лету: на другом
-  // процессоре float-часть считает в другом порядке, и значение на границе
-  // ступени квантования уходит в соседнюю — логиты сдвигаются на десятые
-  // (на серверах CI ≈ 0,13), решения при этом те же (сверены выше).
+  // Сами логиты на одном входе. Обе сети квантуют входы слоёв на лету.
+  // Сеть ударений маленькая: расхождение на уровне округления. В сети
+  // омографов на другом процессоре float-часть считает в другом порядке, и
+  // значение на границе ступени квантования уходит в соседнюю — логиты
+  // сдвигаются на десятые (на серверах CI ≈ 0,13), решения при этом те же
+  // (сверены выше).
   const sessions = { accentStress: read('accentModel'), accentOmograph: omograph };
   const tolerance = { accentStress: 1e-3, accentOmograph: 0.5 };
   const drift = {};

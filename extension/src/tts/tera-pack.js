@@ -86,6 +86,9 @@ export const DERIVED_PARTS = {
   // Runtime на AVX2 без VNNI (Haswell и др.) переполняется на uint8 × int8 и
   // выбирает омографы неверно; uint8 × uint8 — без переполнения (onnx-quantize.js).
   omographHelper: { from: 'omographModel', int8Weights: true, unsignedWeights: true, exclude: ['attention'] },
+  // Сеть ударений для ускорителя: её авторы квантовали так же (uint8 × int8),
+  // и на AVX2 без VNNI логиты уходили на десятые. Веса — в uint8, ответ тот же.
+  accentHelper: { from: 'accentModel', unsignedWeights: true, dynamic: false },
   // Исходный сэмплер, только веса вынесены из тела цикла: звук тот же до
   // бита, а памяти onnxruntime берёт в 2,5 раза меньше (750 МБ → 280 МБ).
   samplerLight: { from: 'sampler', hoist: true, dynamic: false },

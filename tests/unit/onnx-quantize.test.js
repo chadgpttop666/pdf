@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as ort from 'onnxruntime-web';
 import { quantizeModel, quantizeWeights } from '../../extension/src/tts/onnx-quantize.js';
-import { FLOAT, INT64, attribute, bytes, int, message, model, node, str, tensor, valueInfo } from '../../scripts/onnx-proto.mjs';
+import { FLOAT, INT64, attribute, bytes, int, message, model, node, str, tensor, valueInfo, varint } from '../../scripts/onnx-proto.mjs';
 
 ort.env.wasm.numThreads = 1;
 
@@ -108,6 +108,26 @@ function loopNet() {
 /** int8-тензор (как в сжатой модели омографов): raw_data. */
 const int8Tensor = (name, dims, values) =>
   bytes(5, message(...dims.map((dim) => int(1, dim)), int(2, 3), bytes(9, Buffer.from(Int8Array.from(values).buffer)), str(8, name)));
+
+/** int8-скаляр в int32_data (так нулевые точки записаны в моделях RUAccent). */
+const int8Scalar = (name, value) => bytes(5, message(int(2, 3), bytes(5, varint(value)), str(8, name)));
+
+/** Как сеть ударений RUAccent: вход квантуется на лету, MatMulInteger с int8-весами. */
+function matMulIntegerNet(zero = 0) {
+  const q = (count, seed) => random(count, seed).map((v) => Math.round(v * 254));
+  return model({
+    name: 'ruaccent-like',
+    nodes: [
+      node('DynamicQuantizeLinear', ['x'], ['x_q', 'x_scale', 'x_zero']),
+      node('MatMulInteger', ['x_q', 'w_q', 'x_zero', 'w_zero'], ['y_int']),
+      node('Cast', ['y_int'], ['y_float'], [attribute('to', FLOAT)]),
+      node('Mul', ['y_float', 'x_scale'], ['y']),
+    ],
+    initializers: [int8Tensor('w_q', [8, 5], q(40, 21)), int8Scalar('w_zero', zero)],
+    inputs: [['x', FLOAT, [3, 8]]],
+    outputs: [['y', FLOAT, [3, 5]]],
+  });
+}
 
 /** Веса int8 «только веса», как у модели омографов: Cast → Mul(масштаб) → MatMul / Gather. */
 function int8Net() {
@@ -220,5 +240,21 @@ describe('быстрая версия ONNX-модели (onnx-quantize.js)', () 
     assert.deepEqual(Array.from(b), Array.from(a));
     const text = new TextDecoder().decode(unsigned);
     assert.ok(text.includes('::u8_zero'), 'нулевая точка весов на месте');
+  });
+
+  it('готовый MatMulInteger с int8-весами (RUAccent) — на uint8: ответ тот же до бита', async () => {
+    const source = matMulIntegerNet();
+    const { model: unsigned, quantized } = quantizeModel(new Uint8Array(source), { dynamic: false, unsignedWeights: true });
+    assert.equal(quantized, 1);
+    const text = new TextDecoder().decode(unsigned);
+    assert.ok(text.includes('w_q::u8') && text.includes('w_q::u8_zero'), 'веса uint8 и нулевая точка 128');
+    const x = new ort.Tensor('float32', Float32Array.from(random(24, 31).map((v) => v * 3)), [3, 8]);
+    const a = (await run(source, { x })).y;
+    const b = (await run(unsigned, { x })).y;
+    assert.deepEqual(b, a);
+    // Нулевая точка весов не 0 — узел не трогаем.
+    assert.equal(quantizeModel(new Uint8Array(matMulIntegerNet(3)), { dynamic: false, unsignedWeights: true }).quantized, 0);
+    // Без unsignedWeights — как было.
+    assert.equal(quantizeModel(new Uint8Array(source), { dynamic: false }).quantized, 0);
   });
 });

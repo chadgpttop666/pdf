@@ -223,13 +223,15 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
    * там ещё нет. false — считаем в браузере, как раньше.
    */
   /**
-   * Модели ударений для ускорителя. Омографы — своя версия (omographHelper,
-   * веса uint8): не собралась — исходная, в ней веса разворачиваются во float.
+   * Модели ударений для ускорителя. Омографы и ударения — свои версии
+   * (omographHelper, accentHelper: веса uint8, без переполнения на AVX2 без
+   * VNNI); не собрались — исходные.
    */
   async function accentBlobs() {
     const omograph = (await ensureDerived('omographHelper')) ? 'omographHelper' : 'omographModel';
-    const parts = await loadParts(['yoModel', omograph, 'accentModel']);
-    return { accentYo: parts.yoModel, accentOmograph: parts[omograph], accentStress: parts.accentModel };
+    const stress = (await ensureDerived('accentHelper')) ? 'accentHelper' : 'accentModel';
+    const parts = await loadParts(['yoModel', omograph, stress]);
+    return { accentYo: parts.yoModel, accentOmograph: parts[omograph], accentStress: parts[stress] };
   }
 
   async function helperAccent(connection, onProgress) {

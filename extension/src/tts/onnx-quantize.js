@@ -19,6 +19,8 @@
 // (Haswell…Skylake) умножает uint8 на int8 командой vpmaddubsw, которая
 // насыщается на 16 битах, — и омографы выбирались неверно («з+амок» на
 // двери). uint8 × uint8 считается без переполнения, а результат тот же.
+// Так же переписываются и готовые MatMulInteger с int8-весами: сеть ударений
+// RUAccent квантована авторами именно так.
 //
 // Сэмплеру можно задать число шагов потока: модель — цикл из 8 шагов Эйлера
 // (sampler_trip_count и total_step внутри цикла). 6 шагов — на четверть
@@ -180,8 +182,19 @@ function parseTensor(buf, f) {
     else if (field.field === 8) tensor.name = text(buf, field);
     else if (field.field === 9) tensor.raw = field;
     else if (field.field === 4) tensor.floats = field;
+    else if (field.field === 5) tensor.int32 = field;
   }
   return tensor;
+}
+
+/** Значение скаляра int8 (нулевая точка) или null. */
+function int8Scalar(buf, tensor) {
+  if (tensor?.dataType !== INT8 || tensor.dims.some((dim) => dim !== 1)) return null;
+  if (tensor.raw) return tensor.raw.end - tensor.raw.start === 1 ? (buf[tensor.raw.start] << 24) >> 24 : null;
+  if (!tensor.int32) return null;
+  // int32_data: упакованный (wire 2) или одно число; int8 записан как int32.
+  const value = tensor.int32.wire === 2 ? readVarint(buf, tensor.int32.start)[0] : tensor.int32.value;
+  return (Number(BigInt.asIntN(32, BigInt(value))) << 24) >> 24;
 }
 
 /** Значения float-тензора (копия: в буфере модели они могут лежать невыровненно). */
@@ -415,6 +428,22 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
       return unsignedCopies.get(name);
     }
 
+    /**
+     * Готовый MatMulInteger с int8-весами (так квантованы модели RUAccent) —
+     * на uint8-копию весов: uint8 × uint8 без переполнения на AVX2 без VNNI.
+     * Только нулевая точка весов 0 (→ 128): иначе узел остаётся как есть.
+     */
+    function unsignedMatMulInteger(node) {
+      const [input, weight, inputZero = '', weightZero] = node.inputs;
+      if (tensors.get(weight)?.dataType !== INT8) return null;
+      if (weightZero && int8Scalar(buf, tensors.get(weightZero)) !== 0) return null;
+      const unsigned = unsignedWeight(weight);
+      if (!unsigned) return null;
+      if (weightZero) unit(weightZero);
+      const attributes = node.attributes.map((attribute) => buf.subarray(attribute.start, attribute.end));
+      return nodeProto('MatMulInteger', [input, unsigned[0], inputZero, unsigned[1]], node.outputs, node.name, attributes);
+    }
+
     function packedMatMul(node, out) {
       const { q: w, scale } = packed.get(node.inputs[1]);
       const [q, qScale, qZero] = quantizedInput(node.inputs[0], out);
@@ -458,6 +487,14 @@ export function quantizeModel(model, { steps = null, exclude = () => false, int8
         quantized += 1;
         nodeBytes.push(...out.map((bytes) => lengthField(1, bytes)));
         continue;
+      }
+      if (unsignedWeights && node.opType === 'MatMulInteger') {
+        const rewritten = unsignedMatMulInteger(node);
+        if (rewritten) {
+          quantized += 1;
+          nodeBytes.push(lengthField(1, rewritten));
+          continue;
+        }
       }
       if (int8Weights) {
         nodeBytes.push(node.bytes);
