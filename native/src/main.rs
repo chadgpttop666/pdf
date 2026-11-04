@@ -1,13 +1,16 @@
 // Ускоритель озвучки PDF-читалки: синтез TeraTTS вне браузера, в несколько
 // раз быстрее, чем в WebAssembly.
 //
-// Firefox запускает программу сам (native messaging) и говорит с ней через
-// stdin/stdout. Запущенная руками — двойным щелчком по скачанному файлу —
-// она ставит себя: копирует в папку пользователя и регистрирует для Firefox.
-// Без консоли: окно не мелькает, когда её запускает браузер.
+// Браузер (Firefox, Chrome, Edge…) запускает программу сам (native messaging)
+// и говорит с ней через stdin/stdout. Запущенная руками — двойным щелчком по
+// скачанному файлу — она ставит себя: копирует в папку пользователя и
+// регистрирует для Firefox и браузеров на Chromium. В Chrome она же обновляет
+// распакованное расширение (browsers.rs). Без консоли: окно не мелькает,
+// когда её запускает браузер.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod accent;
+mod browsers;
 mod host;
 mod install;
 mod noise;
@@ -24,8 +27,12 @@ pub const PROTOCOL: u32 = 1;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |flag: &str| args.iter().any(|arg| arg == flag);
-    // Firefox передаёт путь к манифесту и id расширения.
-    if args.iter().any(|arg| arg == EXTENSION_ID || arg.ends_with(".json")) {
+    // Firefox передаёт путь к манифесту и id расширения, Chrome — адрес
+    // расширения (chrome-extension://…/) и на Windows ещё --parent-window.
+    if args
+        .iter()
+        .any(|arg| arg == EXTENSION_ID || arg.ends_with(".json") || arg.starts_with("chrome-extension://"))
+    {
         std::process::exit(host::run());
     }
     if has("--version") {
@@ -44,7 +51,7 @@ fn main() {
             (_, Err(error)) => Err(format!("ONNX Runtime не загружается: {error}")),
         }
     } else {
-        install::install().map(|_| "Ускоритель озвучки установлен.\n\nВернитесь в Firefox — читалка подключит его сама.".to_string())
+        install::install().map(|_| "Ускоритель озвучки установлен.\n\nВернитесь в браузер — читалка подключит его сама.".to_string())
     };
     match result {
         Ok(message) => {

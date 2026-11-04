@@ -18,14 +18,6 @@ const WAIT_INSTALL_MS = 10 * 60 * 1000;
 
 const api = () => globalThis.browser;
 
-/**
- * Программа регистрирует себя только для Firefox (реестр и формат Mozilla):
- * Chrome её не найдёт, а разрешения на неё в сборке для Chrome нет.
- */
-export function browserSupportsHelper() {
-  return globalThis.location?.protocol !== 'chrome-extension:';
-}
-
 export async function hasPermission() {
   try {
     return Boolean(await api()?.permissions?.contains(HELPER_PERMISSIONS));
@@ -57,11 +49,25 @@ export async function fetchHelper() {
   return { blob, sha256: file.sha256, name: file.name };
 }
 
-function downloadFinished(id) {
+// Неподписанный .exe Chrome и Edge могут счесть «опасным»: загрузка ждёт,
+// пока человек не подтвердит. Без подтверждения файла нет.
+const SAFE = new Set(['safe', 'accepted']);
+
+function downloadFinished(id, onDanger) {
   const downloads = api().downloads;
+  let asked = false;
+  const askToKeep = () => {
+    if (asked) return;
+    asked = true;
+    onDanger?.();
+    // Chrome покажет вопрос «Сохранить файл?»; в Firefox такого метода нет.
+    downloads.acceptDanger?.(id)?.catch?.(() => {});
+  };
   return new Promise((resolve, reject) => {
     const listener = (delta) => {
-      if (delta.id !== id || !delta.state) return;
+      if (delta.id !== id) return;
+      if (delta.danger?.current && !SAFE.has(delta.danger.current)) askToKeep();
+      if (!delta.state) return;
       if (delta.state.current === 'complete') done(resolve);
       else if (delta.state.current === 'interrupted') done(() => reject(new Error(`Загрузка прервалась: ${delta.error?.current || 'ошибка'}`)));
     };
@@ -71,17 +77,24 @@ function downloadFinished(id) {
     };
     downloads.onChanged.addListener(listener);
     // Маленький файл мог докачаться раньше, чем мы начали слушать.
-    downloads.search({ id }).then(([item]) => item?.state === 'complete' && done(resolve));
+    downloads.search({ id }).then(([item]) => {
+      if (item?.state === 'complete') done(resolve);
+      else if (item?.danger && !SAFE.has(item.danger)) askToKeep();
+    });
   });
 }
 
-/** Скачать установщик в «Загрузки». @returns id загрузки */
-export async function downloadInstaller() {
+/**
+ * Скачать установщик в «Загрузки».
+ * @param onDanger браузер просит подтвердить, что файл можно сохранить
+ * @returns id загрузки
+ */
+export async function downloadInstaller({ onDanger } = {}) {
   const { blob, name } = await fetchHelper();
   const url = URL.createObjectURL(blob);
   try {
     const id = await api().downloads.download({ url, filename: name, conflictAction: 'overwrite', saveAs: false });
-    await downloadFinished(id);
+    await downloadFinished(id, onDanger);
     return id;
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
@@ -164,7 +177,6 @@ export function createHelperFlow(tera) {
   const fail = (error) => set({ step: 'error', message: error?.message || String(error) });
 
   async function check() {
-    if (!browserSupportsHelper()) return set({ step: 'unsupported', browser: true });
     if (!(await platformFile())) return set({ step: 'unsupported' });
     if (!(await hasPermission())) return set({ step: 'missing' });
     const status = await tera.helperStatus();
@@ -211,10 +223,12 @@ export function createHelperFlow(tera) {
       const mine = (attempt += 1);
       const asked = api().permissions.request(HELPER_PERMISSIONS);
       (async () => {
-        if (!(await asked)) return set({ step: 'missing', message: 'Без разрешения Firefox ускоритель не подключить' });
+        if (!(await asked)) return set({ step: 'missing', message: 'Без разрешения браузера ускоритель не подключить' });
         if ((await tera.helperStatus()).installed) return check();
         set({ step: 'downloading' });
-        const downloadId = await downloadInstaller();
+        const downloadId = await downloadInstaller({
+          onDanger: () => mine === attempt && set({ step: 'downloading', message: 'Браузер спрашивает, сохранить ли файл, — нажмите «Сохранить» (в окне или в списке загрузок).' }),
+        });
         if (mine === attempt) set({ step: 'ready', downloadId });
       })().catch(fail);
     },
@@ -256,13 +270,11 @@ export function describeHelper(state) {
     case 'checking':
       return 'Проверяю…';
     case 'unsupported':
-      return state.browser
-        ? 'Ускоритель пока работает только в Firefox. Здесь голоса TeraTTS синтезируются прямо в браузере — медленнее, но так же.'
-        : 'Ускоритель есть для Windows и Linux (64 бита).';
+      return 'Ускоритель есть для Windows и Linux (64 бита).';
     case 'missing':
       return state.message || 'Не установлен.';
     case 'downloading':
-      return 'Скачиваю установщик (≈20 МБ)…';
+      return state.message || 'Скачиваю установщик (≈20 МБ)…';
     case 'ready':
       return state.message || 'Установщик скачан — запустите его.';
     case 'waiting':

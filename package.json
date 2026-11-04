@@ -20,7 +20,7 @@
     "icons:chrome": "node scripts/make-chrome-icons.mjs",
     "test": "node --test tests/unit/*.test.js",
     "test:e2e": "node tests/e2e/smoke.mjs",
-    "test:chrome": "node scripts/build-chrome.mjs && node tests/e2e/chrome.mjs"
+    "test:chrome": "node scripts/build-chrome.mjs && node tests/e2e/chrome.mjs && node tests/e2e/chrome-helper.mjs && node tests/e2e/chrome-update.mjs"
   },
   "devDependencies": {
     "@diffusionstudio/piper-wasm": "1.0.0",

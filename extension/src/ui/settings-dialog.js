@@ -5,6 +5,7 @@ import { $, clear, closeOnBackdropClick, el, formatBytes, on } from '../dom.js';
 import { SETTINGS_SCHEMA, get as getSetting, updateSettings } from '../settings.js';
 import * as library from '../library.js';
 import { createHelperFlow, describeHelper, helperButton } from '../tts/helper-install.js';
+import { canInstall, describeUpdate, isChromeExtension, readState as readUpdateState, STATE_KEY as UPDATE_STATE_KEY } from '../updates.js';
 import { loadUserStress, onUserStressChange, removeUserStress, showStress, userStressEntries } from '../tts/user-stress.js';
 
 export function createSettingsDialog(app) {
@@ -170,23 +171,23 @@ export function createSettingsDialog(app) {
   /** Ускоритель TeraTTS: установить, запустить установщик, удалить. */
   function renderTeraHelper(section) {
     const state = helperFlow.state;
-    // Нет сборки для этой системы — карточку прячем; не тот браузер — говорим прямо.
-    const otherBrowser = state.step === 'unsupported' && state.browser;
-    section.hidden = state.step === 'unsupported' && !otherBrowser;
-    if (section.hidden) return;
+    if (state.step === 'unsupported') {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
     const button = helperButton(state);
-    const about = 'Небольшая программа синтезирует речь вне браузера: в 4–5 раз быстрее, процессор почти свободен, памяти — на гигабайт меньше. ';
     section.replaceChildren(
       el('span', { class: 'label' }, [
         el('span', {}, `Ускоритель TeraTTS${state.step === 'working' ? ' · работает' : ''}`),
         el(
           'span',
           { class: 'hint' },
-          otherBrowser
-            ? about
-            : about +
-                'Ставится отсюда: «Установить» → разрешить → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. ' +
-                'Без неё TeraTTS работает в браузере, как раньше.'
+          'Небольшая программа синтезирует речь вне браузера: в 4–5 раз быстрее, процессор почти свободен, памяти — на гигабайт меньше. ' +
+            (isChromeExtension()
+              ? 'Ставится отсюда: «Установить» → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. В Chrome она же обновляет и саму читалку. '
+              : 'Ставится отсюда: «Установить» → разрешить → запустить скачанный файл. Прав администратора и настройки не нужно, обновляется сама. ') +
+            'Без неё TeraTTS работает в браузере, как раньше.'
         ),
       ]),
       el('div', { class: 'piper-actions' }, [
@@ -194,6 +195,45 @@ export function createSettingsDialog(app) {
         el('span', { class: 'hint' }, describeHelper(state)),
       ])
     );
+  }
+
+  /** Версия, состояние обновления и кнопка (updates.js). */
+  async function renderUpdates(section) {
+    const api = globalThis.browser;
+    const current = api.runtime.getManifest().version;
+    const state = await readUpdateState().catch(() => ({}));
+    const install = canInstall(state);
+    const button = el(
+      'button',
+      {
+        type: 'button',
+        onclick: async () => {
+          button.disabled = true;
+          button.textContent = install ? 'Обновляю…' : 'Проверяю…';
+          await api.runtime.sendMessage({ type: install ? 'pdf-reader-install-update' : 'pdf-reader-check-update' }).catch(() => {});
+          renderUpdates(section);
+        },
+      },
+      install ? 'Обновить сейчас' : 'Проверить обновления'
+    );
+    section.replaceChildren(
+      el('span', { class: 'label' }, [
+        el('span', {}, `PDF-читалка ${current}`),
+        el(
+          'span',
+          { class: 'hint' },
+          isChromeExtension()
+            ? 'Chrome сам обновляет только расширения из своего магазина. Эту читалку обновляет ускоритель: скачивает новую версию с GitHub, сверяет её и ставит в папку расширения. Закладки и заметки остаются.'
+            : 'Обновления скачивает Firefox — подписанные Mozilla, из релизов на GitHub. Закладки и заметки остаются.'
+        ),
+      ]),
+      el('div', { class: 'piper-actions' }, [button, el('span', { class: 'hint' }, describeUpdate(state, current, { auto: getSetting('autoUpdate') }))])
+    );
+  }
+  if (globalThis.browser?.runtime?.id) {
+    globalThis.browser.storage?.onChanged?.addListener((changes, area) => {
+      if (area === 'local' && changes[UPDATE_STATE_KEY]) document.querySelectorAll('.updates').forEach(renderUpdates);
+    });
   }
 
   /** Нейроголоса Piper: скачать, удалить, загрузить из файлов. */
@@ -348,6 +388,14 @@ export function createSettingsDialog(app) {
         const section = el('div', { class: 'setting piper-voices tera-helper' });
         grid.append(section);
         renderTeraHelper(section);
+        continue;
+      }
+      if (item.custom === 'updates') {
+        // Вьюер, открытый как веб-страница (режим отладки), — не расширение: обновлять нечего.
+        if (!globalThis.browser?.runtime?.id) continue;
+        const section = el('div', { class: 'setting piper-voices updates' });
+        grid.append(section);
+        renderUpdates(section);
         continue;
       }
       if (item.custom === 'userStress') {

@@ -74,7 +74,9 @@ export function createHelperClient(port) {
   });
 
   port.onDisconnect.addListener((source) => {
-    closed = new Error(source?.error?.message || port.error?.message || 'Ускоритель отключился');
+    // В Chrome причина — в runtime.lastError: не прочитать её — ошибка в консоли.
+    const lastError = globalThis.chrome?.runtime?.lastError;
+    closed = new Error(source?.error?.message || port.error?.message || lastError?.message || 'Ускоритель отключился');
     for (const [id, entry] of waiting) {
       waiting.delete(id);
       entry.reject(closed);
@@ -190,6 +192,13 @@ export function createHelperClient(port) {
     },
     /** Новая версия помощника: он поставит её себе сам. */
     update: (blob, sha256, onProgress) => upload('update', { sha256 }, blob, onProgress),
+    // ── Chrome: обновление распакованного расширения (updates.js) ──
+    /** Папки, откуда браузеры загрузили расширение: [{ path, version }]. */
+    extensionPaths: async () => (await request({ type: 'ext-paths' })).paths ?? [],
+    /** Файл новой версии — помощник собирает версию в своей папке. */
+    stageExtensionFile: (version, name, blob) => upload('ext-stage', { version, name }, blob),
+    /** Собранную версию — во все папки расширения. */
+    applyExtension: (version, files) => request({ type: 'ext-apply', version, files }),
     uninstall: () => request({ type: 'uninstall' }),
     close() {
       if (closed) return;

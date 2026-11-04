@@ -15,6 +15,7 @@ on:
     branches: [main, claude/pdf-reader-app-lm05nj]
     paths:
       - 'native/**'
+      - 'chrome/key.txt'
       - 'scripts/helper-check.mjs'
       - 'extension/src/tts/tera-native.js'
       - 'extension/src/tts/tera-text.js'
@@ -117,15 +118,21 @@ jobs:
 
       - name: Установка (как двойным щелчком, только без окна)
         run: |
+          # Linux: регистрация для Chrome — только если Chrome есть (его папка настроек).
+          if [ "$RUNNER_OS" = Linux ]; then mkdir -p "$HOME/.config/google-chrome"; fi
           ./${{ matrix.asset }} --install --quiet
           if [ "$RUNNER_OS" = Windows ]; then
             # C:/… — такой путь понимают и bash, и Node.
             installed="$(cygpath -m "$LOCALAPPDATA")/PdfReaderTTS/pdf-reader-tts.exe"
             reg query 'HKCU\Software\Mozilla\NativeMessagingHosts\pdf_reader_tts' //ve
+            reg query 'HKCU\Software\Google\Chrome\NativeMessagingHosts\pdf_reader_tts' //ve
+            reg query 'HKCU\Software\Microsoft\Edge\NativeMessagingHosts\pdf_reader_tts' //ve
+            cat "$(cygpath -m "$LOCALAPPDATA")/PdfReaderTTS/pdf_reader_tts.chrome.json"
             reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PdfReaderTTS' //v DisplayName
           else
             installed="$HOME/.local/share/pdf-reader-tts/pdf-reader-tts"
             cat "$HOME/.mozilla/native-messaging-hosts/pdf_reader_tts.json"
+            cat "$HOME/.config/google-chrome/NativeMessagingHosts/pdf_reader_tts.json"
           fi
           ls -la "$(dirname "$installed")"
           "$installed" --check --quiet
@@ -164,8 +171,9 @@ jobs:
           sleep 8
           if [ "$RUNNER_OS" = Windows ]; then
             if reg query 'HKCU\Software\Mozilla\NativeMessagingHosts\pdf_reader_tts' > /dev/null 2>&1; then echo 'ключ остался'; exit 1; fi
+            if reg query 'HKCU\Software\Google\Chrome\NativeMessagingHosts\pdf_reader_tts' > /dev/null 2>&1; then echo 'ключ Chrome остался'; exit 1; fi
             if reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PdfReaderTTS' > /dev/null 2>&1; then echo 'запись в «Приложениях» осталась'; exit 1; fi
-          elif [ -e "$HOME/.mozilla/native-messaging-hosts/pdf_reader_tts.json" ]; then echo 'манифест остался'; exit 1; fi
+          elif [ -e "$HOME/.mozilla/native-messaging-hosts/pdf_reader_tts.json" ] || [ -e "$HOME/.config/google-chrome/NativeMessagingHosts/pdf_reader_tts.json" ]; then echo 'манифест остался'; exit 1; fi
           if [ -e "$INSTALLED" ]; then echo 'программа осталась'; exit 1; fi
 
       - uses: actions/upload-artifact@v4

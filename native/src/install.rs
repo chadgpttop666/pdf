@@ -1,7 +1,7 @@
 //! Установка без прав администратора: программа копирует себя в папку
-//! пользователя, кладёт рядом ONNX Runtime и регистрируется для Firefox
-//! (манифест native messaging и, на Windows, ключ в HKCU). Удаление — всё
-//! обратно.
+//! пользователя, кладёт рядом ONNX Runtime и регистрируется для Firefox и
+//! браузеров на Chromium (манифест native messaging и, на Windows, ключи в
+//! HKCU; browsers.rs). Удаление — всё обратно.
 
 #[cfg(windows)]
 use crate::VERSION;
@@ -238,6 +238,7 @@ pub fn install() -> Result<PathBuf> {
     }
     write_atomically(&manifest_file, manifest(&exe).as_bytes())?;
     register(&manifest_file, &exe)?;
+    crate::browsers::register(&exe)?;
     Ok(dir)
 }
 
@@ -276,8 +277,13 @@ fn register(_manifest_file: &Path, _exe: &Path) -> Result<()> {
     Ok(())
 }
 
-/// После самообновления — новая версия и в «Приложениях и возможностях».
+/// После самообновления — новая версия и в «Приложениях и возможностях», а
+/// поставленный ещё для одного Firefox ускоритель — и для браузеров на Chromium.
 pub fn refresh() {
+    let exe = installed_exe();
+    if exe.exists() && !crate::browsers::registered(&exe) {
+        let _ = crate::browsers::register(&exe);
+    }
     #[cfg(windows)]
     {
         use winreg::enums::HKEY_CURRENT_USER;
@@ -312,6 +318,7 @@ pub fn uninstall() -> Result<()> {
         let _ = user.delete_subkey_all(UNINSTALL_KEY);
     }
     let _ = fs::remove_file(manifest_path());
+    crate::browsers::unregister();
     let dir = data_dir();
     let _ = fs::remove_dir_all(dir.join("models"));
     if fs::remove_dir_all(&dir).is_err() && dir.exists() {

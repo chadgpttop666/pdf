@@ -93,9 +93,11 @@ jobs:
           chrome="pdf-reader-chrome-$version.zip"
           mv signed/*.xpi "$xpi"
           mv "dist/$chrome" "$chrome"
+          # По нему версия для Chrome узнаёт о новой версии (src/updates.js).
+          mv dist/updates-chrome.json updates-chrome.json
           node scripts/make-updates-json.mjs "$xpi" > updates.json
-          gh release create "v$version" "$xpi" "$chrome" updates.json \
+          gh release create "v$version" "$xpi" "$chrome" updates.json updates-chrome.json \
             --target "$GITHUB_SHA" \
             --title "PDF-читалка $version" \
             --notes "Firefox: скачайте $xpi и перетащите в окно Firefox — версия подписана Mozilla, установленная читалка обновится сама.
-          Chrome, Edge, Яндекс Браузер: скачайте $chrome, распакуйте в постоянную папку, откройте chrome://extensions, включите «Режим разработчика» и нажмите «Загрузить распакованное расширение» — подробно в README."
+          Chrome, Edge, Яндекс Браузер: скачайте $chrome, распакуйте в постоянную папку, откройте chrome://extensions, включите «Режим разработчика» и нажмите «Загрузить распакованное расширение» — подробно в README. С ускорителем TeraTTS читалка в Chrome дальше обновляется сама."

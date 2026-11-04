@@ -12,6 +12,7 @@
 // а состояние читается заново из хранилища.
 
 import './browser-shim.js';
+import { applyWhenIdle, checkForUpdate, isChromeExtension, onFirefoxUpdateAvailable, reopenAfterUpdate } from './src/updates.js';
 import { filenameFromContentDisposition } from './src/file-name.js';
 import { PDF_RULE_IDS, pdfRules } from './src/pdf-rules.js';
 
@@ -32,6 +33,11 @@ async function loadSettings() {
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[SETTINGS_KEY]) {
+    // Включили «Обновлять автоматически» — сразу проверить и поставить.
+    const auto = (settings) => settings?.autoUpdate !== false;
+    if (auto(changes[SETTINGS_KEY].newValue) && !auto(changes[SETTINGS_KEY].oldValue)) {
+      (isChromeExtension() ? checkForUpdate({ force: true }) : applyWhenIdle()).catch(() => {});
+    }
     const enabled = changes[SETTINGS_KEY].newValue?.interceptPdfLinks !== false;
     if (enabled === interceptEnabled) return;
     interceptEnabled = enabled;
@@ -297,8 +303,45 @@ async function speakSelection(tab, info = {}) {
   await session.set({ speakWindowId: window.id });
 }
 
+// ── Обновления (src/updates.js): галочка «Обновлять автоматически» ──────
+browser.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === 'update') reopenAfterUpdate().catch(() => {});
+});
+// Firefox скачал новую версию — поставить, когда вкладки читалки закрыты.
+browser.runtime.onUpdateAvailable?.addListener((details) => {
+  onFirefoxUpdateAvailable(details).catch(() => {});
+});
+// Закрыли вкладку — может быть, последнюю вкладку читалки: пора ставить.
+// Чуть позже: закрываемая страница какое-то время ещё числится открытой.
+browser.tabs.onRemoved.addListener(() => {
+  setTimeout(() => applyWhenIdle().catch(() => {}), 1000);
+});
+// Кнопки в настройках читалки.
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'pdf-reader-check-update') {
+    checkForUpdate({ force: true }).then(sendResponse, (error) => sendResponse({ status: 'error', message: error.message }));
+    return true;
+  }
+  if (message?.type === 'pdf-reader-install-update') {
+    // Готовая версия — поставить сейчас; в Chrome ещё не скачанная — скачать и поставить.
+    (isChromeExtension() ? checkForUpdate({ force: true, install: true }) : applyWhenIdle({ now: true })).then(sendResponse, (error) =>
+      sendResponse({ status: 'error', message: error.message })
+    );
+    return true;
+  }
+  return undefined;
+});
+if (isChromeExtension()) {
+  // Service worker просыпается часто, а проверка — не чаще раза в 6 часов;
+  // при запуске браузера вкладок читалки ещё нет — лучшее время поставить.
+  browser.runtime.onStartup.addListener(() => {
+    checkForUpdate().catch(() => {});
+  });
+  checkForUpdate().catch(() => {});
+}
+
 // Для проверок: меню правой кнопки автотестом не нажать.
-globalThis.pdfReaderBackground = { speakSelection };
+globalThis.pdfReaderBackground = { speakSelection, checkForUpdate, applyWhenIdle };
 
 browser.commands?.onCommand.addListener(async (command) => {
   if (command !== 'speak-selection') return;

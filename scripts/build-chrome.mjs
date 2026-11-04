@@ -7,8 +7,16 @@
 // - фоновый скрипт — service worker (в Chrome MV3 других нет);
 // - вместо блокирующего webRequest — declarativeNetRequest (src/pdf-rules.js);
 // - иконки PNG; нет настроек gecko (ID, адрес обновлений Firefox);
-// - ускоритель пока регистрируется только для Firefox — разрешений на него нет.
+// - key — постоянный ID расширения (chrome/key.txt, scripts/make-chrome-key.mjs):
+//   на него выдаёт разрешение ускоритель, по нему он находит папку для обновлений;
+// - разрешения ускорителя — сразу, а не по запросу: в Firefox они по запросу,
+//   чтобы обновление не останавливалось на вопросе о новых правах; у
+//   распакованного расширения в Chrome такого вопроса нет, а ускоритель с
+//   ними же обновляет и само расширение (src/updates.js).
+// В папке лежит files.json — список файлов этой версии: обновляя, ускоритель
+// удаляет только файлы прошлой версии, ничего чужого.
 
+import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -19,12 +27,18 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const ICON_SIZES = [16, 32, 48, 128];
 // Условия на заголовки ответа в declarativeNetRequest появились в Chrome 128.
 export const MIN_CHROME = '128';
+export const FILE_LIST = 'files.json';
+
+export function chromeKey() {
+  return readFileSync(join(root, 'chrome', 'key.txt'), 'utf8').trim();
+}
 
 /** Манифест Firefox → манифест Chrome. */
-export function chromeManifest(manifest) {
+export function chromeManifest(manifest, { key = chromeKey() } = {}) {
   const icon = (sizes) => Object.fromEntries(sizes.map((size) => [String(size), `icons/icon-${size}.png`]));
   const result = {
     ...manifest,
+    key,
     minimum_chrome_version: MIN_CHROME,
     icons: icon(ICON_SIZES),
     action: { ...manifest.action, default_icon: icon([16, 32, 48]) },
@@ -32,10 +46,10 @@ export function chromeManifest(manifest) {
     permissions: [
       ...manifest.permissions.filter((permission) => !['webRequest', 'webRequestBlocking'].includes(permission)),
       'declarativeNetRequestWithHostAccess',
+      ...(manifest.optional_permissions ?? []),
     ],
   };
   delete result.browser_specific_settings;
-  // Разрешения нужны только ускорителю, а он пока только для Firefox.
   delete result.optional_permissions;
   return result;
 }
@@ -105,22 +119,39 @@ export function zipFolder(dir) {
   return Buffer.concat([...chunks, ...central, end]);
 }
 
-export function buildChrome({ outDir = join(root, 'dist') } = {}) {
+/** Откуда расширение в Chrome узнаёт о новой версии (src/updates.js). */
+export const RELEASES = 'https://github.com/chadgpttop666/pdf/releases';
+
+/**
+ * @param version другая версия в манифесте — для проверки обновления
+ * @param dirName имя папки сборки внутри outDir
+ */
+export function buildChrome({ outDir = join(root, 'dist'), version = null, dirName = 'chrome' } = {}) {
   const source = join(root, 'extension');
-  const target = join(outDir, 'chrome');
+  const target = join(outDir, dirName);
   rmSync(target, { recursive: true, force: true });
   mkdirSync(target, { recursive: true });
   cpSync(source, target, { recursive: true });
 
   const manifest = chromeManifest(JSON.parse(readFileSync(join(source, 'manifest.json'), 'utf8')));
+  if (version) manifest.version = version;
   writeFileSync(join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   for (const size of ICON_SIZES) {
     cpSync(join(root, 'chrome', 'icons', `icon-${size}.png`), join(target, 'icons', `icon-${size}.png`));
   }
+  // Список файлов этой версии — сам он тоже в списке.
+  const files = [...listFiles(target), FILE_LIST].sort();
+  writeFileSync(join(target, FILE_LIST), `${JSON.stringify({ version: manifest.version, files })}\n`);
 
-  const zipPath = join(outDir, `pdf-reader-chrome-${manifest.version}.zip`);
-  writeFileSync(zipPath, zipFolder(target));
-  return { dir: target, zip: zipPath, version: manifest.version };
+  const name = `pdf-reader-chrome-${manifest.version}.zip`;
+  const zipPath = join(outDir, name);
+  const zip = zipFolder(target);
+  writeFileSync(zipPath, zip);
+  // Описание релиза для автообновления: версия, адрес архива и его SHA-256.
+  const update = { version: manifest.version, url: `${RELEASES}/download/v${manifest.version}/${name}`, sha256: createHash('sha256').update(zip).digest('hex') };
+  const updatePath = join(outDir, 'updates-chrome.json');
+  writeFileSync(updatePath, `${JSON.stringify(update, null, 2)}\n`);
+  return { dir: target, zip: zipPath, update: updatePath, version: manifest.version, sha256: update.sha256 };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

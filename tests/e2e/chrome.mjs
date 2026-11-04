@@ -126,17 +126,22 @@ try {
   const resumed = await page.evaluate(() => window.pdfReaderApp.pdfViewer.currentPageNumber);
   check('место чтения сохраняется в библиотеке расширения', resumed === 5, `страница ${resumed}`);
 
-  // Ускоритель в Chrome пока не ставится — настройки говорят это прямо.
+  // Ускоритель ставится и в Chrome; раздел «Обновления» — с версией и галочкой.
   await page.click('#btnSettings');
-  await page.waitForFunction(() => /только в Firefox/.test(document.querySelector('.tera-helper')?.textContent ?? ''), null, { timeout: 8000 }).catch(() => {});
-  const helper = await page.evaluate(() => {
+  await page.waitForFunction(() => /Не установлен/.test(document.querySelector('.tera-helper')?.textContent ?? ''), null, { timeout: 8000 }).catch(() => {});
+  const settings = await page.evaluate(() => {
     const card = document.querySelector('.tera-helper');
-    return { text: card?.textContent ?? '', buttons: [...(card?.querySelectorAll('button') ?? [])].map((button) => button.textContent.trim()) };
+    return {
+      helper: card?.textContent ?? '',
+      buttons: [...(card?.querySelectorAll('button') ?? [])].map((button) => button.textContent.trim()),
+      updates: document.querySelector('.updates')?.textContent ?? '',
+      auto: [...document.querySelectorAll('#settingsGrid .setting')].find((row) => /Обновлять читалку автоматически/.test(row.textContent))?.querySelector('input')?.checked,
+    };
   });
   check(
-    'карточка ускорителя: «пока только в Firefox», без кнопки установки',
-    /только в Firefox/.test(helper.text) && !helper.buttons.some((label) => /Установить/.test(label)),
-    `${helper.text.slice(-140)} [${helper.buttons.join(', ')}]`
+    'настройки: ускоритель ставится кнопкой «Установить», «Обновления» — с версией и включённой галочкой',
+    settings.buttons.includes('Установить') && /PDF-читалка \d/.test(settings.updates) && settings.auto === true,
+    JSON.stringify({ buttons: settings.buttons, updates: settings.updates.slice(0, 60), auto: settings.auto })
   );
   await page.keyboard.press('Escape');
 

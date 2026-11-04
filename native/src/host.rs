@@ -4,6 +4,7 @@
 //! кусками меньше 1 МБ.
 
 use crate::accent::{self, Accents, Inputs};
+use crate::browsers;
 use crate::install;
 use crate::protocol::{self, Outbox};
 use crate::speech;
@@ -401,7 +402,7 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Send
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-                "features": if speech::supported().is_ok() { json!(["transcribe", "accent"]) } else { json!(["accent"]) },
+                "features": if speech::supported().is_ok() { json!(["transcribe", "accent", "ext-update"]) } else { json!(["accent", "ext-update"]) },
             }));
         }
         // Голосовая заметка → текст. Отдельным потоком: синтез и отмены
@@ -503,6 +504,46 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Send
             } else {
                 shared.out.send(json!({ "type": "update-ok", "id": id }));
             }
+        }
+        // ── Обновление распакованного расширения в Chrome (browsers.rs) ──
+        // Где оно лежит и какой версии.
+        "ext-paths" => {
+            let paths: Vec<Value> = browsers::extension_dirs()
+                .iter()
+                .map(|path| json!({ "path": path, "version": browsers::extension_version(path) }))
+                .collect();
+            shared.out.send(json!({ "type": "ext-paths", "id": id, "paths": paths }));
+        }
+        // Файл новой версии — кусками, в отдельную папку.
+        "ext-stage" => {
+            let name = text(message, "name")?;
+            let relative = browsers::safe_relative(name).ok_or_else(|| format!("недопустимое имя файла {name}"))?;
+            let target = browsers::staging_dir(text(message, "version")?)?.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+            }
+            let done = receive(message, &target)?;
+            shared.out.send(json!({ "type": "ext-stage-ok", "id": id, "done": done.is_some() }));
+        }
+        // Вся версия собрана — поставить её во все папки расширения.
+        "ext-apply" => {
+            let staging = browsers::staging_dir(text(message, "version")?)?;
+            let files: Vec<String> = message
+                .get("files")
+                .and_then(Value::as_array)
+                .ok_or("нет списка файлов")?
+                .iter()
+                .map(|file| file.as_str().map(str::to_string).ok_or("имя файла — не строка"))
+                .collect::<Result<_, _>>()?;
+            let targets = browsers::extension_dirs();
+            if targets.is_empty() {
+                return Err("Не нашёл папку расширения в настройках браузера".into());
+            }
+            for target in &targets {
+                browsers::apply(&staging, target, &files)?;
+            }
+            browsers::clean_staging();
+            shared.out.send(json!({ "type": "ext-applied", "id": id, "paths": targets }));
         }
         "uninstall" => {
             install::uninstall()?;
