@@ -4,10 +4,10 @@
 // Пустой sha256 — сборки для этой системы ещё нет.
 
 export const HELPER_RELEASE = {
-  version: '1.3.0',
+  version: '1.4.0',
   files: {
-    win: { name: 'pdf-reader-tts.exe', size: 20793856, sha256: '367616658fbd9f6b0650d4c67298a7347c84487f31a140b74598d8ecfa7aedd7' },
-    linux: { name: 'pdf-reader-tts-linux', size: 31431632, sha256: 'c460f228f5f88023bc6837016678d9485dbaf5919b62d9296ba495c4d07478bd' },
+    win: { name: 'pdf-reader-tts.exe', size: 20901376, sha256: '1f0d994217a6962fbc7bbb2ed22c64f797a04d61a9ab2c31563335cdd7b74ead' },
+    linux: { name: 'pdf-reader-tts-linux', size: 31494768, sha256: 'a2728cc51da0d1d46462958e2ea18466997c34903634e3148d4a4a4ac03e4b03' },
   },
 };
 
