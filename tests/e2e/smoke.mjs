@@ -788,6 +788,10 @@ try {
   // и дальше по документу не читается.
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
   await page.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
+  // Событие прокрутки от перехода приходит со следующим кадром и прячет
+  // панель выделения — под нагрузкой уже после того, как она появилась.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.waitForTimeout(150);
   const selectSpans = (from, to) =>
     page.evaluate(
       ({ from: a, to: b }) => {
@@ -1749,6 +1753,9 @@ try {
   await stressTab.waitForFunction(() => !document.getElementById('app').classList.contains('booting'), null, { timeout: 10000 });
   await stressTab.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
   await stressTab.waitForFunction(() => document.querySelectorAll('.page[data-page-number="2"] .textLayer span').length > 12, null, { timeout: 10000 });
+  // Запоздавшее событие прокрутки от перехода спрятало бы панель выделения.
+  await stressTab.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await stressTab.waitForTimeout(150);
   const stressWord = await stressTab.evaluate(() => {
     const span = [...document.querySelectorAll('.page[data-page-number="2"] .textLayer span')].find(
       (candidate) => candidate.firstChild?.nodeType === Node.TEXT_NODE && /[а-яё]{6,}/i.test(candidate.textContent)
