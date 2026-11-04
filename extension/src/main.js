@@ -20,6 +20,7 @@ import { createSidebar } from './ui/sidebar.js';
 import { createReadingState } from './reading-state.js';
 import { createBookmarks } from './bookmarks.js';
 import { createHighlights } from './highlights.js';
+import { createEditing } from './editing/editing.js';
 import { createStats } from './stats.js';
 import { createOcr } from './ocr.js';
 import { createRecent } from './ui/recent.js';
@@ -169,10 +170,22 @@ export function openBytesFromLibrary(bytes, record) {
   );
 }
 
-/** Скачать открытый PDF на компьютер — кнопкой «Скачать» или Ctrl+S. */
+/**
+ * Скачать открытый PDF на компьютер — кнопкой «Скачать» или Ctrl+S. Есть
+ * правки на страницах — они внутри файла, как при сохранении в Firefox.
+ */
 export async function downloadPdf() {
-  const filename = await app.loader.download();
-  if (filename) app.hud.show(`Сохраняю «${filename}»`, { duration: 2500 });
+  let edited = null;
+  if (app.editing?.hasEdits()) {
+    app.hud.show('Собираю PDF с правками…', { duration: 10000 });
+    edited = await app.editing.editedPdf().catch((error) => {
+      console.error('PDF с правками не собрался', error);
+      app.hud.show('С правками сохранить не вышло — сохраняю исходный файл', { duration: 5000 });
+      return null;
+    });
+  }
+  const filename = await app.loader.download(edited);
+  if (filename) app.hud.show(edited ? `Сохраняю «${filename}» с правками` : `Сохраняю «${filename}»`, { duration: 2500 });
   else app.hud.show('Сначала откройте документ');
 }
 
@@ -210,7 +223,14 @@ function wireDragAndDrop() {
     event.preventDefault();
     depth = 0;
     overlay.hidden = true;
-    const file = [...(event.dataTransfer?.files || [])].find(
+    const files = [...(event.dataTransfer?.files || [])];
+    // Во время правки картинку, брошенную на страницу, — вставить, а не открывать.
+    const image = app.editing?.open && files.find((candidate) => /^image\//.test(candidate.type));
+    if (image) {
+      await app.editing.insertImage(image);
+      return;
+    }
+    const file = files.find(
       (candidate) => candidate.type === 'application/pdf' || /\.pdf$/i.test(candidate.name) || isBookName(candidate.name)
     );
     if (file) await openFile(file);
@@ -244,7 +264,7 @@ function wireFocusReturn() {
       const active = document.activeElement;
       if (active === control || active === document.body || !active) app.activeContainer.focus({ preventScroll: true });
     });
-  for (const panel of [$('toolbar'), $('ttsBar'), $('autoscrollBar')]) {
+  for (const panel of [$('toolbar'), $('ttsBar'), $('autoscrollBar'), $('editBar')]) {
     on(panel, 'click', (event) => {
       const button = event.target.closest('button');
       if (button && event.detail > 0) giveBack(button);
@@ -257,16 +277,26 @@ function wireFocusReturn() {
 
 function wireAutoFit() {
   let timer = 0;
+  let last = { width: 0, height: 0 };
   const observer = new ResizeObserver(() => {
     clearTimeout(timer);
     timer = setTimeout(() => {
       if (!app.pdfViewer.pdfDocument || app.viewLock?.locked) return;
-      if (['page-width', 'page-fit', 'auto'].includes(app.zoomIntent)) {
-        app.pdfViewer.currentScaleValue = app.zoomIntent;
-      }
+      if (!['page-width', 'page-fit', 'auto'].includes(app.zoomIntent)) return;
+      // Только если размер, от которого зависит масштаб, правда изменился: pdf.js
+      // на каждую установку масштаба завершает правку — набираемая надпись
+      // пропадала, стоило открыться панели снизу.
+      const { clientWidth: width, clientHeight: height } = app.container;
+      const changed = width !== last.width || (app.zoomIntent !== 'page-width' && height !== last.height);
+      last = { width, height };
+      if (changed) app.pdfViewer.currentScaleValue = app.zoomIntent;
     }, 80);
   });
   observer.observe(app.container);
+  // Размер, под который pdf.js только что подобрал масштаб, — отправная точка.
+  app.eventBus.on('pagesinit', () => {
+    last = { width: app.container.clientWidth, height: app.container.clientHeight };
+  });
 }
 
 /**
@@ -335,6 +365,7 @@ async function main() {
   app.readingState.onChange((record) => setStressDocument(record?.id ?? null));
   app.bookmarks = createBookmarks(app);
   app.highlights = createHighlights(app);
+  app.editing = createEditing(app);
   // «Озвучить выделенное» из меню или Alt+Shift+S в этой вкладке: скрипт в
   // страницу расширения не встроить, поэтому фоновая страница присылает сообщение.
   extensionApi?.tabs?.getCurrent?.().then((tab) => {
@@ -383,6 +414,10 @@ async function main() {
     }
     if (app.highlights?.toolbarOpen) {
       app.highlights.hideToolbar();
+      return;
+    }
+    if (app.editing?.open) {
+      app.editing.close();
       return;
     }
     app.autoScroll.stop();

@@ -4,6 +4,7 @@
 import * as pdfjsLib from '../vendor/pdf.mjs';
 import {
   EventBus,
+  GenericL10n,
   LinkTarget,
   PDFFindController,
   PDFLinkService,
@@ -35,6 +36,7 @@ export function createViewer({ container, viewerEl }) {
     externalLinkRel: 'noopener noreferrer',
   });
   const findController = new PDFFindController({ eventBus, linkService });
+  const l10n = new GenericL10n('ru');
 
   const pdfViewer = new PDFViewer({
     container,
@@ -44,11 +46,16 @@ export function createViewer({ container, viewerEl }) {
     findController,
     textLayerMode: 1, // текстовый слой нужен для выделения, поиска и озвучки
     annotationMode: pdfjsLib.AnnotationMode.ENABLE,
-    annotationEditorMode: pdfjsLib.AnnotationEditorType.DISABLE,
+    // Редактор pdf.js — для правки страниц (editing/editing.js); включается панелью «Правка».
+    annotationEditorMode: pdfjsLib.AnnotationEditorType.NONE,
+    // Подписи редактора — по-русски (l10n/ru/viewer.ftl), недостающие — встроенные английские.
+    l10n,
     imageResourcesPath: assetUrl('../vendor/images/'),
   });
 
   linkService.setViewer(pdfViewer);
+  // Следить за страницами: элементы редактора (data-l10n-id) переводятся, когда появляются.
+  l10n.translate(container).catch(() => {});
   pdfViewer.scrollMode = ScrollMode.VERTICAL;
   pdfViewer.spreadMode = SpreadMode.NONE;
 

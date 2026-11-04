@@ -51,6 +51,8 @@ export function createScreenNav(app) {
   // Клик по краю экрана — как в читалках: низ листает вперёд, верх назад.
   function onClick(event) {
     if (!getSetting('clickZones')) return;
+    // Во время правки щелчок ставит текст или картинку — не листает.
+    if (app.editing?.active) return;
     if (event.target.closest('a, button, input, .textLayer .highlight')) return;
     // Щелчок по тексту при открытой панели озвучки выбирает место чтения.
     if (app.tts?.pickMode && event.target.closest('.textLayer, .rf-s')) return;

@@ -370,6 +370,8 @@ export function createHighlights(app) {
   // Выделили текст мышью — предлагаем маркер.
   on(document, 'mouseup', (event) => {
     if (toolbar.contains(event.target)) return;
+    // Во время правки (текст, рисунок) мышь занята редактором pdf.js.
+    if (app.editing?.active || event.target.closest?.('.annotationEditorLayer, #editBar')) return;
     setTimeout(() => {
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || !selection.rangeCount) return;

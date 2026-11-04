@@ -132,11 +132,12 @@ export class DocumentLoader {
   }
 
   /**
-   * Сохранить исходный PDF на компьютер.
+   * Сохранить PDF на компьютер.
+   * @param edited байты файла с правками (editing.js) — иначе исходный файл
    * @returns {Promise<string|null>} имя файла или null, если документа нет
    */
-  async download() {
-    const bytes = await this.getBytes();
+  async download(edited = null) {
+    const bytes = edited ?? (await this.getBytes());
     if (!bytes) return null;
 
     const filename = downloadName(this.source?.name);

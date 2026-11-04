@@ -10,7 +10,7 @@
 const encoder = new TextEncoder();
 
 /** Сжать zlib (FlateDecode). */
-async function deflate(bytes) {
+export async function deflate(bytes) {
   const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
@@ -43,7 +43,7 @@ function utf16(code) {
 const SPACES = /[ -   ]/gu;
 
 /** Шрифт в документе: символы получают номера по мере набора. */
-function createFont(key, ttf) {
+export function createFont(key, ttf) {
   const cids = new Map(); // код символа → CID
   const codes = [0]; // CID → код символа
   return {
@@ -73,6 +73,73 @@ function createFont(key, ttf) {
     },
     codes,
   };
+}
+
+/**
+ * Объекты шрифта Type0 (CIDFontType2, Identity-H, ToUnicode) — для книги и
+ * для оформления текстовых заметок (annotation-appearance.js).
+ * @param font createFont(): номера символов уже набраны
+ * @param write { reserve() → { id }, put(entry, dict), putStream(entry, dict, bytes) }
+ * @param into заранее выделенный объект для самого шрифта — если на него уже ссылаются
+ * @returns номер объекта Type0
+ */
+export async function writeType0Font(font, name, { reserve, put, putStream }, into = null) {
+  const { ttf, codes } = font;
+  const base = name.replace(/[^A-Za-z0-9-]/g, '');
+  const file = reserve();
+  await putStream(file, `/Length1 ${ttf.bytes.length}`, ttf.bytes);
+  const flags = (ttf.italicAngle ? 64 : 0) | 32 | 2;
+  const scale = 1000 / ttf.unitsPerEm;
+  const descriptor = reserve();
+  put(
+    descriptor,
+    `<< /Type /FontDescriptor /FontName /${base} /Flags ${flags} /FontBBox [${ttf.bbox.map((v) => Math.round(v * scale)).join(' ')}] ` +
+      `/ItalicAngle ${number(ttf.italicAngle)} /Ascent ${Math.round(ttf.ascent * scale)} /Descent ${Math.round(ttf.descent * scale)} ` +
+      `/CapHeight ${Math.round(ttf.capHeight * scale)} /StemV ${ttf.weight >= 600 ? 140 : 80} /FontFile2 ${file.id} 0 R >>`
+  );
+  // CID → глиф.
+  const map = new Uint8Array(codes.length * 2);
+  codes.forEach((code, cid) => {
+    const glyph = cid ? ttf.glyphOf(code) : 0;
+    map[cid * 2] = glyph >> 8;
+    map[cid * 2 + 1] = glyph & 0xff;
+  });
+  const cidToGid = reserve();
+  await putStream(cidToGid, '', map);
+  const widths = codes.slice(1).map((code) => Math.round(ttf.advance(ttf.glyphOf(code)) * scale));
+  const cidFont = reserve();
+  put(
+    cidFont,
+    `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${base} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
+      `/FontDescriptor ${descriptor.id} 0 R /CIDToGIDMap ${cidToGid.id} 0 R /DW 500 /W [1 [${widths.join(' ')}]] >>`
+  );
+  // CID → Юникод: из этого pdf.js берёт текст страницы.
+  const lines = [];
+  for (let start = 1; start < codes.length; start += 100) {
+    const chunk = codes.slice(start, start + 100);
+    lines.push(`${chunk.length} beginbfchar`, ...chunk.map((code, i) => `<${hex4(start + i)}> <${utf16(code)}>`), 'endbfchar');
+  }
+  const cmap = [
+    '/CIDInit /ProcSet findresource begin',
+    '12 dict begin',
+    'begincmap',
+    '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+    '/CMapName /Adobe-Identity-UCS def',
+    '/CMapType 2 def',
+    '1 begincodespacerange',
+    '<0000> <FFFF>',
+    'endcodespacerange',
+    ...lines,
+    'endcmap',
+    'CMapName currentdict /CMap defineresource pop',
+    'end',
+    'end',
+  ].join('\n');
+  const toUnicode = reserve();
+  await putStream(toUnicode, '', encoder.encode(cmap));
+  const type0 = into ?? reserve();
+  put(type0, `<< /Type /Font /Subtype /Type0 /BaseFont /${base} /Encoding /Identity-H /DescendantFonts [${cidFont.id} 0 R] /ToUnicode ${toUnicode.id} 0 R >>`);
+  return type0.id;
 }
 
 /**
@@ -189,65 +256,7 @@ export function createPdf({ fonts, info = {} }) {
       const fontRefs = {};
       for (const { name, font } of fontList) {
         if (!usedFonts.has(name)) continue;
-        const { ttf, codes } = font;
-        const base = `PTSerif-${font.key}`.replace(/[^A-Za-z0-9-]/g, '');
-        const file = reserve();
-        await putStream(file, `/Length1 ${ttf.bytes.length}`, ttf.bytes);
-        const flags = (ttf.italicAngle ? 64 : 0) | 32 | 2;
-        const scale = 1000 / ttf.unitsPerEm;
-        const descriptor = reserve();
-        put(
-          descriptor,
-          `<< /Type /FontDescriptor /FontName /${base} /Flags ${flags} /FontBBox [${ttf.bbox.map((v) => Math.round(v * scale)).join(' ')}] ` +
-            `/ItalicAngle ${number(ttf.italicAngle)} /Ascent ${Math.round(ttf.ascent * scale)} /Descent ${Math.round(ttf.descent * scale)} ` +
-            `/CapHeight ${Math.round(ttf.capHeight * scale)} /StemV ${ttf.weight >= 600 ? 140 : 80} /FontFile2 ${file.id} 0 R >>`
-        );
-        // CID → глиф.
-        const map = new Uint8Array(codes.length * 2);
-        codes.forEach((code, cid) => {
-          const glyph = cid ? ttf.glyphOf(code) : 0;
-          map[cid * 2] = glyph >> 8;
-          map[cid * 2 + 1] = glyph & 0xff;
-        });
-        const cidToGid = reserve();
-        await putStream(cidToGid, '', map);
-        const widths = codes.slice(1).map((code) => Math.round(ttf.advance(ttf.glyphOf(code)) * scale));
-        const cidFont = reserve();
-        put(
-          cidFont,
-          `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${base} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
-            `/FontDescriptor ${descriptor.id} 0 R /CIDToGIDMap ${cidToGid.id} 0 R /DW 500 /W [1 [${widths.join(' ')}]] >>`
-        );
-        // CID → Юникод: из этого pdf.js берёт текст страницы.
-        const lines = [];
-        for (let start = 1; start < codes.length; start += 100) {
-          const chunk = codes.slice(start, start + 100);
-          lines.push(`${chunk.length} beginbfchar`, ...chunk.map((code, i) => `<${hex4(start + i)}> <${utf16(code)}>`), 'endbfchar');
-        }
-        const cmap = [
-          '/CIDInit /ProcSet findresource begin',
-          '12 dict begin',
-          'begincmap',
-          '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
-          '/CMapName /Adobe-Identity-UCS def',
-          '/CMapType 2 def',
-          '1 begincodespacerange',
-          '<0000> <FFFF>',
-          'endcodespacerange',
-          ...lines,
-          'endcmap',
-          'CMapName currentdict /CMap defineresource pop',
-          'end',
-          'end',
-        ].join('\n');
-        const toUnicode = reserve();
-        await putStream(toUnicode, '', encoder.encode(cmap));
-        const type0 = reserve();
-        put(
-          type0,
-          `<< /Type /Font /Subtype /Type0 /BaseFont /${base} /Encoding /Identity-H /DescendantFonts [${cidFont.id} 0 R] /ToUnicode ${toUnicode.id} 0 R >>`
-        );
-        fontRefs[name] = type0.id;
+        fontRefs[name] = await writeType0Font(font, `PTSerif-${font.key}`, { reserve, put, putStream });
       }
 
       const imageRefs = {};

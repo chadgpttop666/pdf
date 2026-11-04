@@ -350,6 +350,12 @@ export const SETTINGS_SCHEMA = [
     label: 'Не гасить экран при автопрокрутке и озвучке',
   },
   { key: 'sidebarOpen', type: 'hidden', def: false },
+  // Правка страниц: последние выбранные цвет и размеры (editing/editing.js).
+  { key: 'editTextColor', type: 'hidden', def: '#000000' },
+  { key: 'editTextSize', type: 'hidden', def: 12 },
+  { key: 'editInkColor', type: 'hidden', def: '#0b5cd5' },
+  { key: 'editInkThickness', type: 'hidden', def: 2 },
+  { key: 'editInkOpacity', type: 'hidden', def: 100 },
   { key: 'defaultZoom', type: 'select', def: 'page-width', options: [
     ['auto', 'авто'],
     ['page-width', 'по ширине'],

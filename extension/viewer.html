@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PDF-читалка</title>
   <link rel="icon" href="icons/icon.svg">
+  <link rel="resource" type="application/l10n" href="l10n/locale.json">
   <link rel="stylesheet" href="vendor/pdf_viewer.css">
   <link rel="stylesheet" href="styles/viewer.css">
 </head>
@@ -50,6 +51,7 @@
       <button id="btnAutoScroll" data-icon="autoscroll" title="Автопрокрутка (A)">Автоскролл</button>
       <button id="btnSpeak" data-icon="speak" title="Озвучка (S)">Озвучка</button>
       <button id="btnReflow" data-icon="reflow" title="Только текст: крупный шрифт под ширину окна (T)">Текст</button>
+      <button id="btnEdit" data-icon="edit" title="Правка: писать, рисовать, вставлять картинки и подпись (E)" aria-pressed="false" disabled>Правка</button>
 
       <div class="spacer"></div>
       <div id="docTitle" title=""></div>
@@ -73,6 +75,31 @@
       <span id="findStatus" class="muted"></span>
       <div class="spacer"></div>
       <button id="findClose" class="icon" data-icon="close" title="Закрыть (Esc)" aria-label="Закрыть"></button>
+    </div>
+
+    <div id="editBar" class="bar" hidden>
+      <button id="editText" data-icon="textTool" title="Текст: щёлкните на странице и пишите" aria-pressed="false">Текст</button>
+      <button id="editDraw" data-icon="draw" title="Рисунок от руки: мышью, пером или пальцем" aria-pressed="false">Рисунок</button>
+      <button id="editImage" data-icon="image" title="Вставить картинку из файла (или Ctrl+V из буфера обмена)">Картинка</button>
+      <button id="editSignature" data-icon="signature" title="Поставить подпись: нарисовать или выбрать сохранённую">Подпись</button>
+      <span class="divider"></span>
+      <span id="editTextParams" class="edit-params" hidden>
+        <label class="field">Цвет <input id="editTextColor" type="color" value="#000000" aria-label="Цвет текста"></label>
+        <label class="field">Размер <input id="editTextSize" type="range" min="6" max="48" step="1" value="12" aria-label="Размер текста"><span id="editTextSizeValue" class="value"></span></label>
+      </span>
+      <span id="editDrawParams" class="edit-params" hidden>
+        <label class="field">Цвет <input id="editInkColor" type="color" value="#0b5cd5" aria-label="Цвет линии"></label>
+        <label class="field">Толщина <input id="editInkThickness" type="range" min="1" max="20" step="1" value="2" aria-label="Толщина линии"><span id="editInkThicknessValue" class="value"></span></label>
+        <label class="field">Непрозрачность <input id="editInkOpacity" type="range" min="10" max="100" step="5" value="100" aria-label="Непрозрачность линии"><span id="editInkOpacityValue" class="value"></span></label>
+      </span>
+      <span id="editHint" class="muted edit-hint">Выберите инструмент.</span>
+      <button id="editUndo" class="icon" data-icon="undo" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled></button>
+      <button id="editRedo" class="icon" data-icon="redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled></button>
+      <button id="editDelete" class="icon" data-icon="trash" title="Удалить выбранное (Delete)" aria-label="Удалить выбранное" disabled></button>
+      <span id="editStatus" class="muted" title="Правки сами сохраняются в библиотеке и вернутся при следующем открытии. В файл они попадут через «Скачать»."></span>
+      <button id="editClear" class="ghost" title="Убрать все правки из этого документа" disabled>Убрать все</button>
+      <button id="editDone" class="primary" data-icon="check" title="Закончить правку (E)">Готово</button>
+      <input id="editImagePicker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/bmp" hidden>
     </div>
 
     <div id="body">
@@ -343,6 +370,21 @@
           <button type="button" id="abCancel" class="ghost" hidden>Отменить</button>
           <button type="button" id="abStart" class="primary" data-icon="download">Сохранить в файл</button>
           <button value="close">Закрыть</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="signatureDialog">
+      <form method="dialog">
+        <h2>Подпись</h2>
+        <div id="sigSaved" class="sig-saved" hidden></div>
+        <p class="popover-hint">Распишитесь мышью, пером или пальцем — подпись встанет посреди видимой части страницы, её можно двигать и растягивать.</p>
+        <canvas id="sigPad" class="sig-pad" aria-label="Поле для подписи"></canvas>
+        <label class="sig-remember"><input id="sigRemember" type="checkbox" checked> Запомнить подпись (до пяти, хранятся только в этом браузере)</label>
+        <menu>
+          <button type="button" id="sigClear" class="ghost">Очистить</button>
+          <button value="close">Отмена</button>
+          <button type="button" id="sigInsert" class="primary" disabled>Поставить</button>
         </menu>
       </form>
     </dialog>

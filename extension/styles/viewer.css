@@ -942,3 +942,68 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
   #sidebar { position: absolute; z-index: 35; height: 100%; box-shadow: var(--shadow); }
   #docTitle { display: none; }
 }
+
+/* ── Правка страниц (editing/) ──────────────────────────────────── */
+
+/* Текстовая заметка набирается тем же шрифтом, каким её оформление
+   пишется в файл (freetext-appearance.js): на экране и в Adobe Reader она
+   одинаковая. Кегль pdf.js ставит сам — меняем только гарнитуру. */
+@font-face {
+  font-family: 'PT Serif Notes';
+  src: url('../vendor/fonts/PTSerif-Regular.ttf') format('truetype');
+}
+.annotationEditorLayer .freeTextEditor .internal { font-family: 'PT Serif Notes', 'PT Serif', serif; }
+
+#editBar { gap: 8px; }
+#editBar .edit-params { display: flex; align-items: center; gap: 12px; }
+#editBar input[type='color'] {
+  width: 32px;
+  height: 26px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  cursor: pointer;
+}
+#editBar input[type='range'] { width: 90px; }
+#editBar .value { min-width: 4ch; }
+/* Подсказка забирает свободное место и обрезается — панель не переносится. */
+.edit-hint {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Окна «Описание картинки» из Firefox в сборке pdf.js нет — кнопка ничего бы не делала. */
+.editToolbar .altText,
+.editToolbar .altText + .divider { display: none !important; }
+#editStatus { font-size: 12px; white-space: nowrap; }
+
+.sig-pad {
+  display: block;
+  width: min(560px, 78vw);
+  height: 190px;
+  background: #fff;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  touch-action: none;
+  cursor: crosshair;
+}
+.sig-saved { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.sig-item { position: relative; }
+.sig-use { background: #fff; padding: 4px 10px; height: 56px; }
+.sig-use img { display: block; max-height: 44px; max-width: 170px; }
+.sig-remove {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  border-radius: 50%;
+}
+.sig-remove .icon-svg { width: 14px; height: 14px; }
+.sig-remember { display: flex; gap: 6px; align-items: center; margin-top: 10px; }

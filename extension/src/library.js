@@ -1,18 +1,21 @@
 // Локальная библиотека: место чтения, закладки, сами файлы недавних
 // документов, статистика чтения по дням, скачанные нейроголоса,
-// распознанный текст сканов и голосовые заметки. Всё лежит в IndexedDB браузера и никуда не
-// отправляется.
+// распознанный текст сканов, голосовые заметки, правки на страницах (текст,
+// рисунки, картинки) и сохранённые подписи. Всё лежит в IndexedDB браузера и
+// никуда не отправляется.
 
 import { emptyDay, mergeDays } from './stats-math.js';
 
 const DB_NAME = 'pdf-reader';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const DOCUMENTS = 'documents';
 const FILES = 'files';
 const STATS = 'stats';
 const VOICES = 'voices';
 const OCR = 'ocr';
 const RECORDINGS = 'recordings';
+const EDITS = 'edits';
+const SIGNATURES = 'signatures';
 
 let dbPromise = null;
 
@@ -43,6 +46,14 @@ function openDb() {
       // Версия 5: голосовые заметки к выделениям — запись (Blob) и её документ.
       if (!db.objectStoreNames.contains(RECORDINGS)) {
         db.createObjectStore(RECORDINGS, { keyPath: 'id' }).createIndex('docId', 'docId');
+      }
+      // Версия 6: правки на страницах — одна запись на документ (ключ — ключ
+      // документа) — и сохранённые подписи.
+      if (!db.objectStoreNames.contains(EDITS)) {
+        db.createObjectStore(EDITS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(SIGNATURES)) {
+        db.createObjectStore(SIGNATURES, { keyPath: 'id' });
       }
     };
     request.onsuccess = () => {
@@ -146,9 +157,10 @@ export async function loadFile(id) {
 }
 
 export async function deleteDocument(id) {
-  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS], 'readwrite', async (documents, files, ocr, recordings) => {
+  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS, EDITS], 'readwrite', async (documents, files, ocr, recordings, edits) => {
     await request(documents.delete(id));
     await request(files.delete(id));
+    await request(edits.delete(id));
     for (const key of await request(ocr.index('docId').getAllKeys(id))) await request(ocr.delete(key));
     for (const key of await request(recordings.index('docId').getAllKeys(id))) await request(recordings.delete(key));
   });
@@ -185,7 +197,8 @@ export async function pruneFiles(maxBytes) {
 }
 
 export async function clearLibrary() {
-  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS], 'readwrite', async (documents, files, ocr, recordings) => {
+  return transaction([DOCUMENTS, FILES, OCR, RECORDINGS, EDITS], 'readwrite', async (documents, files, ocr, recordings, edits) => {
+    await request(edits.clear());
     await request(documents.clear());
     await request(files.clear());
     await request(ocr.clear());
@@ -253,4 +266,34 @@ export async function listOcr(docId) {
 
 export async function putOcr(record) {
   return transaction(OCR, 'readwrite', (store) => request(store.put({ ...record, key: `${record.docId}#${record.pageNumber}` })));
+}
+
+/**
+ * Правки на страницах документа (editing/editing.js): список правок pdf.js
+ * в виде для копирования — текст, рисунки, картинки (data: URL).
+ * @returns {Promise<{ id, items: object[], updatedAt } | undefined>}
+ */
+export async function getEdits(docId) {
+  return transaction(EDITS, 'readonly', (store) => request(store.get(docId)));
+}
+
+/** Записать правки документа; пустой список — удалить запись. */
+export async function putEdits(docId, items) {
+  return transaction(EDITS, 'readwrite', (store) =>
+    request(items.length ? store.put({ id: docId, items, updatedAt: Date.now() }) : store.delete(docId))
+  );
+}
+
+/** Сохранённые подписи: { id, blob (PNG), createdAt }. */
+export async function listSignatures() {
+  const all = await transaction(SIGNATURES, 'readonly', (store) => request(store.getAll()));
+  return all.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function putSignature(record) {
+  return transaction(SIGNATURES, 'readwrite', (store) => request(store.put(record)));
+}
+
+export async function deleteSignature(id) {
+  return transaction(SIGNATURES, 'readwrite', (store) => request(store.delete(id)));
 }
