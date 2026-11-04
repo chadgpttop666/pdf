@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { parseTtf } from '../../extension/src/books/ttf.js';
 import { addFreeTextAppearances, decodePdfString, parseFreeText, readLiteral } from '../../extension/src/editing/freetext-appearance.js';
+import { normalizeStrokes } from '../../extension/src/editing/signature.js';
 
 const ttf = parseTtf(new Uint8Array(readFileSync(new URL('../../extension/vendor/fonts/PTSerif-Regular.ttf', import.meta.url))));
 const fixture = (name) => new Uint8Array(readFileSync(new URL(`../fixtures/${name}`, import.meta.url)));
@@ -110,5 +111,20 @@ describe('оформление текстовых заметок', () => {
   it('без текстовых заметок файл не меняется', async () => {
     const original = fixture('sample.pdf');
     assert.equal(await addFreeTextAppearances(original, ttf), original);
+  });
+});
+
+describe('подпись линиями', () => {
+  it('штрихи сдвигаются к углу подписи с запасом на толщину линии, точки-одиночки остаются', () => {
+    const signature = normalizeStrokes([[10, 20, 30, 40], [50, 10], [7]], 2);
+    assert.deepEqual(signature.strokes, [[1, 11, 21, 31], [41, 1]]);
+    assert.equal(signature.width, 42);
+    assert.equal(signature.height, 32);
+    assert.equal(signature.line, 2);
+  });
+
+  it('пустое поле — подписи нет', () => {
+    assert.equal(normalizeStrokes([]), null);
+    assert.equal(normalizeStrokes([[5]]), null);
   });
 });

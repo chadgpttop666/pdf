@@ -97,6 +97,8 @@ export function createToolbar(app) {
     document.title = `${title} — PDF-читалка`;
   });
 
+  fitToWidth($('toolbar'));
+
   return {
     zoomBy,
     setPageCount,
@@ -109,4 +111,49 @@ export function createToolbar(app) {
       updateSettings({ defaultZoom: value });
     },
   };
+}
+
+/**
+ * Ступени сжатия панели (классы на #toolbar, CSS в viewer.css): значки без
+ * подписей у «Открыть» и «Скачать» → без имени документа (оно есть в
+ * заголовке вкладки) → значки без подписей у всех кнопок → от оценки
+ * времени остаются часы → плотнее промежутки, уже масштаб. Подписи и время
+ * остаются в подсказках.
+ */
+export const FIT_LEVELS = ['fit-files', 'fit-title', 'fit-labels', 'fit-eta', 'fit-tight'];
+// Имя документа, обрезанное короче этого, бесполезно — лучше убрать его совсем.
+const MIN_TITLE_PX = 96;
+
+/**
+ * Панель — в одну строку без прокрутки: ступень выбирается по тому, что
+ * влезает на самом деле (шрифты и масштаб Windows разные), заново при смене
+ * ширины окна и содержимого (появилась оценка времени, сменилось имя).
+ */
+export function fitToWidth(toolbar) {
+  if (!toolbar) return;
+  let frame = 0;
+  const title = toolbar.querySelector('#docTitle');
+  const titleCut = () => Boolean(title?.offsetParent && title.textContent) && title.clientWidth < Math.min(title.scrollWidth, MIN_TITLE_PX);
+  const fits = () => toolbar.scrollWidth <= toolbar.clientWidth + 1 && !titleCut();
+  const apply = () => {
+    frame = 0;
+    toolbar.classList.remove(...FIT_LEVELS);
+    for (const level of FIT_LEVELS) {
+      if (fits()) break;
+      toolbar.classList.add(level);
+    }
+  };
+  const schedule = () => {
+    frame ||= requestAnimationFrame(apply);
+  };
+  if (typeof ResizeObserver === 'function') new ResizeObserver(schedule).observe(toolbar);
+  else window.addEventListener('resize', schedule);
+  new MutationObserver(schedule).observe(toolbar, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ['hidden'],
+  });
+  schedule();
 }

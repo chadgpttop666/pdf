@@ -256,12 +256,78 @@ export function createEditing(app) {
     return [x - page.left, y - page.top];
   }
 
+  /** '#1b2a6b' → [27, 42, 107]. */
+  function rgb(hex) {
+    const value = Number.parseInt(String(hex).replace('#', ''), 16) || 0;
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  }
+
   /**
-   * Подпись — картинкой ровно нужного размера (≈ 6 см) посреди видимой части
-   * страницы. Через deserialize, а не как обычную картинку: та ставится
-   * «пиксель = пункт», и чёткая подпись заняла бы пол-листа.
+   * Подпись линиями — рисунком от руки (Ink): точки поля переносятся на
+   * экран посреди видимой части страницы, а оттуда в координаты PDF. Так она
+   * чёткая при любом масштабе и в скачанном файле, двигается и растягивается.
    */
-  async function insertSignature(blob) {
+  function signatureInk({ strokes, width, height, line = 2.6, color = '#1b2a6b' }, viewport, [cx, cy], widthPt, pageIndex) {
+    const perPixel = widthPt / width; // пунктов PDF на пиксель поля
+    const toScreen = perPixel * viewport.scale;
+    const rect = [Infinity, Infinity, -Infinity, -Infinity];
+    const points = strokes.map((stroke) => {
+      const out = new Float32Array(stroke.length);
+      for (let i = 0; i + 1 < stroke.length; i += 2) {
+        const [x, y] = viewport.convertToPdfPoint(cx + (stroke[i] - width / 2) * toScreen, cy + (stroke[i + 1] - height / 2) * toScreen);
+        out[i] = x;
+        out[i + 1] = y;
+        rect[0] = Math.min(rect[0], x);
+        rect[1] = Math.min(rect[1], y);
+        rect[2] = Math.max(rect[2], x);
+        rect[3] = Math.max(rect[3], y);
+      }
+      return out;
+    });
+    const thickness = Math.max(0.8, line * perPixel);
+    return {
+      annotationType: TYPE.INK,
+      pageIndex,
+      rect: [rect[0] - thickness, rect[1] - thickness, rect[2] + thickness, rect[3] + thickness],
+      rotation: viewport.rotation,
+      color: rgb(color),
+      thickness,
+      opacity: 1,
+      paths: { lines: null, points },
+      isCopy: true,
+    };
+  }
+
+  /**
+   * Подпись картинкой — у сохранённых в 0.24.0 есть только PNG. Через
+   * deserialize, а не как обычную картинку: та ставится «пиксель = пункт»,
+   * и подпись заняла бы пол-листа.
+   */
+  async function signatureStamp(blob, viewport, [cx, cy], widthPt, pageIndex) {
+    const bitmap = await createImageBitmap(blob);
+    const aspect = bitmap.height / bitmap.width;
+    bitmap.close?.();
+    const half = [(widthPt * viewport.scale) / 2, (widthPt * aspect * viewport.scale) / 2];
+    const corners = [viewport.convertToPdfPoint(cx - half[0], cy - half[1]), viewport.convertToPdfPoint(cx + half[0], cy + half[1])];
+    return {
+      annotationType: TYPE.STAMP,
+      pageIndex,
+      rect: [
+        Math.min(corners[0][0], corners[1][0]),
+        Math.min(corners[0][1], corners[1][1]),
+        Math.max(corners[0][0], corners[1][0]),
+        Math.max(corners[0][1], corners[1][1]),
+      ],
+      rotation: viewport.rotation,
+      bitmapUrl: await dataUrl(blob),
+      isCopy: true,
+      accessibilityData: { altText: 'Подпись', decorative: false },
+    };
+  }
+
+  /** Подпись ≈ 6 см посреди видимой части текущей страницы. */
+  async function insertSignature(signature) {
+    // Режим «Картинка»: щелчок мимо правки только снимает выбор, ничего не рисует.
     if (!(await ensureEditing(TYPE.STAMP))) return;
     const pageIndex = viewer().currentPageNumber - 1;
     const layer = uiManager.getLayer?.(pageIndex) ?? uiManager.currentLayer;
@@ -270,37 +336,18 @@ export function createEditing(app) {
       hud('Страница ещё не готова — попробуйте через секунду');
       return;
     }
-    const bitmap = await createImageBitmap(blob);
-    const aspect = bitmap.height / bitmap.width;
-    bitmap.close?.();
     const { viewport } = view;
-    const [pageWidth] = viewport.viewBox.slice(2);
+    const pageWidth = Math.abs(viewport.viewBox[2] - viewport.viewBox[0]);
     const widthPt = Math.min(SIGNATURE_WIDTH, pageWidth * 0.45);
-    const scale = viewport.scale;
-    const [cx, cy] = visibleCenter(view);
-    const half = [(widthPt * scale) / 2, (widthPt * aspect * scale) / 2];
-    const corners = [
-      viewport.convertToPdfPoint(cx - half[0], cy - half[1]),
-      viewport.convertToPdfPoint(cx + half[0], cy + half[1]),
-    ];
-    const rect = [
-      Math.min(corners[0][0], corners[1][0]),
-      Math.min(corners[0][1], corners[1][1]),
-      Math.max(corners[0][0], corners[1][0]),
-      Math.max(corners[0][1], corners[1][1]),
-    ];
-    const editor = await layer.deserialize({
-      annotationType: TYPE.STAMP,
-      pageIndex: layer.pageIndex,
-      rect,
-      rotation: viewport.rotation,
-      bitmapUrl: await dataUrl(blob),
-      isCopy: true,
-      accessibilityData: { altText: 'Подпись', decorative: false },
-    });
+    const center = visibleCenter(view);
+    const data = signature.strokes?.length
+      ? signatureInk(signature, viewport, center, widthPt, layer.pageIndex)
+      : await signatureStamp(signature.blob ?? signature, viewport, center, widthPt, layer.pageIndex);
+    const editor = await layer.deserialize(data);
     if (!editor) return;
-    placeEditor(layer, editor, rect);
-    layer.addUndoableEditor?.(editor);
+    // Рисунок встаёт по своим точкам, картинку — подогнать под посчитанный прямоугольник.
+    placeEditor(layer, editor, data.annotationType === TYPE.STAMP ? data.rect : null);
+    // Рисунок pdf.js сам кладёт в историю отмены, картинку — когда она загрузится.
     uiManager.setSelected?.(editor);
     schedule();
   }
@@ -433,11 +480,52 @@ export function createEditing(app) {
 
   // ── Возврат правок при открытии ──────────────────────────────────────
 
+  /**
+   * Возвращённая из библиотеки правка — не действие пользователя, а pdf.js
+   * кладёт каждую добавленную в историю отмены (рисунок — сразу, картинку —
+   * когда загрузится): Ctrl+Z после открытия стирал бы их. Такую правку
+   * помечаем, и её первую запись в историю пропускаем.
+   */
+  const quietEditors = new WeakSet();
+  function guardUndo(layer) {
+    const proto = Object.getPrototypeOf(layer);
+    const original = proto?.addUndoableEditor;
+    if (typeof original !== 'function' || original.pdfReaderGuard) return;
+    function addUndoableEditor(editor) {
+      if (quietEditors.has(editor)) {
+        quietEditors.delete(editor);
+        return undefined;
+      }
+      return original.call(this, editor);
+    }
+    addUndoableEditor.pdfReaderGuard = true;
+    proto.addUndoableEditor = addUndoableEditor;
+  }
+
   /** Правку из библиотеки — редактором на отрисованный слой страницы. */
   async function placeItem(layer, item, mine) {
     const editor = await layer.deserialize(item).catch((error) => console.warn('Правка не вернулась', error));
     if (!editor || mine !== generation) return;
+    guardUndo(layer);
+    quietEditors.add(editor);
+    const focused = document.activeElement;
     placeEditor(layer, editor, item.rect);
+    // pdf.js ставит фокус на добавленную правку и выбирает её — возвращённая
+    // не должна забирать ни фокус (клавиши читалки), ни выбор.
+    const { div } = editor;
+    if (!div) return;
+    if (div.contains(document.activeElement)) {
+      div.blur();
+      if (focused?.isConnected && focused !== document.body) focused.focus?.({ preventScroll: true });
+    }
+    if (div.classList.contains('selectedEditor')) uiManager?.unselect?.(editor);
+    // Картинка ставит фокус на себя ещё раз, когда изображение загрузится, —
+    // этот один вызов глушим (не дольше 10 с).
+    if (editor.mode === TYPE.STAMP) {
+      const release = () => delete div.focus;
+      div.focus = () => release();
+      setTimeout(release, 10000);
+    }
   }
 
   /**

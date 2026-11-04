@@ -2010,19 +2010,21 @@ try {
   for (let i = 0; i < 30; i += 1) await editTab.mouse.move(pad.x + 30 + i * 9, pad.y + 90 + Math.sin(i / 3) * 30);
   await editTab.mouse.up();
   await editTab.click('#sigInsert');
-  await editTab.waitForFunction(() => document.querySelectorAll('.stampEditor').length === 2, null, { timeout: 8000 });
+  await editTab.waitForFunction(() => document.querySelectorAll('.inkEditor').length === 2, null, { timeout: 8000 });
   await editTab.click('#editDone');
   await editTab.waitForTimeout(1200);
   const editsBefore = await editRects();
-  const signatureWidth = editsBefore.filter(([name]) => name === 'stampEditor').map(([, rect]) => rect[2] - rect[0]);
+  // Подпись — линиями (рисунок), а не картинкой: чёткая при любом масштабе.
+  const signatureWidth = editsBefore.filter(([name]) => name === 'inkEditor').map(([, rect]) => +(rect[2] - rect[0]).toFixed(1));
   const stored = await editTab.evaluate(async () => {
     const library = await import('./src/library.js');
     const edits = await library.getEdits(window.pdfReaderApp.readingState.documentId);
-    return { items: edits?.items.map((item) => item.annotationType).sort((a, b) => a - b), signatures: (await library.listSignatures()).length };
+    const signatures = await library.listSignatures();
+    return { items: edits?.items.map((item) => item.annotationType).sort((a, b) => a - b), signatures: signatures.length, strokes: signatures[0]?.strokes?.length ?? 0 };
   });
   check(
-    'правка: текст, рисунок, картинка и подпись сохранены в библиотеке, подпись ≈6 см и запомнена',
-    JSON.stringify(stored.items) === '[3,13,13,15]' && stored.signatures === 1 && signatureWidth.some((width) => Math.abs(width - 170) < 1),
+    'правка: текст, рисунок, картинка и подпись (линиями) сохранены в библиотеке, подпись ≈6 см и запомнена со штрихами',
+    JSON.stringify(stored.items) === '[3,13,15,15]' && stored.signatures === 1 && stored.strokes === 1 && signatureWidth.some((width) => Math.abs(width - 170) < 10),
     JSON.stringify({ ...stored, signatureWidth })
   );
   // Место чтения — на первой странице: после перезагрузки страница с правками ещё не отрисована.
@@ -2044,7 +2046,8 @@ try {
   check(
     'правка: «Скачать» кладёт в PDF все правки, даже с неотрисованной страницы; у текста есть оформление для других программ',
     !waiting.rendered && waiting.count === 4 &&
-      savedAnnotations.filter((annotation) => ['Ink', 'Stamp'].includes(annotation.subtype)).length === 3 &&
+      savedAnnotations.filter((annotation) => annotation.subtype === 'Ink').length === 2 &&
+      savedAnnotations.filter((annotation) => annotation.subtype === 'Stamp').length === 1 &&
       savedNote?.hasAppearance && savedNote.textContent?.join(' ') === 'Проверить ещё раз',
     JSON.stringify({ waiting, subtypes: savedAnnotations.map((annotation) => annotation.subtype), note: savedNote && { appearance: savedNote.hasAppearance, text: savedNote.textContent } })
   );
@@ -2053,6 +2056,30 @@ try {
   await editTab.waitForTimeout(800);
   const editsAfter = await editRects();
   check('правка: после перезагрузки правки на тех же местах', JSON.stringify(editsAfter) === JSON.stringify(editsBefore), `${JSON.stringify(editsBefore)} → ${JSON.stringify(editsAfter)}`);
+  // Возвращённые правки — не действие пользователя: не забирают фокус, и Ctrl+Z их не стирает.
+  const quiet = await editTab.evaluate(() => ({ focus: Boolean(document.activeElement?.closest('.annotationEditorLayer > div')), selected: document.querySelectorAll('.selectedEditor').length }));
+  await editTab.keyboard.press('KeyE');
+  await editTab.click('#editDraw');
+  await editTab.keyboard.press('Control+z');
+  await editTab.waitForTimeout(300);
+  const afterUndo = await editTab.evaluate(() => ({ count: window.pdfReaderApp.editing.snapshot().length, undo: !document.getElementById('editUndo').disabled }));
+  check(
+    'правка: возвращённые правки не забирают фокус и не стираются по Ctrl+Z',
+    !quiet.focus && !quiet.selected && afterUndo.count === 4 && !afterUndo.undo,
+    JSON.stringify({ ...quiet, ...afterUndo })
+  );
+  await editTab.click('#editDone');
+  // Верхняя панель — в одну строку без прокрутки и на 1280, и на 1366 пикселях.
+  const toolbarFits = [];
+  for (const width of [1280, 1366, 1024]) {
+    await editTab.setViewportSize({ width, height: 860 });
+    await editTab.waitForTimeout(300);
+    toolbarFits.push(await editTab.evaluate((w) => {
+      const bar = document.getElementById('toolbar');
+      return `${w}: ${bar.scrollWidth}/${bar.clientWidth} ${bar.className}`;
+    }, width));
+  }
+  check('верхняя панель помещается без прокрутки (1024–1366 px)', toolbarFits.every((line) => { const [a, b] = line.split(' ')[1].split('/').map(Number); return a <= b + 1; }), toolbarFits.join(' | '));
   await editTab.close();
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));

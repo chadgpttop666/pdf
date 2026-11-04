@@ -1,7 +1,9 @@
-// Подпись: расписаться мышью, пером или пальцем — и поставить на страницу
-// картинкой. Сохранённые подписи лежат в библиотеке (IndexedDB) и ставятся
-// одним щелчком. В Firefox для этого своё окно; в сборке компонентов pdf.js
-// его нет, поэтому окно — наше, а на страницу подпись идёт картинкой (Stamp).
+// Подпись: расписаться мышью, пером или пальцем — и поставить на страницу.
+// В Firefox для этого своё окно; в сборке компонентов pdf.js его нет,
+// поэтому окно — наше. На страницу подпись идёт линиями — рисунком от руки
+// (Ink), а не картинкой: так она чёткая при любом масштабе и в файле.
+// Сохранённые подписи лежат в библиотеке (IndexedDB): штрихи и картинка для
+// списка. Подписи из 0.24.0 — только картинка, они ставятся картинкой.
 
 import { $, on } from '../dom.js';
 import * as library from '../library.js';
@@ -10,6 +12,37 @@ import { setIcon } from '../ui/icons.js';
 const INK = '#1b2a6b'; // тёмно-синие «чернила», как у ручки
 const LINE = 2.6; // толщина линии в CSS-пикселях
 const MAX_SAVED = 5;
+
+/**
+ * Штрихи → подпись: точки относительно её левого верхнего угла (с запасом
+ * на толщину линии), в CSS-пикселях поля.
+ * @param strokes [[x0, y0, x1, y1, …], …]
+ */
+export function normalizeStrokes(strokes, line = LINE) {
+  const drawn = strokes.filter((stroke) => stroke.length >= 2);
+  if (!drawn.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const stroke of drawn) {
+    for (let i = 0; i < stroke.length; i += 2) {
+      minX = Math.min(minX, stroke[i]);
+      maxX = Math.max(maxX, stroke[i]);
+      minY = Math.min(minY, stroke[i + 1]);
+      maxY = Math.max(maxY, stroke[i + 1]);
+    }
+  }
+  const pad = line / 2;
+  const round = (value) => Math.round(value * 100) / 100;
+  return {
+    strokes: drawn.map((stroke) => stroke.map((value, i) => round(value - (i % 2 ? minY : minX) + pad))),
+    width: round(maxX - minX + line),
+    height: round(maxY - minY + line),
+    line,
+    color: INK,
+  };
+}
 
 /**
  * Обрезать рисунок по нарисованному и отдать PNG с прозрачным фоном.
@@ -24,7 +57,8 @@ export function trimRect(bounds, width, height, margin) {
 }
 
 /**
- * @param onInsert (blob PNG) → вставить подпись на страницу
+ * @param onInsert ({ strokes, width, height, line, color, blob }) → поставить
+ *   подпись на страницу; у подписей из 0.24.0 есть только blob (PNG)
  */
 export function createSignatureDialog({ onInsert, hud }) {
   const dialog = $('signatureDialog');
@@ -34,6 +68,7 @@ export function createSignatureDialog({ onInsert, hud }) {
   const context = canvas.getContext('2d');
   let bounds = null;
   let drawing = null;
+  let strokes = []; // штрихи в CSS-пикселях поля: [x0, y0, x1, y1, …]
   const objectUrls = [];
 
   function resize() {
@@ -47,6 +82,7 @@ export function createSignatureDialog({ onInsert, hud }) {
     context.strokeStyle = INK;
     context.lineWidth = LINE;
     bounds = null;
+    strokes = [];
     $('sigInsert').disabled = true;
   }
 
@@ -69,6 +105,7 @@ export function createSignatureDialog({ onInsert, hud }) {
     canvas.setPointerCapture(event.pointerId);
     const start = point(event);
     drawing = { last: start, mid: start };
+    strokes.push([start.x, start.y]);
     context.beginPath();
     context.arc(start.x, start.y, LINE / 2, 0, Math.PI * 2);
     context.fillStyle = INK;
@@ -85,6 +122,7 @@ export function createSignatureDialog({ onInsert, hud }) {
     context.quadraticCurveTo(drawing.last.x, drawing.last.y, mid.x, mid.y);
     context.stroke();
     drawing = { last: next, mid };
+    strokes.at(-1)?.push(next.x, next.y);
     grow(next);
     $('sigInsert').disabled = false;
   });
@@ -94,7 +132,7 @@ export function createSignatureDialog({ onInsert, hud }) {
   on(canvas, 'pointerup', finish);
   on(canvas, 'pointercancel', finish);
 
-  /** Нарисованное — PNG, обрезанный по подписи. */
+  /** Нарисованное — картинка для списка сохранённых, обрезанная по подписи. */
   async function drawnPng() {
     if (!bounds) return null;
     const rect = trimRect(bounds, canvas.width, canvas.height, 4);
@@ -123,7 +161,7 @@ export function createSignatureDialog({ onInsert, hud }) {
       use.append(img);
       on(use, 'click', () => {
         dialog.close();
-        onInsert(item.blob);
+        onInsert(item);
       });
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -144,16 +182,18 @@ export function createSignatureDialog({ onInsert, hud }) {
 
   on($('sigClear'), 'click', resize);
   on($('sigInsert'), 'click', async () => {
+    const drawn = normalizeStrokes(strokes);
     const blob = await drawnPng();
-    if (!blob) return;
+    if (!drawn || !blob) return;
+    const signature = { ...drawn, blob };
     if (remember.checked) {
       const saved = await library.listSignatures().catch(() => []);
       // Не больше пяти: самая старая уступает место новой.
       for (const old of saved.slice(MAX_SAVED - 1)) await library.deleteSignature(old.id);
-      await library.putSignature({ id: `sig-${Date.now()}`, blob, createdAt: Date.now() }).catch(() => hud?.show('Подпись не сохранилась — поставлю только сейчас'));
+      await library.putSignature({ id: `sig-${Date.now()}`, ...signature, createdAt: Date.now() }).catch(() => hud?.show('Подпись не сохранилась — поставлю только сейчас'));
     }
     dialog.close();
-    onInsert(blob);
+    onInsert(signature);
   });
 
   return {

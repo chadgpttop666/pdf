@@ -116,6 +116,25 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 #app.chrome-hidden #toolbar,
 #app.chrome-hidden .bar { display: none; }
 
+/* Узкое окно: панель сжимается ступенями (ui/toolbar.js, fitToWidth).
+   Подпись прячем размером шрифта: значок задан в пикселях и остаётся, а
+   текст остаётся именем кнопки для чтения с экрана; подсказка — в title. */
+#toolbar.fit-files :is(#btnOpen, #btnDownload),
+#toolbar.fit-labels > button.has-icon:not(.icon, .eta-chip) {
+  font-size: 0;
+  gap: 0;
+  padding: 0;
+  width: 32px;
+  min-width: 32px;
+}
+#toolbar.fit-title #docTitle { display: none; }
+#toolbar.fit-eta #readingEtaText { display: none; }
+#toolbar.fit-eta .eta-chip { padding: 2px 6px; }
+#toolbar.fit-tight { gap: 3px; padding: 0 4px; }
+#toolbar.fit-tight .divider { display: none; }
+#toolbar.fit-tight #zoomSelect { width: 120px; }
+#toolbar.fit-tight #pageNumber { width: 44px; }
+
 .pager { display: flex; align-items: center; gap: 4px; }
 #pageNumber { width: 58px; text-align: right; appearance: textfield; -moz-appearance: textfield; }
 #pageNumber::-webkit-inner-spin-button,
