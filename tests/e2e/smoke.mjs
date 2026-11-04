@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { dummyTeraFiles } from '../../scripts/make-dummy-tera.mjs';
 import { readOgg } from '../../extension/src/tts/ogg-opus.js';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PORT = Number(process.env.PORT || 8123);
@@ -1957,6 +1958,102 @@ try {
   );
   await oldTab.close();
   await newTab.close();
+
+  // ── Правка: текст, рисунок, картинка, подпись — сохраняются, возвращаются, скачиваются ──
+  const editTab = await context.newPage();
+  await editTab.addInitScript(speechMock);
+  editTab.on('pageerror', (error) => consoleErrors.push(`правка: ${error.message}`));
+  const openEdited = async () => {
+    await editTab.goto(`${BASE}/viewer.html?file=/fixtures/sample.pdf`);
+    await editTab.waitForFunction(() => window.pdfReaderApp?.readingState?.record && window.pdfReaderApp.pdfViewer.pagesCount > 0, null, { timeout: 20000 });
+    await editTab.waitForFunction(() => !document.getElementById('app').classList.contains('opening'), null, { timeout: 10000 });
+    await editTab.waitForTimeout(800);
+  };
+  const LAST = 8;
+  const editRects = () =>
+    editTab.evaluate((index) => {
+      const manager = window.pdfReaderApp.pdfViewer._layerProperties.annotationEditorUIManager;
+      return [...manager.getEditors(index)].map((editor) => [editor.name, editor.getPDFRect().map((value) => +value.toFixed(1))]).sort();
+    }, LAST - 1);
+  await openEdited();
+  await editTab.evaluate((n) => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: n }), LAST);
+  await editTab.waitForTimeout(800);
+  await editTab.keyboard.press('KeyE');
+  await editTab.click('#editText');
+  await editTab.waitForFunction(() => window.pdfReaderApp.pdfViewer.annotationEditorMode === 3);
+  const lastBox = await editTab.locator(`.page[data-page-number="${LAST}"]`).boundingBox();
+  await editTab.mouse.click(lastBox.x + 140, lastBox.y + 180);
+  await editTab.waitForFunction(() => document.activeElement?.classList.contains('internal'));
+  await editTab.keyboard.type('Проверить ещё раз');
+  await editTab.keyboard.press('Escape');
+  await editTab.click('#editDraw');
+  await editTab.waitForFunction(() => window.pdfReaderApp.pdfViewer.annotationEditorMode === 15);
+  await editTab.mouse.move(lastBox.x + 140, lastBox.y + 330);
+  await editTab.mouse.down();
+  for (let i = 0; i < 20; i += 1) await editTab.mouse.move(lastBox.x + 140 + i * 10, lastBox.y + 330 + (i % 4) * 8);
+  await editTab.mouse.up();
+  const png = await editTab.evaluate(() => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 120, height: 80 });
+    const context2d = canvas.getContext('2d');
+    context2d.fillStyle = '#e8553e';
+    context2d.fillRect(0, 0, 120, 80);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  const imageChooser = editTab.waitForEvent('filechooser');
+  await editTab.click('#editImage');
+  await (await imageChooser).setFiles({ name: 'картинка.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  await editTab.waitForFunction(() => document.querySelectorAll('.stampEditor').length === 1, null, { timeout: 8000 });
+  await editTab.click('#editSignature');
+  const pad = await editTab.locator('#sigPad').boundingBox();
+  await editTab.mouse.move(pad.x + 30, pad.y + 90);
+  await editTab.mouse.down();
+  for (let i = 0; i < 30; i += 1) await editTab.mouse.move(pad.x + 30 + i * 9, pad.y + 90 + Math.sin(i / 3) * 30);
+  await editTab.mouse.up();
+  await editTab.click('#sigInsert');
+  await editTab.waitForFunction(() => document.querySelectorAll('.stampEditor').length === 2, null, { timeout: 8000 });
+  await editTab.click('#editDone');
+  await editTab.waitForTimeout(1200);
+  const editsBefore = await editRects();
+  const signatureWidth = editsBefore.filter(([name]) => name === 'stampEditor').map(([, rect]) => rect[2] - rect[0]);
+  const stored = await editTab.evaluate(async () => {
+    const library = await import('./src/library.js');
+    const edits = await library.getEdits(window.pdfReaderApp.readingState.documentId);
+    return { items: edits?.items.map((item) => item.annotationType).sort((a, b) => a - b), signatures: (await library.listSignatures()).length };
+  });
+  check(
+    'правка: текст, рисунок, картинка и подпись сохранены в библиотеке, подпись ≈6 см и запомнена',
+    JSON.stringify(stored.items) === '[3,13,13,15]' && stored.signatures === 1 && signatureWidth.some((width) => Math.abs(width - 170) < 1),
+    JSON.stringify({ ...stored, signatureWidth })
+  );
+  // Место чтения — на первой странице: после перезагрузки страница с правками ещё не отрисована.
+  await editTab.evaluate(async () => {
+    window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await window.pdfReaderApp.readingState.save();
+  });
+  await openEdited();
+  const waiting = await editTab.evaluate((index) => ({
+    rendered: Boolean(window.pdfReaderApp.pdfViewer._layerProperties.annotationEditorUIManager.getLayer(index)?.div),
+    count: window.pdfReaderApp.editing.snapshot().length,
+  }), LAST - 1);
+  const [editDownload] = await Promise.all([editTab.waitForEvent('download', { timeout: 15000 }), editTab.click('#btnDownload')]);
+  const savedDoc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(await editDownload.path())), verbosity: 0 }).promise;
+  const savedAnnotations = await (await savedDoc.getPage(LAST)).getAnnotations();
+  await savedDoc.loadingTask.destroy();
+  const savedNote = savedAnnotations.find((annotation) => annotation.subtype === 'FreeText');
+  check(
+    'правка: «Скачать» кладёт в PDF все правки, даже с неотрисованной страницы; у текста есть оформление для других программ',
+    !waiting.rendered && waiting.count === 4 &&
+      savedAnnotations.filter((annotation) => ['Ink', 'Stamp'].includes(annotation.subtype)).length === 3 &&
+      savedNote?.hasAppearance && savedNote.textContent?.join(' ') === 'Проверить ещё раз',
+    JSON.stringify({ waiting, subtypes: savedAnnotations.map((annotation) => annotation.subtype), note: savedNote && { appearance: savedNote.hasAppearance, text: savedNote.textContent } })
+  );
+  await editTab.evaluate((n) => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: n }), LAST);
+  await editTab.waitForFunction((index) => window.pdfReaderApp.pdfViewer._layerProperties.annotationEditorUIManager.getLayer(index)?.div, LAST - 1, { timeout: 8000 });
+  await editTab.waitForTimeout(800);
+  const editsAfter = await editRects();
+  check('правка: после перезагрузки правки на тех же местах', JSON.stringify(editsAfter) === JSON.stringify(editsBefore), `${JSON.stringify(editsBefore)} → ${JSON.stringify(editsAfter)}`);
+  await editTab.close();
 
   check('в консоли нет ошибок', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

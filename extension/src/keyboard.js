@@ -118,6 +118,7 @@ export function bindKeyboard(app) {
     const binding = map.get(comboFromEvent(event));
     if (!binding) return;
     if (isTypingTarget(event.target) && !binding.allowWhileTyping) return;
+    if (app.editing?.claimsKey(event)) return; // выбранную правку двигает и удаляет pdf.js
     if (event.defaultPrevented) return;
     if (binding.when && !binding.when(app)) return; // клавишу забирает браузер
 

@@ -25,6 +25,8 @@ const RESTORED_PREFIX = 'pdfjs_internal_editor_restored_';
 // Ширина подписи на странице, пт (≈ 6 см).
 const SIGNATURE_WIDTH = 170;
 const CHANNEL = 'pdf-reader-edits';
+// Клавиши редактора pdf.js: двигать выбранную правку, снять выбор, удалить, войти в надпись.
+const EDITOR_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Enter', ' ', 'Backspace', 'Delete']);
 
 let fontPromise = null;
 function annotationFont() {
@@ -658,6 +660,15 @@ export function createEditing(app) {
     },
     close() {
       if (!bar.hidden) showBar(false);
+    },
+    /**
+     * Клавиша нужна редактору pdf.js, а не читалке: при выбранной правке
+     * стрелки её двигают, а не листают экран, Esc снимает выбор, а не
+     * закрывает панель.
+     */
+    claimsKey(event) {
+      if (currentMode() <= TYPE.NONE || !uiManager || !EDITOR_KEYS.has(event.key)) return false;
+      return Boolean(uiManager.hasSelection || document.activeElement?.closest?.('.annotationEditorLayer'));
     },
     hasEdits,
     editedPdf,
