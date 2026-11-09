@@ -16,10 +16,13 @@ export function createNoteFilter(readingState) {
     get count() {
       return muted().size;
     },
-    /** Выключить (mute) или включить примечания с такими текстами. */
+    /**
+     * Выключить (mute) или включить примечания с такими текстами.
+     * @returns false — документа нет в библиотеке, запомнить негде
+     */
     async set(texts, mute) {
       const state = readingState();
-      if (!state?.record) return;
+      if (!state?.record) return false;
       const keys = texts.map(noteKey);
       await state.mutate(
         (record) => {
@@ -32,6 +35,7 @@ export function createNoteFilter(readingState) {
         },
         { silent: true }
       );
+      return true;
     },
   };
 }
@@ -81,6 +85,7 @@ export function createNotePicker({ filter, textIndex, available = () => '', onCh
   closeOnBackdropClick(dialog);
   let notes = [];
   let generation = 0;
+  const NOWHERE = 'Не получилось запомнить выбор: документа нет в библиотеке';
 
   function describeCount() {
     const off = notes.filter((note) => filter.isMuted(note.text)).length;
@@ -91,20 +96,29 @@ export function createNotePicker({ filter, textIndex, available = () => '', onCh
     const box = el('input', { type: 'checkbox', 'aria-label': `Читать примечание ${note.mark}` });
     box.checked = !filter.isMuted(note.text);
     box.addEventListener('change', async () => {
-      await filter.set([note.text], !box.checked);
+      if (!(await filter.set([note.text], !box.checked))) {
+        box.checked = !box.checked;
+        status.textContent = NOWHERE;
+        return;
+      }
       describeCount();
       onChange();
     });
     return el('li', {}, [
-      el('label', {}, [box, el('span', { class: 'note-picker-mark' }, `${note.mark} · стр. ${note.page}`), el('span', { class: 'note-picker-text' }, note.text)]),
+      el('label', {}, [
+        box,
+        el('span', { class: 'note-picker-mark' }, `Примечание ${note.mark} · стр. ${note.page}`),
+        el('span', { class: 'note-picker-text', title: note.text }, note.text),
+      ]),
     ]);
   }
 
   async function setAll(mute) {
-    await filter.set(
-      notes.map((note) => note.text),
-      mute
-    );
+    const texts = notes.map((note) => note.text);
+    if (!(await filter.set(texts, mute))) {
+      status.textContent = NOWHERE;
+      return;
+    }
     for (const box of list.querySelectorAll('input[type=checkbox]')) box.checked = !mute;
     describeCount();
     onChange();

@@ -598,9 +598,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     if (!ahead) {
       // Начинать — только пока звучит текущая: иначе это уже не «встык».
       if (!player.speaking) return;
-      const at = upcoming.indexOf(now.key);
-      // Список обновился уже после начала фразы и её в нём нет — он начинается со следующей.
-      const nextKey = at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
+      const nextKey = nextKeyAfter(now);
       const entry = nextKey && cache.get(nextKey);
       if (!entry?.pieces[0]?.done) return;
       ahead = { key: nextKey, entry, handles: [], token };
@@ -611,6 +609,13 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       const { pcm, timings } = playable(piece, piece.result, true);
       handles.push(player.enqueue(pcm, piece.result.sampleRate, { volume: liveVolume, timings, gap: handles.length ? 0 : gapOf(now.options) }));
     }
+  }
+
+  /** Какая фраза по списку заготовок зазвучит после этой. */
+  function nextKeyAfter(now) {
+    const at = upcoming.indexOf(now.key);
+    // Список обновился уже после начала фразы и её в нём нет — он начинается со следующей.
+    return at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
   }
 
   /** Поставленная заранее фраза не понадобилась — снять её звук. */
@@ -806,6 +811,8 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       upcomingSeq += 1;
       const keep = new Set(upcoming);
       for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
+      // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
+      if (ahead && scheduled && ahead.key !== nextKeyAfter(scheduled)) dropAhead();
       tryAhead();
     },
 

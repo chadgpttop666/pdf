@@ -418,6 +418,24 @@ export function createSettingsDialog(app) {
         renderTeraHelper(section);
         continue;
       }
+      if (item.custom === 'notesPick') {
+        if (!app.tts?.pickNotes) continue;
+        const muted = app.tts.notes?.count ?? 0;
+        grid.append(
+          el('div', { class: 'setting' }, [
+            el('span', { class: 'label' }, [
+              el('span', {}, 'Какие примечания читать'),
+              el(
+                'span',
+                { class: 'hint' },
+                `Все примечания открытой книги списком: снимите галочки у тех, что слушать не нужно, — голос их пропустит, и в аудиокниге тоже. Выбор у каждой книги свой.${muted ? ` Сейчас выключено: ${muted}.` : ''}`
+              ),
+            ]),
+            el('button', { type: 'button', id: 'pickNotes', onclick: () => app.tts.pickNotes() }, 'Выбрать…'),
+          ])
+        );
+        continue;
+      }
       if (item.custom === 'updates') {
         // Вьюер, открытый как веб-страница (режим отладки), — не расширение: обновлять нечего.
         if (!globalThis.browser?.runtime?.id) continue;

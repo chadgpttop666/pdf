@@ -11,6 +11,7 @@ import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.j
 import { createHighlighter } from './highlighter.js';
 import { createMediaKeys } from './media-keys.js';
 import { createNoteCard } from './note-card.js';
+import { createNoteFilter, createNotePicker } from './note-picker.js';
 import { createSleepTimer } from './sleep-timer.js';
 import { onUserStressChange } from './user-stress.js';
 import { createWordJoiner } from './word-breaks.js';
@@ -65,11 +66,26 @@ export function createTts(app) {
   let queued = [];
   // Примечания звучат отдельными фразами после своей: окошко показывает их
   // текст, и их можно пропустить.
-  let pendingNotes = []; // тексты примечаний текущей фразы, которые ещё прозвучат
+  let pendingSegments = []; // примечания текущей фразы, которые ещё впереди: { text, note }
   let noteSpeaking = false; // сейчас звучит примечание
+  let currentNote = null; // { key, text } звучащего примечания
   let noteSkipped = false;
   let currentText = ''; // что звучит сейчас: фраза или её примечание — его и переозвучивают
-  const noteCard = createNoteCard({ onSkip: () => skipNote(), wordLength });
+  // Какие примечания читать: выключенные голос пропускает (выбор у каждой книги свой).
+  const noteFilter = createNoteFilter(() => app.readingState);
+  /** Тексты примечаний текущей фразы, которые ещё прозвучат (выключенные — нет). */
+  const pendingNotes = () => pendingSegments.filter((item) => !noteFilter.isMuted(item.note.text)).map((item) => item.text);
+  const noteCard = createNoteCard({ onSkip: () => skipNote(), onMute: (note) => muteNote(note), onPick: () => pickNotes(), wordLength });
+  const notePicker = createNotePicker({
+    filter: noteFilter,
+    textIndex: () => index,
+    available: () => {
+      if (getSetting('ttsFootnotes') !== 'inline') return 'Сейчас голос не читает примечания вовсе: в настройках озвучки «Примечания и сноски» — «не читать».';
+      if (!index?.skipFurniture) return 'Примечания читаются отдельно, только когда колонтитулы и сноски не читаются подряд (настройки озвучки).';
+      return '';
+    },
+    onChange: () => notesChanged(),
+  });
   // Кнопки гарнитуры и медиаклавиши: пауза, дальше (во время примечания — пропустить его), назад.
   const mediaKeys = createMediaKeys({
     actions: { playPause: () => toggle(), next: () => next(), previous: () => jump(-1), stop: () => finish() },
@@ -282,7 +298,8 @@ export function createTts(app) {
     for (const part of parts) {
       for (const ref of index.refsOfSentence(part.page, part.sentenceIndex)) {
         const note = await index.noteFor(part.page.pageNumber, ref).catch(() => null);
-        if (note && !notes.some((known) => known.text === note)) notes.push({ key: ref.key, text: note });
+        // Выключенное примечание («Не читать это», список примечаний) — не читаем.
+        if (note && !noteFilter.isMuted(note) && !notes.some((known) => known.text === note)) notes.push({ key: ref.key, text: note });
       }
     }
     return notes;
@@ -294,7 +311,7 @@ export function createTts(app) {
    * продолжается без ожидания. Заготовки для других мест (читатель
    * перескочил, сменил скорость) провайдер отпускает.
    */
-  async function prefetchAhead(from, leading = pendingNotes) {
+  async function prefetchAhead(from, leading = pendingNotes()) {
     if (!provider.prepare || !from) return;
     const token = (prefetchToken += 1);
     const options = speechOptions();
@@ -591,9 +608,12 @@ export function createTts(app) {
         let skipUtterance = false;
         for (let s = 0; s < segments.length; s += 1) {
           const segment = segments[s];
-          const last = s === segments.length - 1;
-          pendingNotes = segments.slice(s + 1).map((item) => item.text);
+          // Примечание выключили, пока звучала фраза, — его не читаем.
+          if (segment.note && noteFilter.isMuted(segment.note.text)) continue;
+          pendingSegments = segments.slice(s + 1);
+          const last = !pendingNotes().length;
           noteSpeaking = Boolean(segment.note);
+          currentNote = segment.note ?? null;
           currentText = segment.text;
           noteSkipped = false;
           const options = speechOptions();
@@ -661,7 +681,7 @@ export function createTts(app) {
           if (pause && !provider.gapless) await delay(pause);
           if (myGeneration !== generation) return;
         }
-        pendingNotes = [];
+        pendingSegments = [];
         if (skipUtterance) {
           position = { ...utterance.next };
           continue;
@@ -683,7 +703,8 @@ export function createTts(app) {
     state = 'idle';
     range = null;
     queued = [];
-    pendingNotes = [];
+    pendingSegments = [];
+    currentNote = null;
     noteSpeaking = false;
     currentText = '';
     noteCard.hide();
@@ -845,7 +866,8 @@ export function createTts(app) {
   /** Перескок во время чтения или паузы: прерываем фразу и читаем с новой позиции. */
   function restartAt(target) {
     position = target;
-    pendingNotes = [];
+    pendingSegments = [];
+    currentNote = null;
     noteSpeaking = false;
     noteCard.hide();
     // После паузы синтез остаётся «на паузе» и новую фразу не начнёт, пока не продолжить.
@@ -921,6 +943,32 @@ export function createTts(app) {
     if (provider.skip) provider.skip();
     else provider.cancel();
     return true;
+  }
+
+  /**
+   * «Не читать это»: примечание выключено у книги — пропускаем его сейчас и
+   * не читаем больше (и в аудиокниге). Вернуть — в списке примечаний.
+   */
+  async function muteNote(note = currentNote) {
+    if (!note?.text) return;
+    if (currentNote?.text === note.text) skipNote();
+    const saved = await noteFilter.set([note.text], true);
+    app.hud.show(saved ? 'Это примечание больше не читается. Вернуть — «Какие примечания читать…»' : 'Не получилось запомнить выбор: документа нет в библиотеке', {
+      duration: 4000,
+    });
+    notesChanged();
+  }
+
+  /** Выбор примечаний поменялся — звучащее выключенное пропускаем, заготовки подстраиваем. */
+  function notesChanged() {
+    if (state === 'idle') return;
+    if (noteSpeaking && currentNote && noteFilter.isMuted(currentNote.text)) skipNote();
+    prefetchAhead(upcoming);
+  }
+
+  /** Окно «Какие примечания читать»: все примечания книги с галочками. */
+  function pickNotes() {
+    return notePicker.open();
   }
 
   /** «Дальше»: во время примечания — пропустить его, иначе — следующее предложение. */
@@ -1140,6 +1188,10 @@ export function createTts(app) {
     next,
     previous: () => jump(-1),
     skipNote,
+    muteNote,
+    pickNotes,
+    /** Какие примечания читать (выключенные — note-picker.js). */
+    notes: noteFilter,
     revoice,
     /** Звучит примечание (окошко на экране). */
     get noteSpeaking() {

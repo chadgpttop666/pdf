@@ -178,12 +178,18 @@ export function createPiperProvider() {
 
   const gapOf = (options) => Math.max(0, Number(options.gapMs) || 0) / 1000;
 
+  /** Какая фраза по списку заготовок зазвучит после этой. */
+  function nextAfter(now) {
+    const at = upcoming.findIndex((item) => item.key === now.key);
+    // Список обновился уже после начала фразы и её в нём нет — он начинается со следующей.
+    return at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
+  }
+
   /** Поставить следующую фразу (по списку заготовок) встык, пока звучит текущая. */
   function tryAhead() {
     const now = scheduled;
     if (!now || now.token !== token || ahead || now.options.chain === false || !player.speaking) return;
-    const at = upcoming.findIndex((item) => item.key === now.key);
-    const next = at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
+    const next = nextAfter(now);
     const audio = next && results.get(next.key);
     if (!audio) return;
     const { segments } = spokenForm(next.text, next.voiceId);
@@ -403,6 +409,8 @@ export function createPiperProvider() {
       upcomingSeq += 1;
       const keep = new Set(upcoming.map((item) => item.key));
       for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) forget(key);
+      // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
+      if (ahead && scheduled && ahead.key !== nextAfter(scheduled)?.key) dropAhead();
       tryAhead();
     },
 

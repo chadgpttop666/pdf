@@ -1,6 +1,8 @@
 // Окошко примечания: пока голос читает примечание к сноске, видно, что в нём
 // написано, где сейчас голос, сколько оно звучит и сколько ещё осталось, — и
 // его можно пропустить: кнопкой или клавишей «.» (следующее предложение).
+// «Не читать это» выключает примечание насовсем (у этой книги), «Какие
+// примечания читать…» открывает список всех (note-picker.js).
 
 import { $ } from '../dom.js';
 
@@ -13,15 +15,19 @@ const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seco
 
 /**
  * @param onSkip нажали «Пропустить»
+ * @param onMute нажали «Не читать это» — (примечание { key, text })
+ * @param onPick нажали «Какие примечания читать…»
  * @param wordLength (text, index) => длина слова с этого места — когда голос её не сообщил
  */
-export function createNoteCard({ onSkip, wordLength = () => 1 }) {
+export function createNoteCard({ onSkip, onMute = () => {}, onPick = () => {}, wordLength = () => 1 }) {
   const card = $('ttsNote');
   const title = card.querySelector('.tts-note-title');
   const body = card.querySelector('.tts-note-text');
   const time = card.querySelector('.tts-note-time');
   const fill = card.querySelector('.tts-note-fill');
   card.querySelector('.tts-note-skip').addEventListener('click', () => onSkip());
+  card.querySelector('.tts-note-mute')?.addEventListener('click', () => note && onMute(note));
+  card.querySelector('.tts-note-pick')?.addEventListener('click', () => onPick());
 
   let note = null; // { key, text, prefix } — prefix: длина «Примечание: » в произносимом тексте
   let rate = 1;

@@ -371,6 +371,7 @@ try {
       };
       const skippedAt = performance.now();
       if (how === 'key') reader.next();
+      else if (how === 'mute') card.querySelector('.tts-note-mute').click();
       else card.querySelector('.tts-note-skip').click();
       for (let i = 0; i < 100 && window.spokenSentences.length < before + 3; i += 1) await new Promise((r) => setTimeout(r, 10));
       const nextAfterMs = Math.round(performance.now() - skippedAt);
@@ -396,6 +397,55 @@ try {
         run.nextAfterMs < 600
     ),
     JSON.stringify({ noteByButton, noteByKey })
+  );
+
+  // «Не читать это»: примечание пропускается сейчас и больше не читается у
+  // этой книги; в списке «Какие примечания читать» у него снята галочка, и
+  // галочка возвращает его.
+  const noteByMute = await noteRun('mute');
+  await page.waitForFunction(() => (window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length === 1, null, { timeout: 5000 });
+  const sentencesAfterNote = async () =>
+    page.evaluate(async () => {
+      const reader = window.pdfReaderApp.tts;
+      const page3 = await reader.textIndex.page(3);
+      const sentenceIndex = page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов'));
+      const before = window.spokenSentences.length;
+      reader.start({ pageNumber: 3, sentenceIndex });
+      for (let i = 0; i < 300 && window.spokenSentences.length < before + 2; i += 1) await new Promise((r) => setTimeout(r, 10));
+      const spoken = window.spokenSentences.slice(before, before + 2);
+      reader.stop();
+      return spoken;
+    });
+  const mutedRun = await sentencesAfterNote();
+  await page.evaluate(() => window.pdfReaderApp.tts.pickNotes());
+  await page.waitForFunction(() => document.querySelectorAll('#notePickerDialog .note-picker-list li').length > 0, null, { timeout: 15000 });
+  const picker = await page.evaluate(() => {
+    const dialog = document.getElementById('notePickerDialog');
+    const rows = [...dialog.querySelectorAll('.note-picker-list li')].map((row) => ({
+      mark: row.querySelector('.note-picker-mark').textContent,
+      text: row.querySelector('.note-picker-text').textContent,
+      on: row.querySelector('input').checked,
+    }));
+    return { open: dialog.open, rows, status: dialog.querySelector('.note-picker-status').textContent };
+  });
+  // Галочку обратно — примечание снова читается.
+  await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#notePickerDialog .note-picker-list li')].find((item) => item.textContent.includes('Микрофильм'));
+    row.querySelector('input').click();
+  });
+  await page.waitForFunction(() => (window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length === 0, null, { timeout: 5000 });
+  await page.evaluate(() => document.getElementById('notePickerDialog').close());
+  const unmutedRun = await sentencesAfterNote();
+  const microRow = picker.rows.find((row) => row.text === noteText);
+  check(
+    '«Не читать это» пропускает примечание и выключает его у книги; в списке примечаний оно без галочки, галочка возвращает его',
+    noteByMute.spoken[1] === `Примечание: ${noteText}` &&
+      noteByMute.spoken[2] && !/Примечание/.test(noteByMute.spoken[2]) &&
+      noteByMute.nextAfterMs < 600 &&
+      /микрофильмов\.$/.test(mutedRun[0] ?? '') && mutedRun[1] && !/Примечание/.test(mutedRun[1]) &&
+      picker.open && microRow && !microRow.on && /стр\. 3/.test(microRow.mark) && /не читаются: 1/.test(picker.status) &&
+      unmutedRun[1] === `Примечание: ${noteText}`,
+    JSON.stringify({ noteByMute, mutedRun, picker, unmutedRun })
   );
 
   // Таймер сна «до конца главы»: дочитали страницу перед новой главой — тишина
@@ -1972,6 +2022,20 @@ try {
     'книга без переносов: галочка выключена — открытая книга переверстана сразу, слова не разорваны, ключ тот же; включили — переносы вернулись',
     relaidBook.plain.relaid && !relaidBook.plain.hyphenated && relaidBook.plain.word && relaidBook.plain.id === relaidBook.id && relaidBook.back.relaid && relaidBook.back.hyphenated,
     JSON.stringify(relaidBook)
+  );
+  // Список «Какие примечания читать» в книге с примечаниями в конце: все три
+  // по порядку, без лишних строк из самого раздела «Примечания».
+  const bookNotes = await bookTab.evaluate(async () => {
+    const { collectNotes } = await import('./src/tts/note-picker.js');
+    return (await collectNotes(window.pdfReaderApp.tts.textIndex)).map((note) => `${note.mark}|${note.page}|${note.text}`);
+  });
+  check(
+    'список примечаний книги: все три по порядку, из раздела «Примечания» — ничего лишнего',
+    bookNotes.length === 3 &&
+      /ровный цвет полосы/.test(bookNotes[0]) &&
+      /проф\. Иванов в 1928 году/.test(bookNotes[1]) &&
+      /удерживать внимание/.test(bookNotes[2]),
+    JSON.stringify(bookNotes)
   );
   await bookTab.close();
 
