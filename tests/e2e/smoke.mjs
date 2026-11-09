@@ -6,7 +6,8 @@
 // Chromium. Синтез речи подменяется заглушкой: голосов в headless нет.
 
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -2036,6 +2037,70 @@ try {
       /проф\. Иванов в 1928 году/.test(bookNotes[1]) &&
       /удерживать внимание/.test(bookNotes[2]),
     JSON.stringify(bookNotes)
+  );
+
+  // Интернет-ссылки голос пропускает: в тексте, в примечаниях; примечание из
+  // одной ссылки не читается вовсе. На странице адреса остаются. Включили
+  // «Читать интернет-ссылки» — читаются.
+  const linksBook = join(mkdtempSync(join(tmpdir(), 'pdf-reader-links-')), 'links.fb2');
+  writeFileSync(
+    linksBook,
+    `<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><author><first-name>Анна</first-name><last-name>Тестова</last-name></author><book-title>Ссылки</book-title><lang>ru</lang></title-info></description>
+<body><section><title><p>Глава первая</p></title>
+<p>Подробности на сайте https://example.com/docs/reader и в книге.</p>
+<p>Пишите на почту reader@mail.ru, ответим.</p>
+<p>Источник указан в сноске<a l:href="#n1" type="note">[1]</a>.</p>
+<p>Справочник назван во второй сноске<a l:href="#n2" type="note">[2]</a>.</p>
+<p>Конец главы.</p>
+</section></body>
+<body name="notes"><title><p>Примечания</p></title>
+<section id="n1"><title><p>1</p></title><p>URL: https://cyberleninka.ru/article/n/chtenie</p></section>
+<section id="n2"><title><p>2</p></title><p>Подробнее: www.gramota.ru — справочник.</p></section>
+</body></FictionBook>`
+  );
+  const linksBefore = await bookTab.evaluate(() => window.pdfReaderApp.readingState?.documentId ?? null);
+  await bookTab.setInputFiles('#filePicker', linksBook);
+  await bookTab.waitForFunction(
+    (before) => window.pdfReaderApp.readingState?.documentId !== before && window.pdfReaderApp.readingState?.record?.title === 'Ссылки' && window.pdfReaderApp.pdfViewer.pagesCount > 0,
+    linksBefore,
+    { timeout: 30000 }
+  );
+  await bookTab.waitForFunction(() => !document.getElementById('app').classList.contains('booting'), null, { timeout: 10000 });
+  const linksRun = await bookTab.evaluate(async () => {
+    const app = window.pdfReaderApp;
+    const { updateSettings } = await import('./src/settings.js');
+    const reader = app.tts;
+    const index = reader.textIndex;
+    let chapter = 1;
+    while (chapter < index.numPages && !(await index.page(chapter)).text.includes('Подробности')) chapter += 1;
+    const listen = async (count) => {
+      const before = window.spokenSentences.length;
+      reader.start({ pageNumber: chapter, sentenceIndex: 0 });
+      for (let i = 0; i < 1500 && window.spokenSentences.length < before + count; i += 1) await new Promise((r) => setTimeout(r, 10));
+      const spoken = window.spokenSentences.slice(before, before + count);
+      reader.stop();
+      return spoken;
+    };
+    const skipped = await listen(6);
+    await updateSettings({ ttsReadLinks: true });
+    // Адрес латиницей звучит отдельной фразой — английским голосом (смешение языков).
+    const read = await listen(4);
+    await updateSettings({ ttsReadLinks: false });
+    return { pageText: (await index.page(chapter)).text, skipped, read };
+  });
+  const spokenLinks = linksRun.skipped.join(' | ');
+  check(
+    'интернет-ссылки не читаются: «Подробности на сайте и в книге», примечание из одной ссылки пропущено, «URL:» и «www…» — тоже; на странице адрес остался; галочка «Читать интернет-ссылки» возвращает их',
+    linksRun.skipped.includes('Подробности на сайте и в книге.') &&
+      linksRun.skipped.some((text) => /^Пишите на почту, ответим\.$/.test(text)) &&
+      linksRun.skipped.includes('Примечание: Подробнее — справочник.') &&
+      linksRun.skipped.filter((text) => text.startsWith('Примечание')).length === 1 &&
+      !/https?:|www\.|@|example|gramota|cyberleninka|URL/i.test(spokenLinks) &&
+      linksRun.pageText.includes('example.com') &&
+      linksRun.read.join(' ').includes('example.com'),
+    JSON.stringify(linksRun)
   );
   await bookTab.close();
 

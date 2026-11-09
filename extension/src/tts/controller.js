@@ -9,6 +9,7 @@ import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
 import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead } from './buffer.js';
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
 import { createHighlighter } from './highlighter.js';
+import { stripLinks } from './links.js';
 import { createMediaKeys } from './media-keys.js';
 import { createNoteCard } from './note-card.js';
 import { createNoteFilter, createNotePicker } from './note-picker.js';
@@ -214,11 +215,14 @@ export function createTts(app) {
     createWordJoiner((words) => (provider === tera || tera.isVoiceReady?.() ? tera.knownWords(words) : null));
   let wordJoiner = newWordJoiner();
 
-  /** Текст предложения для голоса: очищенный и со склеенными переносами без знака. */
+  /** Интернет-ссылки голос пропускает (на странице они остаются), если не просили читать. */
+  const readLinks = () => getSetting('ttsReadLinks') === true;
+
+  /** Текст предложения для голоса: очищенный, со склеенными переносами без знака, без ссылок. */
   async function spokenSentence(page, sentenceIndex) {
     const cleaned = sentenceText(page, sentenceIndex);
-    if (!page.softBreaks?.length) return cleaned;
-    return wordJoiner.join(page, page.sentences[sentenceIndex], cleaned).catch(() => cleaned);
+    const joined = page.softBreaks?.length ? await wordJoiner.join(page, page.sentences[sentenceIndex], cleaned).catch(() => cleaned) : cleaned;
+    return readLinks() ? joined : stripLinks(joined);
   }
 
   /**
@@ -258,8 +262,12 @@ export function createTts(app) {
     const notes = [];
     for (const note of await notesOf(parts)) {
       const prefix = 'Примечание: ';
-      const spoken = `${prefix}${note.text}${/[.!?…]$/.test(note.text) ? '' : '.'}`;
-      notes.push({ key: note.key, text: note.text, spoken, prefix: prefix.length });
+      // Без ссылок; map — из произносимого текста в текст окошка (подсветка слов).
+      const body = readLinks() ? { text: note.text, removed: 0 } : stripLinks(note.text);
+      // Примечание из одной ссылки — читать нечего.
+      if (!isSpeakable(body.text)) continue;
+      const spoken = `${prefix}${body.text}${/[.!?…]$/.test(body.text) ? '' : '.'}`;
+      notes.push({ key: note.key, text: note.text, spoken, prefix: prefix.length, map: body.removed ? body.map : null });
       text += (/[.!?…»"]$/.test(text.trim()) ? ' ' : '. ') + spoken;
     }
     return { parts, text, main, notes, next };
@@ -1132,7 +1140,7 @@ export function createTts(app) {
       finish();
       index = buildIndex(index.pdfDocument);
     }
-    if ('ttsBufferMinutes' in changed && state !== 'idle') prefetchAhead(upcoming);
+    if (('ttsBufferMinutes' in changed || 'ttsReadLinks' in changed) && state !== 'idle') prefetchAhead(upcoming);
     // Другая версия моделей TeraTTS или другой синтез: выгружаем, следующая фраза загрузит нужное.
     if ('teraQuality' in changed || 'teraUseHelper' in changed) {
       if (provider === tera) finish();

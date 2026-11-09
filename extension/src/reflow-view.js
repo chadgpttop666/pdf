@@ -9,7 +9,7 @@
 
 import { $, clear, el, on } from './dom.js';
 import { get as getSetting, onSettingsChanged, updateSettings } from './settings.js';
-import { cleanForSpeech, wordLength } from './text-index.js';
+import { cleanForSpeech, cleanedIndexForRaw, wordLength } from './text-index.js';
 import { firstVisibleSpanIndex, textSpansOfPage } from './visible-text.js';
 
 const FONT_SERIF = "Georgia, 'PT Serif', 'Times New Roman', serif";
@@ -358,14 +358,19 @@ export function createReflow(app) {
       span?.classList.add('rf-current');
       if (scroll) follow(span);
     },
-    highlightWord(page, sentenceIndex, _map, { charIndex, charLength }, spokenText) {
+    highlightWord(page, sentenceIndex, map, { charIndex, charLength }, spokenText) {
       if (!globalThis.CSS?.highlights || typeof Highlight === 'undefined') return;
       const node = spanOf(page.pageNumber, sentenceIndex)?.firstChild;
       if (!node || node.nodeType !== Node.TEXT_NODE) return;
       const length = charLength || wordLength(spokenText ?? node.data, charIndex);
+      // Позиция в произносимом тексте → в тексте абзаца: голос мог пропустить
+      // ссылку или склеить перенос, и номера букв разошлись. map — в исходный текст предложения.
+      let at = charIndex;
+      const sentence = page.sentences[sentenceIndex];
+      if (map?.[charIndex] !== undefined && sentence) at = cleanedIndexForRaw(cleanForSpeech(page.text.slice(sentence.start, sentence.end)).map, map[charIndex]);
       const range = new Range();
-      range.setStart(node, Math.min(charIndex, node.length));
-      range.setEnd(node, Math.min(charIndex + length, node.length));
+      range.setStart(node, Math.min(at, node.length));
+      range.setEnd(node, Math.min(at + length, node.length));
       CSS.highlights.set(WORD_HIGHLIGHT, new Highlight(range));
     },
     clearWords() {

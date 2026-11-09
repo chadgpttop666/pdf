@@ -724,17 +724,21 @@ export class TextIndex {
               stop = true;
               return;
             }
-            // Надстрочный номер начинает запись в начале абзаца или после
-            // конца фразы: короткие записи текстовый слой склеивает в одну
-            // строку («…в 1928 году. ³Подсветка…»).
+            // Надстрочный номер начинает запись в начале абзаца, после конца
+            // фразы или если он следующий по счёту: короткие записи текстовый
+            // слой склеивает в одну строку («…в 1928 году. ³Подсветка…»,
+            // «…/article/n/chtenie ²Подробнее…»).
             const chunks = [{ key: null, from: 0 }];
+            let lastKey = current?.key;
             for (const ref of raisedRefs) {
               const local = ref.offset - at;
               if (local < 0 || local > paragraph.length) continue;
               const before = paragraph.slice(0, local);
-              if (before.trim() && !/[.!?…»")\]]\s*$/u.test(before)) continue;
+              const next = lastKey !== undefined && Number(ref.key) === Number(lastKey) + 1;
+              if (before.trim() && !next && !/[.!?…»")\]]\s*$/u.test(before)) continue;
               if (!before.trim()) chunks[0] = { key: ref.key, from: local };
               else chunks.push({ key: ref.key, from: local });
+              lastKey = ref.key;
             }
             chunks.forEach((chunk, i) => {
               if (chunk.key) {

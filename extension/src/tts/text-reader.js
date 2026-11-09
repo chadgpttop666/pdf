@@ -5,6 +5,7 @@
 
 import { get as getSetting } from '../settings.js';
 import { bufferBudget, bufferedSeconds, prepareAhead } from './buffer.js';
+import { stripLinks } from './links.js';
 
 const isSpeakable = (text) => /[\p{L}\p{N}]/u.test(text);
 const BUSY_DELAY_MS = 350;
@@ -34,6 +35,16 @@ export function createTextReader(engines, hooks = {}) {
   };
   const status = (text, extra = {}) => hooks.onStatus?.(text, extra);
 
+  /**
+   * Что произнести вместо предложения: без интернет-ссылок, если их не просили
+   * читать; map — из произносимого текста в предложение (подсветка слов).
+   */
+  function spokenOf(text) {
+    if (getSetting('ttsReadLinks') === true) return { text, map: null };
+    const stripped = stripLinks(text);
+    return { text: stripped.text, map: stripped.removed ? stripped.map : null };
+  }
+
   function options() {
     return {
       voiceId: getSetting('ttsVoiceUri') || undefined,
@@ -53,9 +64,10 @@ export function createTextReader(engines, hooks = {}) {
     const texts = [];
     let chars = 0;
     for (let i = from; i < sentences.length && i <= until && chars < budget; i += 1) {
-      if (!isSpeakable(sentences[i])) continue;
-      texts.push(sentences[i]);
-      chars += sentences[i].length;
+      const { text } = spokenOf(sentences[i]);
+      if (!isSpeakable(text)) continue;
+      texts.push(text);
+      chars += text.length;
     }
     buffer = prepareAhead(provider, texts, opts);
   }
@@ -80,7 +92,7 @@ export function createTextReader(engines, hooks = {}) {
           finish('Прочитано');
           return;
         }
-        const text = sentences[index];
+        const { text, map } = spokenOf(sentences[index]);
         if (!isSpeakable(text)) {
           index += 1;
           continue;
@@ -95,7 +107,8 @@ export function createTextReader(engines, hooks = {}) {
             clearTimeout(busyTimer);
             status(`Предложение ${current + 1} из ${sentences.length}`);
           },
-          onBoundary: (event) => hooks.onWord?.(current, event.charIndex, event.charLength),
+          // Голос пропустил ссылки — слово ищем в предложении по карте.
+          onBoundary: (event) => hooks.onWord?.(current, map ? (map[event.charIndex] ?? event.charIndex) : event.charIndex, event.charLength),
         });
         prefetch(current + 1);
         let result;

@@ -29,7 +29,7 @@ export function createNoteCard({ onSkip, onMute = () => {}, onPick = () => {}, w
   card.querySelector('.tts-note-mute')?.addEventListener('click', () => note && onMute(note));
   card.querySelector('.tts-note-pick')?.addEventListener('click', () => onPick());
 
-  let note = null; // { key, text, prefix } — prefix: длина «Примечание: » в произносимом тексте
+  let note = null; // { key, text, prefix, map } — prefix: длина «Примечание: » в произносимом тексте; map — в text, если голос пропустил ссылки
   let rate = 1;
   let started = false;
   let elapsed = 0; // секунды звучания до последней паузы
@@ -110,8 +110,11 @@ export function createNoteCard({ onSkip, onMute = () => {}, onPick = () => {}, w
     /** Голос дошёл до слова: charIndex — в произносимом тексте, со словом «Примечание». */
     boundary({ charIndex, charLength }) {
       if (!note) return;
-      const at = charIndex - note.prefix;
-      if (at < 0 || at >= note.text.length) return;
+      const spokenAt = charIndex - note.prefix;
+      if (spokenAt < 0) return;
+      // Голос пропустил ссылки — позиция в тексте окошка по карте.
+      const at = note.map ? note.map[spokenAt] : spokenAt;
+      if (at === undefined || at >= note.text.length) return;
       progress = Math.max(progress, at / note.text.length);
       highlight(at, charLength || wordLength(note.text, at));
       render();

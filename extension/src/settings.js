@@ -157,6 +157,13 @@ export const SETTINGS_SCHEMA = [
   },
   { custom: 'notesPick' },
   {
+    key: 'ttsReadLinks',
+    type: 'bool',
+    def: false,
+    label: 'Читать интернет-ссылки',
+    hint: 'Выключено — голос пропускает адреса сайтов и почты (https://…, www.…, site.ru/…, name@mail.ru, DOI) вместе с подписью «URL:»; на странице и в окошке примечания они остаются. Примечание из одной ссылки не читается вовсе. Так же — в аудиокниге и при озвучке выделенного на сайтах',
+  },
+  {
     key: 'ttsMediaKeys',
     type: 'bool',
     def: true,
