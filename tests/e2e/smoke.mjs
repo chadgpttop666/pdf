@@ -2104,6 +2104,85 @@ try {
   );
   await bookTab.close();
 
+  // ── Кнопки наушников через ускоритель: во время примечания он занимает
+  // «громче» и сообщает о нажатии (заглушка runtime.connectNative) ──
+  const helperTab = await context.newPage();
+  await helperTab.addInitScript(speechMock);
+  await helperTab.addInitScript(() => {
+    const log = (window.helperLog = []);
+    const ports = (window.helperPorts = []);
+    window.browser = {
+      runtime: {
+        connectNative() {
+          const listeners = { message: [], disconnect: [] };
+          const port = {
+            onMessage: { addListener: (listener) => listeners.message.push(listener) },
+            onDisconnect: { addListener: (listener) => listeners.disconnect.push(listener) },
+            postMessage(message) {
+              log.push(message.type === 'media-watch' ? `watch:${message.on}` : message.type);
+              const reply = (data) => setTimeout(() => listeners.message.forEach((listener) => listener({ ...data, id: message.id })), 5);
+              if (message.type === 'hello') reply({ type: 'hello', version: '1.6.0', protocol: 1, files: {}, cores: 1, features: ['media-keys'] });
+              else if (message.type === 'media-watch') {
+                port.watched = true;
+                reply({ type: 'media-watch', on: message.on, hotkeys: message.on ? ['volume-up', 'next'] : [], volume: message.on });
+              } else reply({ type: 'error', message: 'заглушка этого не умеет' });
+            },
+            disconnect() {
+              log.push('disconnect');
+            },
+            press(key) {
+              listeners.message.forEach((listener) => listener({ type: 'event', event: 'media-key', key }));
+            },
+          };
+          ports.push(port);
+          return port;
+        },
+      },
+    };
+  });
+  await helperTab.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+  await helperTab.waitForFunction(() => window.pdfReaderApp?.pdfViewer?.pagesCount > 0 && window.pdfReaderApp.tts?.textIndex, null, { timeout: 20000 });
+  const headset = await helperTab.evaluate(async () => {
+    const reader = window.pdfReaderApp.tts;
+    const { updateSettings } = await import('./src/settings.js');
+    await updateSettings({ ttsVoiceUri: 'mock-ru', ttsFootnotes: 'inline' });
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const page3 = await reader.textIndex.page(3);
+    const sentenceIndex = page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов'));
+    const before = window.spokenSentences.length;
+    reader.start({ pageNumber: 3, sentenceIndex });
+    for (let i = 0; i < 300 && !reader.noteSpeaking; i += 1) await wait(10);
+    for (let i = 0; i < 100 && !window.helperLog.includes('watch:true'); i += 1) await wait(10);
+    const duringNote = [...window.helperLog];
+    const port = window.helperPorts.find((candidate) => candidate.watched);
+    const skippedAt = performance.now();
+    port?.press('volume-up');
+    port?.press('volume-up'); // второе «громче» сразу — не пропускает ещё и фразу
+    for (let i = 0; i < 100 && window.spokenSentences.length < before + 3; i += 1) await wait(10);
+    const nextAfterMs = Math.round(performance.now() - skippedAt);
+    await wait(150);
+    const afterNote = [...window.helperLog];
+    port?.press('volume-up'); // вне примечания — ничего
+    await wait(300);
+    const spoken = window.spokenSentences.slice(before, before + 4);
+    reader.stop();
+    await wait(200);
+    return { duringNote, afterNote, final: [...window.helperLog], spoken, nextAfterMs };
+  });
+  check(
+    'кнопки наушников через ускоритель: во время примечания «громче» занята им и пропускает примечание; после — отпущена; остановили чтение — ускоритель закрыт',
+    headset.duringNote.includes('hello') &&
+      headset.duringNote.at(-1) === 'watch:true' &&
+      headset.spoken[1] === `Примечание: ${noteText}` &&
+      headset.spoken.length === 3 &&
+      !/Примечание/.test(headset.spoken[2]) &&
+      headset.nextAfterMs < 600 &&
+      headset.afterNote.at(-1) === 'watch:false' &&
+      headset.final.at(-1) === 'disconnect',
+    JSON.stringify(headset)
+  );
+  await helperTab.close();
+
   // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──
   const openTab = async () => {
     const tab = await context.newPage();

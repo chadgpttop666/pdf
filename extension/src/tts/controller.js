@@ -8,6 +8,7 @@ import { get as getSetting, onSettingsChanged, updateSettings } from '../setting
 import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
 import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead } from './buffer.js';
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
+import { createHelperKeys } from './helper-keys.js';
 import { createHighlighter } from './highlighter.js';
 import { stripLinks } from './links.js';
 import { createMediaKeys } from './media-keys.js';
@@ -91,6 +92,18 @@ export function createTts(app) {
   const mediaKeys = createMediaKeys({
     actions: { playPause: () => toggle(), next: () => next(), previous: () => jump(-1), stop: () => finish() },
     isNote: () => noteSpeaking,
+    enabled: () => getSetting('ttsMediaKeys') !== false,
+  });
+  // То же через ускоритель (Windows): кнопку «громче» на наушниках браузер не
+  // получает, а ускоритель на время примечания — да (helper-keys.js).
+  let headsetSkippedAt = 0;
+  const helperKeys = createHelperKeys({
+    onKey: () => {
+      // Одно нажатие — один пропуск: «громче» могла прийти и клавишей, и громкостью.
+      if (!noteSpeaking || performance.now() - headsetSkippedAt < 600) return;
+      headsetSkippedAt = performance.now();
+      skipNote();
+    },
     enabled: () => getSetting('ttsMediaKeys') !== false,
   });
   const bookTitle = () => $('docTitle')?.textContent?.trim() || document.title;
@@ -517,6 +530,7 @@ export function createTts(app) {
     syncUi();
     app.wakeLock?.request();
     mediaKeys.playing(bookTitle());
+    helperKeys.prepare();
 
     try {
       while (state !== 'idle' && myGeneration === generation) {
@@ -621,6 +635,7 @@ export function createTts(app) {
           pendingSegments = segments.slice(s + 1);
           const last = !pendingNotes().length;
           noteSpeaking = Boolean(segment.note);
+          helperKeys.note(noteSpeaking);
           currentNote = segment.note ?? null;
           currentText = segment.text;
           noteSkipped = false;
@@ -659,6 +674,7 @@ export function createTts(app) {
           } catch (error) {
             // Одна фраза не синтезировалась — пропускаем её, а не обрываем чтение.
             noteSpeaking = false;
+            helperKeys.note(false);
             noteCard.hide();
             if (myGeneration !== generation || state === 'idle') return;
             failed += 1;
@@ -671,6 +687,7 @@ export function createTts(app) {
             break;
           }
           noteSpeaking = false;
+          helperKeys.note(false);
           if (segment.note) noteCard.hide();
           voiceStarted();
           stopHeard();
@@ -717,6 +734,7 @@ export function createTts(app) {
     currentText = '';
     noteCard.hide();
     mediaKeys.stopped();
+    helperKeys.close();
     clearInterval(bufferTimer);
     buffer = [];
     $('ttsBuffer').hidden = true;
@@ -877,6 +895,7 @@ export function createTts(app) {
     pendingSegments = [];
     currentNote = null;
     noteSpeaking = false;
+    helperKeys.note(false);
     noteCard.hide();
     // После паузы синтез остаётся «на паузе» и новую фразу не начнёт, пока не продолжить.
     if (state === 'paused') provider.resume();
@@ -896,6 +915,7 @@ export function createTts(app) {
     provider.pause();
     noteCard.paused();
     mediaKeys.paused();
+    helperKeys.note(false); // на паузе кнопки — снова системе
     state = 'paused';
     syncUi();
     setStatus('Пауза');
@@ -909,6 +929,7 @@ export function createTts(app) {
     provider.resume();
     noteCard.resumed();
     mediaKeys.playing(bookTitle());
+    helperKeys.note(noteSpeaking);
     if (heard.started) heard.since = performance.now();
     state = 'speaking';
     if (sentenceStatus) setStatus(sentenceStatus);
