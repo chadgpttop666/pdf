@@ -162,8 +162,8 @@ jobs:
             teratts/omograph-int8
           key: ruaccent-75983ac96062591d06ecd2ddb2aefb894104bc9e-omograph-d5c4eb68
 
-      - name: Синтез, ударения и расшифровка через установленный ускоритель
-        run: node scripts/helper-check.mjs --helper "$INSTALLED" --models teratts --download --hoist --compare --transcribe --accent --wav check-${{ runner.os }}.wav
+      - name: Синтез, ударения, расшифровка и кнопки наушников через установленный ускоритель
+        run: node scripts/helper-check.mjs --helper "$INSTALLED" --models teratts --download --hoist --compare --transcribe --accent --media-keys --wav check-${{ runner.os }}.wav
 
       - name: Удаление
         run: |

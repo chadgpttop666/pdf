@@ -6,6 +6,7 @@
 use crate::accent::{self, Accents, Inputs};
 use crate::browsers;
 use crate::install;
+use crate::media_keys;
 use crate::protocol::{self, Outbox};
 use crate::speech;
 use crate::synth::{Latent, Latents, Request, Vocoder, SAMPLE_RATE};
@@ -393,6 +394,18 @@ fn receive(message: &Value, partial: &Path) -> Result<Option<u64>, String> {
     Ok(None)
 }
 
+/// Что умеет эта сборка (ответ на hello): расширение включает только известное.
+fn features() -> Value {
+    let mut list = vec!["accent", "ext-update", "seed"];
+    if speech::supported().is_ok() {
+        list.push("transcribe");
+    }
+    if media_keys::supported() {
+        list.push("media-keys");
+    }
+    json!(list)
+}
+
 fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Sender<Ask>) -> Result<(), String> {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     match text(message, "type")? {
@@ -407,8 +420,19 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Send
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-                "features": if speech::supported().is_ok() { json!(["transcribe", "accent", "ext-update", "seed"]) } else { json!(["accent", "ext-update", "seed"]) },
+                "features": features(),
             }));
+        }
+        // Кнопки наушников на время примечания (media_keys.rs): включить или
+        // выключить перехват. О нажатиях — сообщения без id: { type: "event", event: "media-key", key }.
+        "media-watch" => {
+            let on = message.get("on").and_then(Value::as_bool).unwrap_or(false);
+            let events = Arc::clone(shared);
+            let mut reply = media_keys::watch(on, move || {
+                Box::new(move |key| events.out.send(json!({ "type": "event", "event": "media-key", "key": key })))
+            })?;
+            reply["id"] = id;
+            shared.out.send(reply);
         }
         // Голосовая заметка → текст. Отдельным потоком: синтез и отмены
         // тем временем обрабатываются как обычно.
@@ -611,6 +635,14 @@ mod tests {
         let mut custom = base.clone();
         custom["seed"] = json!(77);
         assert_eq!(request(&custom).expect("с seed").seed, 77);
+    }
+
+    #[test]
+    fn features_follow_the_system() {
+        let list = features();
+        let has = |name: &str| list.as_array().expect("список").iter().any(|item| item == name);
+        assert!(has("seed") && has("accent"));
+        assert_eq!(has("media-keys"), cfg!(windows));
     }
 
     #[test]

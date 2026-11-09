@@ -49,6 +49,8 @@ const { values: args } = parseArgs({
     text: { type: 'string', multiple: true },
     // Свой начальный шум сэмплера (ускоритель 1.5.0+): так читалка переозвучивает фразу.
     seed: { type: 'string' },
+    // Кнопки наушников (Windows, 1.6.0+): перехват на время примечания, нажатие — системой.
+    'media-keys': { type: 'boolean', default: false },
   },
 });
 
@@ -283,9 +285,52 @@ if (args.wav) {
 
 if (args.transcribe) await checkTranscription();
 if (args.accent) await checkAccent();
+if (args['media-keys']) await checkMediaKeys();
 
 client.close();
 console.log('✓ ускоритель работает');
+
+/**
+ * Кнопки наушников (Windows): перехват включён — «громче» и «следующий трек»
+ * приходят ускорителю (нажатие — как от системы, keybd_event); выключен —
+ * не приходят.
+ */
+async function checkMediaKeys() {
+  if (process.platform !== 'win32') {
+    console.log('кнопки наушников: только в Windows — пропускаю');
+    return;
+  }
+  if (!hello.features?.includes('media-keys')) fail('ускоритель не умеет кнопки наушников');
+  const { spawnSync } = await import('node:child_process');
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const events = [];
+  client.onEvent((event) => event.event === 'media-key' && events.push(event.key));
+  // Клавиши громкости и треков — «расширенные»: KEYEVENTF_EXTENDEDKEY (1), отпускание — ещё KEYUP (2).
+  const press = (vk) => {
+    const script = `Add-Type -Name K -Namespace W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);'; [W.K]::keybd_event(${vk}, 0, 1, [UIntPtr]::Zero); [W.K]::keybd_event(${vk}, 0, 3, [UIntPtr]::Zero)`;
+    const result = spawnSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    if (result.status !== 0) fail(`не удалось нажать клавишу ${vk}: ${result.stderr}`);
+  };
+  const expect = async (vk, key) => {
+    const before = events.length;
+    press(vk);
+    for (let i = 0; i < 40 && events.length === before; i += 1) await wait(100);
+    if (events[before] !== key) fail(`нажатие ${key} не дошло до ускорителя: ${JSON.stringify(events)}`);
+    await wait(500); // одно нажатие — одно сообщение: следующее — после паузы
+  };
+  const on = await client.watchMediaKeys(true);
+  console.log(`кнопки наушников: заняты ${JSON.stringify(on.hotkeys)}, громкость системы — ${on.volume ? 'под присмотром' : 'устройства вывода нет'}`);
+  if (!on.on || !on.hotkeys?.includes('volume-up') || !on.hotkeys?.includes('next')) fail(`перехват не включился: ${JSON.stringify(on)}`);
+  await expect(0xaf, 'volume-up'); // VK_VOLUME_UP
+  await expect(0xb0, 'next'); // VK_MEDIA_NEXT_TRACK
+  const off = await client.watchMediaKeys(false);
+  if (off.on) fail(`перехват не выключился: ${JSON.stringify(off)}`);
+  const before = events.length;
+  press(0xb0);
+  await wait(1000);
+  if (events.length !== before) fail(`после выключения нажатия всё ещё перехватываются: ${JSON.stringify(events)}`);
+  console.log('✓ кнопки наушников: «громче» и «следующий трек» доходят до ускорителя только во время примечания');
+}
 
 /** Голосовые заметки: синтезированная фраза → Whisper → те же слова. */
 async function checkTranscription() {

@@ -45,10 +45,15 @@ export function pcm16Bytes(samples) {
 export function createHelperClient(port) {
   const waiting = new Map(); // id → { resolve, reject, chunks }
   const closeListeners = [];
+  const eventListeners = []; // сообщения без id: нажатия кнопок наушников (1.6.0+)
   let seq = 0;
   let closed = null;
 
   port.onMessage.addListener((message) => {
+    if (message?.type === 'event') {
+      for (const listener of eventListeners) listener(message);
+      return;
+    }
     const entry = waiting.get(message?.id);
     if (!entry) return;
     if (message.type === 'error') {
@@ -202,6 +207,16 @@ export function createHelperClient(port) {
     /** Собранную версию — во все папки расширения. */
     applyExtension: (version, files) => request({ type: 'ext-apply', version, files }),
     uninstall: () => request({ type: 'uninstall' }),
+    /**
+     * Кнопки наушников (Windows, 1.6.0+): на время примечания ускоритель
+     * занимает «громче» и «следующий трек» и следит за громкостью системы.
+     * @returns {Promise<{ on: boolean, hotkeys?: string[], volume?: boolean }>}
+     */
+    watchMediaKeys: (on) => request({ type: 'media-watch', on: Boolean(on) }),
+    /** listener({ event: 'media-key', key: 'volume-up' | 'next' }) */
+    onEvent(listener) {
+      eventListeners.push(listener);
+    },
     close() {
       if (closed) return;
       closed = new Error('Ускоритель отключён');

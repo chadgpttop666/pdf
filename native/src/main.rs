@@ -13,6 +13,7 @@ mod accent;
 mod browsers;
 mod host;
 mod install;
+mod media_keys;
 mod noise;
 mod protocol;
 mod speech;
