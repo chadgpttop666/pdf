@@ -349,22 +349,53 @@ try {
     `начало «${page3.slice(0, 30)}», конец «${page3.slice(-40)}»`
   );
 
-  // Примечание читается сразу после фразы со знаком сноски, а не в конце страницы
-  const noteSpoken = await page.evaluate(async () => {
-    const reader = window.pdfReaderApp.tts;
-    const page3 = await reader.textIndex.page(3);
-    const sentenceIndex = page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов'));
-    const before = window.spokenSentences.length;
-    reader.start({ pageNumber: 3, sentenceIndex });
-    for (let i = 0; i < 60 && window.spokenSentences.length < before + 2; i += 1) await new Promise((r) => setTimeout(r, 100));
-    reader.stop();
-    return window.spokenSentences.slice(before, before + 2);
-  });
+  // Примечание звучит сразу после фразы со знаком сноски — своей фразой. Пока
+  // оно звучит, окошко показывает его текст; «Пропустить» (и «.») — дальше.
+  const noteRun = async (how) =>
+    page.evaluate(async (how) => {
+      const reader = window.pdfReaderApp.tts;
+      const page3 = await reader.textIndex.page(3);
+      const sentenceIndex = page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов'));
+      const before = window.spokenSentences.length;
+      reader.start({ pageNumber: 3, sentenceIndex });
+      const card = document.getElementById('ttsNote');
+      for (let i = 0; i < 150 && card.hidden; i += 1) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 60));
+      const shown = {
+        visible: !card.hidden,
+        title: card.querySelector('.tts-note-title').textContent,
+        text: card.querySelector('.tts-note-text').textContent,
+        time: card.querySelector('.tts-note-time').textContent,
+        speaking: reader.noteSpeaking,
+        aboveBar: card.getBoundingClientRect().bottom <= document.getElementById('ttsBar').getBoundingClientRect().top,
+      };
+      const skippedAt = performance.now();
+      if (how === 'key') reader.next();
+      else card.querySelector('.tts-note-skip').click();
+      for (let i = 0; i < 100 && window.spokenSentences.length < before + 3; i += 1) await new Promise((r) => setTimeout(r, 10));
+      const nextAfterMs = Math.round(performance.now() - skippedAt);
+      const result = { shown, spoken: window.spokenSentences.slice(before, before + 3), hiddenAfter: card.hidden, nextAfterMs };
+      reader.stop();
+      return result;
+    }, how);
+  const noteByButton = await noteRun('button');
+  const noteByKey = await noteRun('key');
+  const noteText = 'Микрофильм — фотокопия документа на плёнке в сильном уменьшении.';
   check(
-    'сноска: «Примечание: …» звучит сразу после фразы со знаком, следующая фраза — без него',
-    /микрофильмов\. Примечание: Микрофильм — фотокопия документа на плёнке в сильном уменьшении\.$/.test(noteSpoken[0] ?? '') &&
-      !/Примечание/.test(noteSpoken[1] ?? ''),
-    JSON.stringify(noteSpoken)
+    'сноска: примечание — своей фразой сразу после фразы со знаком, окошко с его текстом над панелью; «Пропустить» и «.» — сразу дальше',
+    [noteByButton, noteByKey].every(
+      (run) =>
+        /микрофильмов\.$/.test(run.spoken[0] ?? '') &&
+        run.spoken[1] === `Примечание: ${noteText}` &&
+        run.spoken[2] && !/Примечание/.test(run.spoken[2]) &&
+        run.shown.visible && run.shown.speaking && run.shown.aboveBar &&
+        run.shown.text === noteText &&
+        /^Примечание/.test(run.shown.title) &&
+        /≈ 0:0\d/.test(run.shown.time) &&
+        run.hiddenAfter &&
+        run.nextAfterMs < 600
+    ),
+    JSON.stringify({ noteByButton, noteByKey })
   );
 
   // Таймер сна «до конца главы»: дочитали страницу перед новой главой — тишина

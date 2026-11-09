@@ -9,6 +9,7 @@ import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
 import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead } from './buffer.js';
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
 import { createHighlighter } from './highlighter.js';
+import { createNoteCard } from './note-card.js';
 import { createSleepTimer } from './sleep-timer.js';
 import { onUserStressChange } from './user-stress.js';
 import { createWordJoiner } from './word-breaks.js';
@@ -61,6 +62,12 @@ export function createTts(app) {
   // позиции предложений, to включительно. range = null — читаем документ подряд.
   let range = null;
   let queued = [];
+  // Примечания звучат отдельными фразами после своей: окошко показывает их
+  // текст, и их можно пропустить.
+  let pendingNotes = []; // тексты примечаний текущей фразы, которые ещё прозвучат
+  let noteSpeaking = false; // сейчас звучит примечание
+  let noteSkipped = false;
+  const noteCard = createNoteCard({ onSkip: () => skipNote(), wordLength });
 
   const PICK_HINT = 'Щёлкните по тексту — начну читать с этого места';
 
@@ -218,15 +225,18 @@ export function createTts(app) {
         next = { pageNumber: following.pageNumber, sentenceIndex: 1 };
       }
     }
-    // Примечания к знакам сносок в этой фразе — сразу за ней.
+    // Примечания к знакам сносок в этой фразе — сразу за ней, каждое своей
+    // фразой (main — без них): окошко показывает текст примечания, и его можно
+    // пропустить. text — всё вместе, для аудиокниги.
+    const main = text;
+    const notes = [];
     for (const note of await notesOf(parts)) {
-      const spoken = `Примечание: ${note}`;
-      const joiner = /[.!?…»"]$/.test(text.trim()) ? ' ' : '. ';
-      parts.push({ note: true, text: spoken, offset: text.length + joiner.length });
-      text += joiner + spoken;
-      if (!/[.!?…]$/.test(spoken)) text += '.';
+      const prefix = 'Примечание: ';
+      const spoken = `${prefix}${note.text}${/[.!?…]$/.test(note.text) ? '' : '.'}`;
+      notes.push({ key: note.key, text: note.text, spoken, prefix: prefix.length });
+      text += (/[.!?…»"]$/.test(text.trim()) ? ' ' : '. ') + spoken;
     }
-    return { parts, text, next };
+    return { parts, text, main, notes, next };
   }
 
   /**
@@ -255,14 +265,14 @@ export function createTts(app) {
     }
   }
 
-  /** Тексты примечаний к знакам сносок в частях фразы — по порядку, без повторов. */
+  /** Примечания к знакам сносок в частях фразы — { key, text } по порядку, без повторов. */
   async function notesOf(parts) {
     if (getSetting('ttsFootnotes') !== 'inline' || !index?.skipFurniture) return [];
     const notes = [];
     for (const part of parts) {
       for (const ref of index.refsOfSentence(part.page, part.sentenceIndex)) {
         const note = await index.noteFor(part.page.pageNumber, ref).catch(() => null);
-        if (note && !notes.includes(note)) notes.push(note);
+        if (note && !notes.some((known) => known.text === note)) notes.push({ key: ref.key, text: note });
       }
     }
     return notes;
@@ -274,14 +284,15 @@ export function createTts(app) {
    * продолжается без ожидания. Заготовки для других мест (читатель
    * перескочил, сменил скорость) провайдер отпускает.
    */
-  async function prefetchAhead(from) {
+  async function prefetchAhead(from, leading = pendingNotes) {
     if (!provider.prepare || !from) return;
     const token = (prefetchToken += 1);
     const options = speechOptions();
     const budget = bufferBudget(getSetting('ttsBufferMinutes'), options.rate);
-    const texts = [];
+    // Сначала — примечания звучащей фразы, что ещё впереди.
+    const texts = [...leading];
     let cursor = { ...from };
-    let chars = 0;
+    let chars = texts.reduce((sum, text) => sum + text.length, 0);
     // Читаем выделенное — заготовки только в его кусках, по очереди.
     const plan = range ? [range, ...queued] : null;
     let piece = 0;
@@ -303,9 +314,12 @@ export function createTts(app) {
       const utterance = await buildUtterance(page, cursor.sentenceIndex);
       if (token !== prefetchToken) return;
       cursor = utterance.next;
-      if (!isSpeakable(utterance.text)) continue;
-      texts.push(utterance.text);
-      chars += utterance.text.length;
+      if (!isSpeakable(utterance.main)) continue;
+      // В том же порядке, в каком зазвучат: фраза, потом её примечания.
+      for (const text of [utterance.main, ...utterance.notes.map((note) => note.spoken)]) {
+        texts.push(text);
+        chars += text.length;
+      }
     }
     if (token !== prefetchToken) return;
     buffer = prepareAhead(provider, texts, options);
@@ -387,6 +401,10 @@ export function createTts(app) {
       // сравнивалась «текущая» страница pdf.js: у низа страницы ею уже
       // считается следующая, и перед каждой фразой вид прыгал назад с паузой.
       if (div?.querySelector('.textLayer span')) return;
+      // Окно свёрнуто или закрыто другим: страницы браузер не рисует, и
+      // ждать слоя — полторы секунды тишины на каждой новой странице.
+      // Подсветка нужна, только когда её видно.
+      if (document.hidden) return;
       const rect = div?.getBoundingClientRect();
       const box = app.container.getBoundingClientRect();
       const near = rect && rect.bottom > box.top - box.height && rect.top < box.bottom + box.height;
@@ -518,7 +536,7 @@ export function createTts(app) {
         const utterance = await buildUtterance(page, position.sentenceIndex);
         if (myGeneration !== generation) return;
         // «* * *» и прочие разделители читать вслух незачем.
-        if (!isSpeakable(utterance.text)) {
+        if (!isSpeakable(utterance.main)) {
           position = { ...utterance.next };
           continue;
         }
@@ -546,11 +564,6 @@ export function createTts(app) {
         const onBoundary = (event) => {
           const part = utterance.parts.findLast((candidate) => candidate.offset <= event.charIndex);
           if (!part) return;
-          // Примечание звучит — в тексте подсвечивать нечего, фраза остаётся выделенной.
-          if (part.note) {
-            view().clearWords(currentPart.page.pageNumber);
-            return;
-          }
           if (part !== currentPart) {
             view().clearWords(currentPart.page.pageNumber);
             currentPart = part;
@@ -561,56 +574,87 @@ export function createTts(app) {
           highlightWord(part.page, part.sentenceIndex, part.map, local, part.text);
         };
 
-        waitForVoice();
-        const options = speechOptions();
-        heard = { ms: 0, since: 0, started: false };
-        const speaking = provider.speak(utterance.text, {
-          ...options,
-          volume: options.volume * sleepTimer.volumeFactor(),
-          onStart: () => {
-            heard.started = true;
-            if (state === 'speaking') heard.since = performance.now();
-            voiceStarted(status);
-            showEngine(); // ускоритель мог подключиться, пока грузились модели
-          },
-          onBoundary,
-        });
-        // Заготовки — после текущей фразы: в очереди синтеза она первая.
-        prefetchAhead(utterance.next);
-        let result;
-        try {
-          result = await speaking;
-          failed = 0;
-        } catch (error) {
-          // Одна фраза не синтезировалась — пропускаем её, а не обрываем чтение.
-          if (myGeneration !== generation || state === 'idle') return;
-          failed += 1;
-          if (failed >= MAX_FAILED_SENTENCES) throw error;
-          console.warn('Фраза не озвучилась — пропускаю', error);
+        // Фраза, потом её примечания — каждое отдельной фразой: пока оно
+        // звучит, окошко показывает его текст, и его можно пропустить.
+        const segments = [{ text: utterance.main }, ...utterance.notes.map((note, i) => ({ text: note.spoken, note, number: i + 1 }))];
+        let skipUtterance = false;
+        for (let s = 0; s < segments.length; s += 1) {
+          const segment = segments[s];
+          const last = s === segments.length - 1;
+          pendingNotes = segments.slice(s + 1).map((item) => item.text);
+          noteSpeaking = Boolean(segment.note);
+          noteSkipped = false;
+          const options = speechOptions();
+          const pause = getSetting('ttsSentencePauseMs');
+          if (segment.note) {
+            // Голос ушёл из текста в примечание — слово в тексте больше не подсвечиваем.
+            for (const part of utterance.parts) view().clearWords(part.page.pageNumber);
+            noteCard.show(segment.note, { number: segment.number, count: utterance.notes.length, rate: options.rate });
+            setStatus(`${status} · примечание`);
+          }
+          waitForVoice();
+          heard = { ms: 0, since: 0, started: false };
+          const speaking = provider.speak(segment.text, {
+            ...options,
+            volume: options.volume * sleepTimer.volumeFactor(),
+            // Пауза между фразами: нейроголос ставит её в звук сам, встык к предыдущей.
+            gapMs: provider.gapless ? pause : 0,
+            // Следующую фразу ставить встык заранее — если таймер сна не остановит чтение на ней.
+            chain: !(last && sleepTimer.stopsSoon(utterance.next.pageNumber)),
+            onStart: () => {
+              heard.started = true;
+              if (state === 'speaking') heard.since = performance.now();
+              voiceStarted(segment.note ? `${status} · примечание` : status);
+              if (segment.note) noteCard.started();
+              showEngine(); // ускоритель мог подключиться, пока грузились модели
+            },
+            onBoundary: segment.note ? (event) => noteCard.boundary(event) : onBoundary,
+          });
+          // Заготовки — после текущей фразы: в очереди синтеза она первая.
+          prefetchAhead(utterance.next);
+          let result;
+          try {
+            result = await speaking;
+            failed = 0;
+          } catch (error) {
+            // Одна фраза не синтезировалась — пропускаем её, а не обрываем чтение.
+            noteSpeaking = false;
+            noteCard.hide();
+            if (myGeneration !== generation || state === 'idle') return;
+            failed += 1;
+            if (failed >= MAX_FAILED_SENTENCES) throw error;
+            console.warn('Фраза не озвучилась — пропускаю', error);
+            voiceStarted();
+            stopHeard();
+            app.hud.show('Фразу не удалось озвучить — пропускаю', { duration: 3000 });
+            skipUtterance = true;
+            break;
+          }
+          noteSpeaking = false;
+          if (segment.note) noteCard.hide();
           voiceStarted();
           stopHeard();
-          app.hud.show('Фразу не удалось озвучить — пропускаю', { duration: 3000 });
+          app.eventBus.dispatch('ttslistened', {
+            source: app,
+            ms: heard.ms,
+            rate: options.rate,
+            // Знаки — только у дослушанной фразы: по ним и времени считается скорость.
+            chars: result === 'ended' ? segment.text.length : 0,
+          });
+
+          if (myGeneration !== generation || state === 'idle') return;
+          // Пропустили примечание — дальше по порядку: следующее примечание или фраза.
+          if (result === 'cancelled' && !(segment.note && noteSkipped)) return;
+          if (!segment.note) for (const part of utterance.parts) view().clearWords(part.page.pageNumber);
+          if (pause && !provider.gapless) await delay(pause);
+          if (myGeneration !== generation) return;
+        }
+        pendingNotes = [];
+        if (skipUtterance) {
           position = { ...utterance.next };
           continue;
         }
-        voiceStarted();
         spokenInRun += 1;
-        stopHeard();
-        app.eventBus.dispatch('ttslistened', {
-          source: app,
-          ms: heard.ms,
-          rate: options.rate,
-          // Знаки — только у дослушанной фразы: по ним и времени считается скорость.
-          chars: result === 'ended' ? utterance.parts.reduce((sum, part) => sum + part.text.length, 0) : 0,
-        });
-
-        if (myGeneration !== generation || state === 'idle') return;
-        if (result === 'cancelled') return;
-
-        for (const part of utterance.parts) if (part.page) view().clearWords(part.page.pageNumber);
-        const pause = getSetting('ttsSentencePauseMs');
-        if (pause) await delay(pause);
-        if (myGeneration !== generation) return;
         position = { ...utterance.next };
       }
     } catch (error) {
@@ -627,6 +671,9 @@ export function createTts(app) {
     state = 'idle';
     range = null;
     queued = [];
+    pendingNotes = [];
+    noteSpeaking = false;
+    noteCard.hide();
     clearInterval(bufferTimer);
     buffer = [];
     $('ttsBuffer').hidden = true;
@@ -784,6 +831,9 @@ export function createTts(app) {
   /** Перескок во время чтения или паузы: прерываем фразу и читаем с новой позиции. */
   function restartAt(target) {
     position = target;
+    pendingNotes = [];
+    noteSpeaking = false;
+    noteCard.hide();
     // После паузы синтез остаётся «на паузе» и новую фразу не начнёт, пока не продолжить.
     if (state === 'paused') provider.resume();
     provider.cancel();
@@ -800,6 +850,7 @@ export function createTts(app) {
     stopHeard();
     voiceStarted();
     provider.pause();
+    noteCard.paused();
     state = 'paused';
     syncUi();
     setStatus('Пауза');
@@ -811,6 +862,7 @@ export function createTts(app) {
   function resume() {
     if (state !== 'paused') return;
     provider.resume();
+    noteCard.resumed();
     if (heard.started) heard.since = performance.now();
     state = 'speaking';
     if (sentenceStatus) setStatus(sentenceStatus);
@@ -841,13 +893,32 @@ export function createTts(app) {
     restartAt({ ...position, sentenceIndex: position.sentenceIndex + delta });
   }
 
+  /**
+   * Пропустить звучащее примечание: дальше — следующее примечание этой фразы
+   * или следующая фраза. Заготовки впереди не сбрасываются — они уже готовы.
+   */
+  function skipNote() {
+    if (!noteSpeaking) return false;
+    noteSkipped = true;
+    noteCard.hide();
+    if (state === 'paused') resume();
+    if (provider.skip) provider.skip();
+    else provider.cancel();
+    return true;
+  }
+
+  /** «Дальше»: во время примечания — пропустить его, иначе — следующее предложение. */
+  function next() {
+    if (!skipNote()) jump(1);
+  }
+
   on($('btnSpeak'), 'click', () => {
     if (bar.hidden) showBar(true);
     else toggle();
   });
   on($('ttsPlay'), 'click', () => toggle());
   on($('ttsStop'), 'click', () => finish());
-  on($('ttsNext'), 'click', () => jump(1));
+  on($('ttsNext'), 'click', () => next());
   on($('ttsPrev'), 'click', () => jump(-1));
   // Закрыть панель — значит закончить: и чтение, и подсветку на тексте.
   on($('ttsClose'), 'click', () => {
@@ -1032,8 +1103,13 @@ export function createTts(app) {
     get queued() {
       return queued.length;
     },
-    next: () => jump(1),
+    next,
     previous: () => jump(-1),
+    skipNote,
+    /** Звучит примечание (окошко на экране). */
+    get noteSpeaking() {
+      return noteSpeaking;
+    },
     async adjustRate(delta) {
       const rate = Math.min(3, Math.max(0.5, Number((getSetting('ttsRate') + delta).toFixed(2))));
       await updateSettings({ ttsRate: rate });

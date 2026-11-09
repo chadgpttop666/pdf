@@ -53,6 +53,13 @@ export function createPiperProvider() {
   let token = 0; // растёт при каждой отмене — старые фразы узнают, что они не нужны
   let epoch = 0; // то же для очередей воркеров: задания старой эпохи пропускаются
   let download = null; // { key, controller }
+  // Встык: следующая фраза встаёт в проигрыватель, пока звучит текущая
+  // (audio-player.js), — стык не зависит от того, успеет ли страница.
+  const results = new Map(); // ключ → готовый звук (заготовки из cache, что уже досинтезировались)
+  let upcoming = []; // [{ key, text, voiceId }] в порядке чтения — из последнего retain
+  let upcomingSeq = 0;
+  let scheduled = null; // { key, token, options, seq } — звучащая фраза уже вся в проигрывателе
+  let ahead = null; // { key, handle, token } — следующая фраза, поставленная заранее
 
   // ── Воркеры ──────────────────────────────────────────────────────────
 
@@ -148,11 +155,49 @@ export function createPiperProvider() {
         () => (slot.pending -= 1),
         () => (slot.pending -= 1)
       );
-      promise.catch(() => cache.delete(cacheKey));
+      promise.then(
+        (audio) => {
+          if (cache.get(cacheKey) !== promise) return;
+          results.set(cacheKey, audio);
+          tryAhead(); // может, это следующая фраза — встанет встык
+        },
+        () => cache.get(cacheKey) === promise && cache.delete(cacheKey)
+      );
       cache.set(cacheKey, promise);
-      while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
+      while (cache.size > CACHE_SIZE) forget(cache.keys().next().value);
     }
     return cache.get(cacheKey);
+  }
+
+  function forget(key) {
+    cache.delete(key);
+    results.delete(key);
+  }
+
+  // ── Встык ────────────────────────────────────────────────────────────
+
+  const gapOf = (options) => Math.max(0, Number(options.gapMs) || 0) / 1000;
+
+  /** Поставить следующую фразу (по списку заготовок) встык, пока звучит текущая. */
+  function tryAhead() {
+    const now = scheduled;
+    if (!now || now.token !== token || ahead || now.options.chain === false || !player.speaking) return;
+    const at = upcoming.findIndex((item) => item.key === now.key);
+    const next = at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
+    const audio = next && results.get(next.key);
+    if (!audio) return;
+    const { segments } = spokenForm(next.text, next.voiceId);
+    const handle = player.enqueue(audio.pcm, audio.sampleRate, {
+      volume: now.options.volume,
+      timings: estimateWordTimings(next.text, segments),
+      gap: gapOf(now.options),
+    });
+    ahead = { key: next.key, handle, token };
+  }
+
+  function dropAhead() {
+    ahead?.handle.cancel();
+    ahead = null;
   }
 
   // ── Голоса ───────────────────────────────────────────────────────────
@@ -300,27 +345,42 @@ export function createPiperProvider() {
       player.setRate(options.rate || 1);
       const { text: spoken, segments } = spokenForm(text, options.voiceId);
       const key = keyFor(spoken, options);
+      const seq = upcomingSeq;
       speakingKey = key;
-      let audio;
-      try {
-        audio = await synthesize(spoken, options);
-      } catch (error) {
+      // Эта фраза уже стоит в проигрывателе встык к предыдущей — подхватываем.
+      const adopted = ahead && ahead.token === token && ahead.key === key ? ahead : null;
+      if (!adopted) dropAhead();
+      ahead = null;
+      scheduled = null;
+      let handle = adopted?.handle;
+      if (handle) handle.attach({ onStart: options.onStart, onBoundary: options.onBoundary });
+      else {
+        let audio;
+        try {
+          audio = await synthesize(spoken, options);
+        } catch (error) {
+          if (myToken !== token) return 'cancelled';
+          if (!error.dropped) throw error;
+          audio = await synthesize(spoken, options); // задание отменили по ошибке эпохи — ещё раз
+        }
         if (myToken !== token) return 'cancelled';
-        if (!error.dropped) throw error;
-        audio = await synthesize(spoken, options); // задание отменили по ошибке эпохи — ещё раз
+        handle = player.enqueue(audio.pcm, audio.sampleRate, {
+          volume: options.volume,
+          timings: estimateWordTimings(text, segments),
+          onBoundary: options.onBoundary,
+          onStart: options.onStart,
+          gap: gapOf(options),
+        });
       }
-      if (myToken !== token) return 'cancelled';
-      const result = await player.play(audio.pcm, audio.sampleRate, {
-        volume: options.volume,
-        timings: options.onBoundary ? estimateWordTimings(text, segments) : [],
-        onBoundary: options.onBoundary,
-        onStart: options.onStart,
-        isCancelled: () => myToken !== token,
-      });
+      const mine = { key, token: myToken, options, seq };
+      scheduled = mine;
+      tryAhead();
+      const result = await handle.done;
+      if (scheduled === mine) scheduled = null;
       // Прозвучала — заготовка больше не нужна.
-      if (result === 'ended') cache.delete(key);
+      if (result === 'ended') forget(key);
       if (speakingKey === key) speakingKey = null;
-      return result;
+      return myToken !== token ? 'cancelled' : result;
     },
 
     /** Скорость — сразу, посреди фразы, без повторного синтеза. */
@@ -339,8 +399,11 @@ export function createPiperProvider() {
 
     /** Отпустить заготовки, которых нет среди нужных впереди. */
     retain(texts, options = {}) {
-      const keep = new Set(texts.map((text) => keyFor(spokenForm(text, options.voiceId).text, options)));
-      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
+      upcoming = texts.map((text) => ({ key: keyFor(spokenForm(text, options.voiceId).text, options), text, voiceId: options.voiceId }));
+      upcomingSeq += 1;
+      const keep = new Set(upcoming.map((item) => item.key));
+      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) forget(key);
+      tryAhead();
     },
 
     /** Голос уже в памяти воркера — первая фраза пойдёт без загрузки модели. */
@@ -384,8 +447,19 @@ export function createPiperProvider() {
       // Заготовки для прежнего места больше не нужны — воркеры их пропустят.
       epoch += 1;
       for (const slot of slots) slot.worker.postMessage({ type: 'epoch', epoch });
+      ahead = null;
+      scheduled = null;
       player.stop('cancelled');
     },
+    /** Оборвать звучащую фразу, заготовки впереди не трогать (пропустили примечание). */
+    skip() {
+      token += 1;
+      ahead = null;
+      scheduled = null;
+      player.stop('cancelled');
+    },
+    /** Звук встаёт встык: паузу между фразами (gapMs) ставит сам проигрыватель. */
+    gapless: true,
     get speaking() {
       return player.speaking;
     },

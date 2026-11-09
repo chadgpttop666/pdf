@@ -102,6 +102,12 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let switching = false; // идёт переход к ускорителю посреди работы
   let helperError = null; // почему ускоритель не подключился в последний раз
   let accentRemote = false; // сети ударений считает ускоритель
+  // Встык: следующая фраза встаёт в проигрыватель, пока звучит текущая, —
+  // стык не зависит от того, успеет ли страница (audio-player.js).
+  let upcoming = []; // ключи фраз в порядке чтения — из последнего retain
+  let upcomingSeq = 0; // растёт с каждым новым списком
+  let scheduled = null; // { key, token, options, seq } — фраза, все куски которой уже в проигрывателе
+  let ahead = null; // { key, entry, handles, token } — следующая фраза, поставленная заранее
 
   function touch() {
     lastUsed = Date.now();
@@ -486,7 +492,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     piece.audio.then(
       (audio) => {
         piece.done = true;
+        piece.result = audio;
         piece.seconds = audio.pcm.length / audio.sampleRate + (piece.pause || 0);
+        tryAhead(); // может, это кусок следующей фразы — встанет встык
       },
       () => {}
     );
@@ -529,6 +537,43 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
     }
     return entry;
+  }
+
+  // ── Встык ────────────────────────────────────────────────────────────
+
+  const gapOf = (options) => Math.max(0, Number(options.gapMs) || 0) / 1000;
+
+  /**
+   * Поставить в проигрыватель следующую фразу (по списку заготовок), пока
+   * звучит текущая: её готовые куски — встык, остальные — как досинтезируются.
+   * speak этой фразы подхватит их; другую фразу — снимет (dropAhead).
+   */
+  function tryAhead() {
+    const now = scheduled;
+    if (!now || now.token !== token || now.options.chain === false) return;
+    if (ahead && ahead.token !== token) ahead = null;
+    if (!ahead) {
+      // Начинать — только пока звучит текущая: иначе это уже не «встык».
+      if (!player.speaking) return;
+      const at = upcoming.indexOf(now.key);
+      // Список обновился уже после начала фразы и её в нём нет — он начинается со следующей.
+      const nextKey = at >= 0 ? upcoming[at + 1] : upcomingSeq > now.seq ? upcoming[0] : null;
+      const entry = nextKey && cache.get(nextKey);
+      if (!entry?.pieces[0]?.done) return;
+      ahead = { key: nextKey, entry, handles: [], token };
+    }
+    const { entry, handles } = ahead;
+    while (handles.length < entry.pieces.length && entry.pieces[handles.length].done) {
+      const piece = entry.pieces[handles.length];
+      const { pcm, timings } = playable(piece, piece.result, true);
+      handles.push(player.enqueue(pcm, piece.result.sampleRate, { volume: liveVolume, timings, gap: handles.length ? 0 : gapOf(now.options) }));
+    }
+  }
+
+  /** Поставленная заранее фраза не понадобилась — снять её звук. */
+  function dropAhead() {
+    ahead?.handles[0]?.cancel(); // и всё, что за ней
+    ahead = null;
   }
 
   /** Звук куска с паузой после него и подсветкой слов по оценке. */
@@ -625,22 +670,32 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       }
       adjustThreads();
       const key = keyFor(text, options);
-      let entry = job(text, options, { forSpeak: true });
+      const seq = upcomingSeq;
+      // Эта фраза уже стоит в проигрывателе встык к предыдущей — подхватываем.
+      const adopted = ahead && ahead.token === token && ahead.key === key ? ahead : null;
+      if (!adopted) dropAhead();
+      ahead = null;
+      scheduled = null;
+      let entry = adopted ? adopted.entry : job(text, options, { forSpeak: true });
       speakingKey = key;
-      liveVolume = options.volume ?? 1;
+      if (!adopted) liveVolume = options.volume ?? 1;
       // Заготовки, отложенные на время загрузки, — после текущей фразы.
       for (const item of deferred.splice(0)) {
         if (item.epoch === epoch) readySeconds(job(item.text, item.options)).then(item.resolve, item.reject);
         else item.reject(Object.assign(new Error('Фраза больше не нужна'), { dropped: true }));
       }
-      // Предыдущая фраза только что договорила, а эта не готова — не успеваем.
-      if (performance.now() - lastEnded < 300 && !entry.pieces[0].done) noteLag();
-      await headStart(entry, player.rate, myToken);
-      if (myToken !== token) return 'cancelled';
+      const handles = adopted ? adopted.handles : [];
+      handles.forEach((handle, i) => handle.attach({ onStart: i === 0 ? options.onStart : undefined, onBoundary: options.onBoundary }));
+      if (!adopted) {
+        // Предыдущая фраза только что договорила, а эта не готова — не успеваем.
+        if (performance.now() - lastEnded < 300 && !entry.pieces[0].done) noteLag();
+        await headStart(entry, player.rate, myToken);
+        if (myToken !== token) return 'cancelled';
+      } else liveVolume = options.volume ?? liveVolume;
       let retried = false;
-      for (let i = 0; i < entry.pieces.length; i += 1) {
+      // Куски — в проигрыватель, как только готовы: встают встык к предыдущим.
+      for (let i = handles.length; i < entry.pieces.length; i += 1) {
         const piece = entry.pieces[i];
-        if (i > 0 && !piece.done) noteLag();
         let audio;
         try {
           audio = await piece.audio;
@@ -654,16 +709,26 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
           continue;
         }
         if (myToken !== token) return 'cancelled';
-        const { pcm, timings } = playable(piece, audio, options.onBoundary);
-        const result = await player.play(pcm, audio.sampleRate, {
-          volume: liveVolume,
-          timings,
-          onBoundary: options.onBoundary,
-          onStart: i === 0 ? options.onStart : undefined,
-          isCancelled: () => myToken !== token,
-        });
-        if (result === 'cancelled') return 'cancelled';
+        // Звук кончился раньше, чем досинтезировался этот кусок, — синтез не успевает.
+        if (i > 0 && !player.speaking) noteLag();
+        const { pcm, timings } = playable(piece, audio, true);
+        handles.push(
+          player.enqueue(pcm, audio.sampleRate, {
+            volume: liveVolume,
+            timings,
+            onBoundary: options.onBoundary,
+            onStart: i === 0 ? options.onStart : undefined,
+            gap: i === 0 ? gapOf(options) : 0,
+          })
+        );
       }
+      // Все куски в проигрывателе — пора ставить следующую фразу.
+      const mine = { key, token: myToken, options, seq };
+      scheduled = mine;
+      tryAhead();
+      const results = await Promise.all(handles.map((handle) => handle.done));
+      if (scheduled === mine) scheduled = null;
+      if (myToken !== token || results.includes('cancelled')) return 'cancelled';
       // Прозвучала — заготовка больше не нужна, память освобождаем.
       if (cache.get(key) === entry) cache.delete(key);
       if (speakingKey === key) speakingKey = null;
@@ -694,8 +759,11 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
      * в другое место): запас не копится без предела.
      */
     retain(texts, options = {}) {
-      const keep = new Set(texts.map((text) => keyFor(text, options)));
+      upcoming = texts.map((text) => keyFor(text, options));
+      upcomingSeq += 1;
+      const keep = new Set(upcoming);
       for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
+      tryAhead();
     },
 
     /** Модели уже в памяти воркеров — первая фраза пойдёт без загрузки. */
@@ -783,8 +851,22 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       epoch += 1;
       for (const slot of [...workers.samplers, workers.vocoder, workers.accent]) slot?.worker.postMessage({ type: 'epoch', epoch });
       helper?.client.setEpoch(epoch);
+      ahead = null;
+      scheduled = null;
       player.stop('cancelled');
     },
+    /**
+     * Оборвать звучащую фразу, но заготовки впереди не трогать: пропустили
+     * примечание — следующая фраза уже синтезирована и пойдёт сразу.
+     */
+    skip() {
+      token += 1;
+      ahead = null;
+      scheduled = null;
+      player.stop('cancelled');
+    },
+    /** Звук встаёт встык: паузу между фразами (gapMs) ставит сам проигрыватель. */
+    gapless: true,
     /** Освободить память: выгрузить модели из воркеров. */
     unload() {
       shutdown();

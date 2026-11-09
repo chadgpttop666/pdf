@@ -162,7 +162,7 @@
     <div id="ttsBar" class="bar" hidden>
       <button id="ttsPlay" class="icon" data-icon="play" title="Читать / пауза (S или пробел)" aria-label="Читать или пауза"></button>
       <button id="ttsPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (,)" aria-label="Предыдущее предложение"></button>
-      <button id="ttsNext" class="icon" data-icon="skipForward" title="Следующее предложение (.)" aria-label="Следующее предложение"></button>
+      <button id="ttsNext" class="icon" data-icon="skipForward" title="Следующее предложение (.); во время примечания — пропустить его" aria-label="Следующее предложение"></button>
       <button id="ttsStop" class="icon" data-icon="stop" title="Остановить (Shift+S)" aria-label="Остановить"></button>
       <label class="field">Голос
         <select id="ttsVoice" aria-label="Голос"></select>
@@ -328,6 +328,16 @@
     </div>
 
     <div id="hud" hidden></div>
+
+    <div id="ttsNote" class="tts-note" role="region" aria-label="Примечание, которое читает голос" hidden>
+      <div class="tts-note-head">
+        <span class="tts-note-title">Примечание</span>
+        <span class="tts-note-time"></span>
+        <button type="button" class="tts-note-skip" data-icon="skipForward" title="Пропустить примечание (.)">Пропустить</button>
+      </div>
+      <div class="tts-note-text"></div>
+      <div class="tts-note-progress"><div class="tts-note-fill"></div></div>
+    </div>
 
     <div id="dropOverlay" hidden><span>Отпустите файл, чтобы открыть</span></div>
 

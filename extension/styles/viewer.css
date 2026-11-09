@@ -354,6 +354,43 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
   border-radius: 3px;
 }
 
+/* Окошко примечания, которое читает голос (tts/note-card.js): над нижними
+   панелями, по центру — HUD справа его не закрывает. */
+.tts-note {
+  position: absolute;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  width: min(480px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 38;
+}
+.tts-note[hidden] { display: none; }
+.tts-note-head { display: flex; align-items: center; gap: 8px; }
+.tts-note-title { font-weight: 600; }
+.tts-note-time { margin-right: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.tts-note-text {
+  position: relative;
+  max-height: 7.6em;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.tts-note-text mark { background: #ffd84a; color: #000; border-radius: 2px; }
+.tts-note-progress { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.tts-note-fill { width: 0; height: 100%; background: var(--accent); transition: width .25s linear; }
+@media (prefers-reduced-motion: reduce) { .tts-note-fill { transition: none; } }
+
 /* Инверсия страницы перекрасила бы и подсветку; обратный фильтр на слое
    возвращает ей обычные цвета. */
 #app[data-page-theme='invert'] .tts-highlight-layer,

@@ -4,6 +4,8 @@
 // а не когда таймер выбрали, — иначе он истекал бы, пока книга стоит.
 
 const FADE_MS = 20_000;
+// Дольше фраза не звучит — значит, следующую уже можно не готовить к стыку.
+const SOON_MS = 30_000;
 
 export function createSleepTimer({ select, label, chapterEndAfter }) {
   let mode = 'off'; // off | minutes | chapter
@@ -76,6 +78,16 @@ export function createSleepTimer({ select, label, chapterEndAfter }) {
     shouldStop(pageNumber) {
       if (!armed) return false;
       if (mode === 'minutes') return Date.now() >= until;
+      if (mode === 'chapter') return Boolean(stopPage) && pageNumber >= stopPage;
+      return false;
+    },
+    /**
+     * Остановит ли таймер чтение на фразе со страницы pageNumber или вот-вот:
+     * тогда следующую фразу не ставят в звук заранее — её не будет.
+     */
+    stopsSoon(pageNumber) {
+      if (!armed) return false;
+      if (mode === 'minutes') return Date.now() + SOON_MS >= until;
       if (mode === 'chapter') return Boolean(stopPage) && pageNumber >= stopPage;
       return false;
     },
