@@ -7,6 +7,7 @@
 // попадает в поиск по заметкам и в конспект.
 
 import * as library from '../library.js';
+import { describe, get as getDownload, track } from '../downloads.js';
 import { describeMicError, formatSeconds, startRecording } from './recorder.js';
 import { WHISPER_MODEL, describeReason, installModel, transcribe, transcriberStatus } from './whisper.js';
 
@@ -136,7 +137,18 @@ export function createVoiceNotes(app, highlights) {
           app.hud.show(describeReason('no-model'), { duration: 6000 });
           return;
         }
-        await installModel(client, (loaded, total) => progress(`Скачиваю модель распознавания: ${Math.round((loaded / total) * 100)} %`));
+        // Модель — сотни мегабайт: полоса и значок в углу, как у голосов (downloads.js).
+        const tracker = track('whisper-model', 'Модель расшифровки заметок');
+        try {
+          await installModel(client, (loaded, total) => {
+            tracker.onProgress(loaded, total);
+            progress(`Скачиваю модель распознавания: ${describe(getDownload('whisper-model')).line}`);
+          });
+        } catch (error) {
+          tracker.fail(error);
+          throw error;
+        }
+        tracker.done('Модель расшифровки скачана');
       } else if (!status.ready) {
         if (!quiet) app.hud.show(describeReason(status.reason), { duration: 9000 });
         return;

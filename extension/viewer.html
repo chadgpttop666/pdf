@@ -163,6 +163,7 @@
       <button id="ttsPlay" class="icon" data-icon="play" title="Читать / пауза (S или пробел)" aria-label="Читать или пауза"></button>
       <button id="ttsPrev" class="icon" data-icon="skipBack" title="Предыдущее предложение (,)" aria-label="Предыдущее предложение"></button>
       <button id="ttsNext" class="icon" data-icon="skipForward" title="Следующее предложение (.); во время примечания — пропустить его" aria-label="Следующее предложение"></button>
+      <button id="ttsRevoice" class="icon" data-icon="redo" title="Переозвучить фразу (R): если голос задребезжал или запнулся, она прозвучит иначе — и так запомнится" aria-label="Переозвучить фразу" hidden></button>
       <button id="ttsStop" class="icon" data-icon="stop" title="Остановить (Shift+S)" aria-label="Остановить"></button>
       <label class="field">Голос
         <select id="ttsVoice" aria-label="Голос"></select>
@@ -343,7 +344,11 @@
 
     <dialog id="settingsDialog">
       <form method="dialog" id="settingsForm">
-        <h2>Настройки</h2>
+        <div class="settings-head">
+          <h2>Настройки</h2>
+          <button class="icon settings-close" value="close" data-icon="close" title="Закрыть (Esc)" aria-label="Закрыть настройки"></button>
+          <nav class="settings-nav" id="settingsNav" aria-label="Разделы настроек"></nav>
+        </div>
         <div class="settings-grid" id="settingsGrid"></div>
         <menu>
           <button value="close">Закрыть</button>

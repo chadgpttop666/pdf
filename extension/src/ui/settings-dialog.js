@@ -5,6 +5,9 @@ import { $, clear, closeOnBackdropClick, el, formatBytes, on } from '../dom.js';
 import { SETTINGS_SCHEMA, get as getSetting, updateSettings } from '../settings.js';
 import * as library from '../library.js';
 import { createHelperFlow, describeHelper, helperButton } from '../tts/helper-install.js';
+import { downloadVoice } from '../tts/engines.js';
+import { forget as forgetDownload } from '../downloads.js';
+import { createDownloadChip, progressView } from './progress.js';
 import { canInstall, describeUpdate, isChromeExtension, readState as readUpdateState, STATE_KEY as UPDATE_STATE_KEY } from '../updates.js';
 import { loadUserStress, onUserStressChange, removeUserStress, showStress, userStressEntries } from '../tts/user-stress.js';
 
@@ -95,16 +98,11 @@ export function createSettingsDialog(app) {
   let piperMessage = ''; // переживает перерисовку диалога после загрузки голоса
   let teraMessage = '';
 
-  /** TeraTTS: один пакет на все голоса — скачать, отменить, удалить. */
+  /** TeraTTS: один пакет на все голоса — скачать, отменить, удалить; полоса скачивания. */
   async function renderTeraVoices(container) {
     const tera = app.tts?.tera;
     if (!tera?.available) return;
     const installed = await tera.isInstalled().catch(() => false);
-    const say = (text) => {
-      teraMessage = text;
-      // Диалог мог перерисоваться, пока шла загрузка: пишем в текущий.
-      for (const node of document.querySelectorAll('.tera-status')) node.textContent = text;
-    };
     const refresh = async () => {
       await app.tts.refreshVoices();
       render();
@@ -119,8 +117,9 @@ export function createSettingsDialog(app) {
         {
           type: 'button',
           onclick: async () => {
-            await tera.removeVoice().catch((error) => say(error.message));
-            say('Голоса TeraTTS удалены');
+            forgetDownload('tera-pack');
+            teraMessage = 'Голоса TeraTTS удалены';
+            await tera.removeVoice().catch((error) => (teraMessage = error.message));
             await refresh();
           },
         },
@@ -131,18 +130,17 @@ export function createSettingsDialog(app) {
         'button',
         {
           type: 'button',
+          class: 'primary',
           onclick: async () => {
             const voiceId = (await tera.voices())[0].id;
-            const download = tera.downloadVoice(voiceId, (loaded, total, stage) => {
-              say(stage === 'index' ? 'Готовлю словарь ударений — это меньше минуты…' : `Скачано ${formatBytes(loaded)} из ${formatBytes(total)}`);
-            });
+            teraMessage = '';
+            const download = downloadVoice(app.tts.engines, voiceId);
             render(); // кнопка «Отменить»
             try {
-              await download;
-              say('Голоса TeraTTS скачаны — выберите один на панели озвучки');
-              await updateSettings({ ttsVoiceUri: voiceId });
-            } catch (error) {
-              say(`Не скачалось: ${error.message || error}`);
+              if (await download) await updateSettings({ ttsVoiceUri: voiceId });
+              else teraMessage = 'Загрузка отменена';
+            } catch {
+              /* ошибку показывает полоса */
             }
             await refresh();
           },
@@ -153,7 +151,7 @@ export function createSettingsDialog(app) {
 
     container.append(
       el('span', { class: 'label' }, [
-        el('span', {}, `Нейроголоса TeraTTS${installed ? ' · скачаны' : ''}`),
+        el('span', {}, ['Нейроголоса TeraTTS', installed ? el('span', { class: 'badge ok' }, 'скачаны') : null]),
         el(
           'span',
           { class: 'hint' },
@@ -162,7 +160,26 @@ export function createSettingsDialog(app) {
             'Модель — TeraTTSv2 от TeraSpace (OpenRAIL-M), ударения — RUAccent (MIT).'
         ),
       ]),
-      el('div', { class: 'piper-actions' }, [action, el('span', { class: 'hint tera-status' }, teraMessage)])
+      el('div', { class: 'piper-actions' }, [action]),
+      progressView('tera-pack', { idle: () => teraMessage, textClass: 'tera-status' }),
+      // Переозвученные фразы (R на панели): свой начальный шум — можно вернуть обычный.
+      ...(installed && tera.revoiced
+        ? [el('div', { class: 'piper-actions' }, [
+            el('span', { class: 'hint' }, `Переозвучено фраз: ${tera.revoiced}`),
+            el(
+              'button',
+              {
+                type: 'button',
+                class: 'ghost',
+                onclick: async () => {
+                  await tera.forgetRevoiced();
+                  render();
+                },
+              },
+              'Вернуть обычное звучание'
+            ),
+          ])]
+        : [])
     );
   }
 
@@ -191,9 +208,12 @@ export function createSettingsDialog(app) {
         ),
       ]),
       el('div', { class: 'piper-actions' }, [
-        button ? el('button', { type: 'button', onclick: () => helperFlow[button.act]() }, button.label) : null,
+        button ? el('button', { type: 'button', class: button.act === 'install' ? 'primary' : '', onclick: () => helperFlow[button.act]() }, button.label) : null,
         el('span', { class: 'hint' }, describeHelper(state)),
-      ])
+      ]),
+      // Установщик качается, модели передаются — полосой, как скачивание голосов.
+      ...(state.step === 'downloading' ? [progressView('helper-installer')] : []),
+      ...(state.step === 'syncing' ? [progressView('helper-models')] : [])
     );
   }
 
@@ -257,12 +277,14 @@ export function createSettingsDialog(app) {
 
     const list = el('ul', { class: 'piper-list' });
     for (const voice of voices) {
+      const downloadId = `piper:${voice.id}`;
       const action = voice.installed
         ? el(
             'button',
             {
               type: 'button',
               onclick: async () => {
+                forgetDownload(downloadId);
                 await piper.removeVoice(voice.id).catch(fail);
                 await refresh();
               },
@@ -276,15 +298,13 @@ export function createSettingsDialog(app) {
               onclick: async (event) => {
                 const button = event.currentTarget;
                 button.disabled = true;
+                button.textContent = 'Скачиваю…';
                 try {
-                  await piper.downloadVoice(voice.id, (loaded, total) => {
-                    status.textContent = `«${voice.name}»: ${formatBytes(loaded)} из ${formatBytes(total)}`;
-                  });
-                  say(`Голос «${voice.name}» скачан — выберите его на панели озвучки`);
-                  await refresh();
-                } catch (error) {
-                  fail(error);
+                  if (await downloadVoice(app.tts.engines, voice.id)) await refresh();
+                } catch {
+                  /* ошибку показывает полоса */
                   button.disabled = false;
+                  button.textContent = 'Скачать ещё раз';
                 }
               },
             },
@@ -292,8 +312,11 @@ export function createSettingsDialog(app) {
           );
       list.append(
         el('li', {}, [
-          el('span', {}, [voice.name, el('span', { class: 'hint' }, ` ${voice.lang || ''}${voice.installed ? ' · скачан' : ''}`)]),
-          action,
+          el('div', { class: 'piper-row' }, [
+            el('span', {}, [voice.name, el('span', { class: 'hint' }, ` ${voice.lang || ''}`), voice.installed ? el('span', { class: 'badge ok' }, 'скачан') : null]),
+            action,
+          ]),
+          progressView(downloadId),
         ])
       );
     }
@@ -342,7 +365,7 @@ export function createSettingsDialog(app) {
       ])
     );
     if (!entries.length) {
-      section.append(el('p', { class: 'panel-empty' }, 'Пока ни одного.'));
+      section.append(el('span', { class: 'hint' }, 'Пока ни одного.'));
       return;
     }
     const list = el('ul', { class: 'user-stress-list' });
@@ -367,9 +390,14 @@ export function createSettingsDialog(app) {
       dialog.scrollTop = scrollTop;
     });
     clear(grid);
+    const nav = $('settingsNav');
+    clear(nav);
     for (const item of SETTINGS_SCHEMA) {
       if (item.group) {
-        grid.append(el('div', { class: 'group-title' }, item.group));
+        const title = el('div', { class: 'group-title', id: groupId(item.group) }, item.group);
+        grid.append(title);
+        // Разделы — кнопками в шапке: окно длинное, нужное не искать прокруткой.
+        nav.append(el('button', { type: 'button', dataset: { group: item.group }, onclick: () => showGroup(item.group) }, shortGroup(item.group)));
         continue;
       }
       if (item.custom === 'teraVoices') {
@@ -425,14 +453,36 @@ export function createSettingsDialog(app) {
     renderLibrarySection();
   }
 
-  function open() {
+  const VOICES_GROUP = 'Голоса и модели';
+  const groupId = (group) => `settings-${SETTINGS_SCHEMA.filter((item) => item.group).findIndex((item) => item.group === group)}`;
+  const shortGroup = (group) => group.replace(/\s*\(.*\)$/, '');
+
+  /** Прокрутить окно к разделу. */
+  function showGroup(group) {
+    document.getElementById(groupId(group))?.scrollIntoView({ block: 'start' });
+    for (const button of $('settingsNav').children) button.classList.toggle('current', button.dataset.group === group);
+  }
+
+  /**
+   * Открыть настройки.
+   * @param target раздел или то, что качается (id из downloads.js), — окно
+   *   откроется на нём: щёлкнули по значку скачивания — видна его полоса
+   */
+  function open(target = null) {
     piperMessage = '';
     render();
     helperFlow?.refresh();
     dialog.showModal();
+    chip.render();
+    const group = typeof target === 'string' ? (SETTINGS_SCHEMA.some((item) => item.group === target) ? target : VOICES_GROUP) : null;
+    if (group) requestAnimationFrame(() => showGroup(group));
   }
 
-  on($('btnSettings'), 'click', open);
+  // Значок скачивания в углу — пока окно закрыто.
+  const chip = createDownloadChip({ openSettings: (id) => open(id), isSettingsOpen: () => dialog.open });
+  on(dialog, 'close', () => chip.render());
+
+  on($('btnSettings'), 'click', () => open());
 
   return {
     open,

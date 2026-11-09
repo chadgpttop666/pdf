@@ -1951,6 +1951,28 @@ try {
       epubBook.id !== fb2Book.id,
     JSON.stringify(epubBook)
   );
+  // «Переносить слова по слогам» выключили — открытая книга переверстается сразу, без переносов.
+  const relaidBook = await bookTab.evaluate(async () => {
+    const app = window.pdfReaderApp;
+    const { updateSettings } = await import('./src/settings.js');
+    const relayout = async (hyphens) => {
+      const before = app.loader.pdfDocument;
+      await updateSettings({ bookHyphens: hyphens });
+      for (let i = 0; i < 400 && (app.loader.pdfDocument === before || !app.pdfViewer.pagesCount); i += 1) await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 600));
+      const page = await app.tts.textIndex.page(2);
+      return { relaid: app.loader.pdfDocument !== before, id: app.readingState.documentId, hyphenated: /[а-я]- [а-я]/.test(page.text), word: page.text.includes('непрерывность') };
+    };
+    const id = app.readingState.documentId;
+    const plain = await relayout(false);
+    const back = await relayout(true);
+    return { id, plain, back };
+  });
+  check(
+    'книга без переносов: галочка выключена — открытая книга переверстана сразу, слова не разорваны, ключ тот же; включили — переносы вернулись',
+    relaidBook.plain.relaid && !relaidBook.plain.hyphenated && relaidBook.plain.word && relaidBook.plain.id === relaidBook.id && relaidBook.back.relaid && relaidBook.back.hyphenated,
+    JSON.stringify(relaidBook)
+  );
   await bookTab.close();
 
   // ── Одна книга в двух вкладках: выделение из одной не затирается другой ──

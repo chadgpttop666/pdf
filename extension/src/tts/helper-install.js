@@ -6,6 +6,7 @@
 
 import { HELPER_RELEASE, helperUrl } from './helper-release.js';
 import { compareVersions, connectHelper } from './tera-native.js';
+import { track } from '../downloads.js';
 
 export const HELPER_PERMISSIONS = { permissions: ['nativeMessaging', 'downloads', 'downloads.open'] };
 /**
@@ -38,13 +39,32 @@ async function sha256Hex(blob) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Сборка помощника с GitHub — ровно та, чей хэш записан в расширении. */
-export async function fetchHelper() {
+/** Тело ответа целиком, сообщая, сколько уже пришло. */
+async function readWithProgress(response, total, onProgress) {
+  if (!onProgress || !response.body) return response.blob();
+  const reader = response.body.getReader();
+  const parts = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    loaded += value.length;
+    onProgress(loaded, total);
+  }
+  return new Blob(parts);
+}
+
+/**
+ * Сборка помощника с GitHub — ровно та, чей хэш записан в расширении.
+ * @param onProgress (скачано, всего) в байтах
+ */
+export async function fetchHelper(onProgress) {
   const file = await platformFile();
   if (!file) throw new Error('Для этой системы ускорителя пока нет');
   const response = await fetch(helperUrl(file));
   if (!response.ok) throw new Error(`GitHub ответил ${response.status}`);
-  const blob = await response.blob();
+  const blob = await readWithProgress(response, file.size || Number(response.headers.get('content-length')) || 0, onProgress);
   if ((await sha256Hex(blob)) !== file.sha256) throw new Error('Скачанный файл не совпал с ожидаемым — попробуйте ещё раз');
   return { blob, sha256: file.sha256, name: file.name };
 }
@@ -89,8 +109,8 @@ function downloadFinished(id, onDanger) {
  * @param onDanger браузер просит подтвердить, что файл можно сохранить
  * @returns id загрузки
  */
-export async function downloadInstaller({ onDanger } = {}) {
-  const { blob, name } = await fetchHelper();
+export async function downloadInstaller({ onDanger, onProgress } = {}) {
+  const { blob, name } = await fetchHelper(onProgress);
   const url = URL.createObjectURL(blob);
   try {
     const id = await api().downloads.download({ url, filename: name, conflictAction: 'overwrite', saveAs: false });
@@ -187,12 +207,19 @@ export function createHelperFlow(tera) {
 
   async function sync() {
     set({ step: 'syncing', progress: 0 });
+    // Модели (≈390 МБ) уходят ускорителю — с полосой, как скачивание.
+    const tracker = track('helper-models', 'Модели для ускорителя');
     try {
-      await tera.prepareHelper((loaded, total) => set({ step: 'syncing', progress: total ? loaded / total : 1 }));
+      await tera.prepareHelper((loaded, total) => {
+        tracker.onProgress(loaded, total);
+        set({ step: 'syncing', progress: total ? loaded / total : 1 });
+      });
+      tracker.done('Модели переданы ускорителю');
       const status = await tera.helperStatus();
       set(status.installed ? { step: 'working', ...status } : { step: 'missing' });
       if (status.installed) announce();
     } catch (error) {
+      tracker.fail(error);
       fail(error);
     }
   }
@@ -222,15 +249,22 @@ export function createHelperFlow(tera) {
     install() {
       const mine = (attempt += 1);
       const asked = api().permissions.request(HELPER_PERMISSIONS);
+      let tracker = null;
       (async () => {
         if (!(await asked)) return set({ step: 'missing', message: 'Без разрешения браузера ускоритель не подключить' });
         if ((await tera.helperStatus()).installed) return check();
         set({ step: 'downloading' });
+        tracker = track('helper-installer', 'Ускоритель TeraTTS');
         const downloadId = await downloadInstaller({
+          onProgress: tracker.onProgress,
           onDanger: () => mine === attempt && set({ step: 'downloading', message: 'Браузер спрашивает, сохранить ли файл, — нажмите «Сохранить» (в окне или в списке загрузок).' }),
         });
+        tracker.done('Установщик скачан — запустите его');
         if (mine === attempt) set({ step: 'ready', downloadId });
-      })().catch(fail);
+      })().catch((error) => {
+        tracker?.fail(error);
+        fail(error);
+      });
     },
 
     /** Нажали «Запустить установку». */

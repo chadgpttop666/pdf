@@ -979,7 +979,85 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
   border-radius: 8px;
 }
 .piper-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.settings-grid .group-title { margin-top: 8px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; font-size: 11px; }
+.settings-grid .group-title {
+  margin-top: 8px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  scroll-margin-top: 112px; /* под шапкой окна */
+}
+
+/* Шапка окна настроек: заголовок, ✕ и разделы — видны и при прокрутке. */
+#settingsDialog { padding-top: 0; }
+.settings-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 -20px 8px;
+  padding: 16px 20px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+.settings-head h2 { margin: 0; }
+.settings-nav { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.settings-nav button { padding: 2px 10px; border-radius: 999px; font-size: 12px; }
+.settings-nav button.current { border-color: var(--accent); color: var(--accent); }
+
+/* Пометка «скачаны» у голоса. */
+.badge { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 18px; vertical-align: 1px; }
+.badge.ok { background: color-mix(in srgb, #22c55e 18%, transparent); color: #16a34a; }
+.piper-list li { flex-direction: column; align-items: stretch; }
+.piper-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Полоса скачивания (ui/progress.js): процент, объём, скорость, сколько осталось. */
+.dl-progress { display: grid; gap: 4px; }
+.dl-progress[hidden] { display: none; }
+.dl-bar { position: relative; height: 8px; overflow: hidden; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; }
+.dl-bar[hidden] { display: none; }
+.dl-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.dl-bar.indeterminate .dl-fill {
+  width: 35%;
+  animation: dl-slide 1.2s ease-in-out infinite;
+}
+@keyframes dl-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.dl-text { font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.dl-progress[data-status='done'] .dl-fill { background: #22c55e; }
+.dl-progress[data-status='done'] .dl-text { color: #16a34a; }
+.dl-progress[data-status='error'] .dl-text { color: #dc2626; }
+@media (prefers-reduced-motion: reduce) {
+  .dl-fill { transition: none; }
+  .dl-bar.indeterminate .dl-fill { animation: none; width: 100%; opacity: .5; }
+}
+
+/* Значок скачивания в углу, пока окно настроек закрыто. */
+.download-chip {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 39;
+  max-width: min(520px, calc(100% - 32px));
+  overflow: hidden;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--accent) 22%, transparent) var(--done, 0%), transparent var(--done, 0%)),
+    var(--bg-raised);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.download-chip[hidden] { display: none; }
+.download-chip[data-status='error'] { border-color: #dc2626; }
 
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: baseline; }
 .help-grid kbd {

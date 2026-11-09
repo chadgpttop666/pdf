@@ -4,6 +4,7 @@
 
 import { bookFormat, convertBook, pdfName } from './books/convert.js';
 import { safeFileName, saveBlob } from './dom.js';
+import { get as getSetting } from './settings.js';
 import { computeDocumentId } from './library.js';
 import { filenameFromUrl, pickDocumentName } from './file-name.js';
 import { documentResources, pdfjs } from './viewer-setup.js';
@@ -57,7 +58,9 @@ export class DocumentLoader {
   async openBook(bytes, name) {
     this.eventBus.dispatch('bookconverting', { source: this, name });
     const id = await computeDocumentId(bytes, bytes.byteLength);
-    const book = await convertBook(bytes, name);
+    const book = await convertBook(bytes, name, { hyphens: getSetting('bookHyphens') !== false });
+    // Исходник держим, пока книга открыта: поменяли вёрстку (переносы) — переверстать сразу.
+    this.book = { bytes, name };
     const pdfFileName = pdfName(name);
     const file = new File([book.pdf], pdfFileName, { type: 'application/pdf' });
     const source = { kind: 'file', name: pdfFileName, size: book.pdf.byteLength, file, id, book: { name, format: book.format } };
@@ -72,6 +75,7 @@ export class DocumentLoader {
 
   async #open(params, source) {
     await this.close();
+    if (!source.book) this.book = null; // открыли не книгу — исходник прежней не нужен
     // pdf.js отдаёт данные воркеру во владение, поэтому для копии в библиотеку
     // байты берём потом через pdfDocument.getData(), а не держим ссылку здесь.
     this.loadingTask = pdfjs.getDocument(params);

@@ -18,6 +18,7 @@
 // синтеза тогда не запускаются вовсе.
 
 import { createAudioPlayer } from './audio-player.js';
+import { NOISE_SEED } from './tera-noise.js';
 import { normalizeRussian } from './normalize-ru.js';
 import { applyUserStress, loadUserStress, onUserStressChange } from './user-stress.js';
 import { updateIfOld } from './helper-install.js';
@@ -448,7 +449,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
 
   // ── Куски фразы ──────────────────────────────────────────────────────
 
-  function synthesizePiece(piece, style, jobEpoch) {
+  function synthesizePiece(piece, style, jobEpoch, seed) {
     const spoken = piece.lang === 'ru' ? normalizeRussian(piece.text) : { text: piece.text, segments: [] };
     piece.segments = spoken.segments;
     // Свой словарь читателя — до RUAccent: слова с «+» он не трогает.
@@ -463,7 +464,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     // кусок ждал очереди.
     const posting = lane.then(async () => {
       const text = await accented;
-      if (helper) return { native: synthesizeWithHelper(piece, text, style, jobEpoch) };
+      if (helper) return { native: synthesizeWithHelper(piece, text, style, jobEpoch, seed) };
       const sampler = pickSampler();
       sampler.pending += 1;
       const request = call(sampler, {
@@ -476,6 +477,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
         // сжатую речь модель «зажёвывает».
         durationScale: 1,
         maxSeconds: piece.maxSeconds,
+        seed,
         epoch: jobEpoch,
       });
       const done = () => (sampler.pending -= 1);
@@ -502,9 +504,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   }
 
   /** Кусок через ускоритель: текст в номера символов — здесь, звук — у него. */
-  async function synthesizeWithHelper(piece, text, style, jobEpoch) {
+  async function synthesizeWithHelper(piece, text, style, jobEpoch, seed) {
     const { withStress, plain } = encodeText(modelText(piece.lang, keepSupported(text, table)), table);
-    const { pcm, sampleRate } = await helper.client.synth({ ids: withStress, plain, ttl: style.ttl, dp: style.dp, maxSeconds: piece.maxSeconds, epoch: jobEpoch });
+    const { pcm, sampleRate } = await helper.client.synth({ ids: withStress, plain, ttl: style.ttl, dp: style.dp, maxSeconds: piece.maxSeconds, epoch: jobEpoch, seed });
     const [start, end] = voicedRange(pcm, sampleRate);
     return { pcm: pcm.slice(start, end), sampleRate };
   }
@@ -512,12 +514,53 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   function createJob(text, { voiceId }, fastStart) {
     const style = pack.styles[keyOf(voiceId)] ?? pack.styles[TERA_VOICES[0].key];
     const measure = (part, lang) => (lang === 'ru' ? normalizeRussian(part).text.length : part.length);
-    const pieces = planPieces(text, { fastStart, measure }).map((piece) => synthesizePiece(piece, style, epoch));
+    // Фразу переозвучивали — свой начальный шум (revoice); иначе обычный.
+    const seed = seeds.get(keyFor(text, { voiceId }));
+    const pieces = planPieces(text, { fastStart, measure }).map((piece) => synthesizePiece(piece, style, epoch, seed));
     return { pieces, fastStart };
   }
 
   // Скорость в ключ не входит: заготовка одна на любую скорость.
   const keyFor = (text, options) => `${keyOf(options.voiceId)}|${text}`;
+
+  // ── Переозвучить фразу ───────────────────────────────────────────────
+  // Модель иногда «дребезжит» на гласной — многое решает начальный шум
+  // сэмплера. Читатель переозвучивает фразу: она синтезируется с другим
+  // шумом, и выбор запоминается — в следующий раз она звучит так же.
+  const SEEDS_KEY = 'teraSeeds';
+  const MAX_SEEDS = 2000;
+  const seeds = new Map(); // ключ фразы → начальный шум
+  const seedStore = {
+    async load() {
+      const stored = globalThis.browser?.storage?.local
+        ? (await globalThis.browser.storage.local.get(SEEDS_KEY))[SEEDS_KEY]
+        : JSON.parse(globalThis.localStorage?.getItem(SEEDS_KEY) || 'null');
+      return stored && typeof stored === 'object' ? stored : {};
+    },
+    async save(entries) {
+      const value = Object.fromEntries(entries);
+      if (globalThis.browser?.storage?.local) await globalThis.browser.storage.local.set({ [SEEDS_KEY]: value });
+      else globalThis.localStorage?.setItem(SEEDS_KEY, JSON.stringify(value));
+    },
+  };
+  seedStore
+    .load()
+    .then((stored) => {
+      for (const [key, seed] of Object.entries(stored)) if (!seeds.has(key)) seeds.set(key, seed >>> 0);
+    })
+    .catch(() => {});
+
+  /** Синтезировать фразу заново, с другим шумом; выбор запомнить. @returns новый шум */
+  function revoice(text, options = {}) {
+    const key = keyFor(text, options);
+    const seed = ((seeds.get(key) ?? NOISE_SEED) + 1) >>> 0;
+    seeds.delete(key);
+    seeds.set(key, seed);
+    while (seeds.size > MAX_SEEDS) seeds.delete(seeds.keys().next().value);
+    seedStore.save(seeds).catch(() => {});
+    cache.delete(key);
+    return seed;
+  }
 
   /** Сколько секунд звука в заготовке, когда она готова целиком. */
   const readySeconds = (entry) =>
@@ -867,6 +910,17 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     },
     /** Звук встаёт встык: паузу между фразами (gapMs) ставит сам проигрыватель. */
     gapless: true,
+    revoice,
+    /** Сколько фраз переозвучено (своим шумом). */
+    get revoiced() {
+      return seeds.size;
+    },
+    /** Забыть все переозвучки — фразы снова с обычным шумом. */
+    forgetRevoiced() {
+      seeds.clear();
+      cache.clear();
+      return seedStore.save(seeds);
+    },
     /** Освободить память: выгрузить модели из воркеров. */
     unload() {
       shutdown();

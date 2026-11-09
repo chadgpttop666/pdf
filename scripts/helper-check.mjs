@@ -47,6 +47,8 @@ const { values: args } = parseArgs({
     accent: { type: 'boolean', default: false },
     // Свои фразы вместо проверочных — с ударениями через «+», как их размечает расширение.
     text: { type: 'string', multiple: true },
+    // Свой начальный шум сэмплера (ускоритель 1.5.0+): так читалка переозвучивает фразу.
+    seed: { type: 'string' },
   },
 });
 
@@ -244,7 +246,7 @@ let totalAudio = 0;
 for (const text of TEXTS) {
   const { withStress, plain } = encodeText(modelText('ru', keepSupported(text, table)), table);
   started = performance.now();
-  const { pcm, sampleRate } = await client.synth({ ids: withStress, plain, ...voice, maxSeconds: maxSecondsFor(text) });
+  const { pcm, sampleRate } = await client.synth({ ids: withStress, plain, ...voice, maxSeconds: maxSecondsFor(text), ...(args.seed ? { seed: Number(args.seed) } : {}) });
   const elapsed = (performance.now() - started) / 1000;
   const [from, to] = voicedRange(pcm, sampleRate);
   const voiced = pcm.subarray(from, to);

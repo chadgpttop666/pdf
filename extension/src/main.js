@@ -442,6 +442,13 @@ async function main() {
 
   onSettingsChanged((_all, changed) => {
     if ('uiTheme' in changed) applyUiTheme();
+    // Переносы в книге включили или выключили — переверстать открытую книгу.
+    // Ключ документа тот же (по исходнику), место чтения вернёт reading-state.
+    if ('bookHyphens' in changed && app.loader.book) {
+      const { bytes, name } = app.loader.book;
+      app.hud.show(changed.bookHyphens === false ? 'Верстаю книгу без переносов…' : 'Верстаю книгу с переносами…');
+      openSource(() => app.loader.openBook(bytes, name), name);
+    }
   });
 
   wireFileInputs();

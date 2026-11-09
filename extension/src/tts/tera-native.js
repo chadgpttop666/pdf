@@ -160,7 +160,7 @@ export function createHelperClient(port) {
      * Звук фразы, уже переведённой в номера символов (tera-text.js, encodeText).
      * @returns {Promise<{ pcm: Float32Array, sampleRate: number }>}
      */
-    synth({ ids, plain, ttl, dp, maxSeconds = null, durationScale = 1, epoch = 0 }) {
+    synth({ ids, plain, ttl, dp, maxSeconds = null, durationScale = 1, epoch = 0, seed = undefined }) {
       return request({
         type: 'synth',
         ids: Array.from(ids, Number),
@@ -170,6 +170,8 @@ export function createHelperClient(port) {
         maxSeconds,
         durationScale,
         epoch,
+        // Свой начальный шум (с ускорителя 1.5.0; прежний его не знает и берёт обычный).
+        ...(seed === undefined ? {} : { seed }),
       });
     },
     sendFile: (name, blob, onProgress) => upload('file', { name }, blob, onProgress),

@@ -57,9 +57,10 @@ function wordsOf(runs) {
  *          { type: 'pagebreak' }
  *   style абзаца: 'normal' | 'epigraph' | 'cite' | 'center' | 'subtitle' | 'note'
  * @param fonts { regular, italic, bold, boldItalic } — разобранные TTF
+ * @param options.hyphens переносить длинные слова по слогам (по умолчанию да)
  * @returns {Promise<Uint8Array>} PDF
  */
-export async function layoutBook(book, fonts) {
+export async function layoutBook(book, fonts, { hyphens = true } = {}) {
   const doc = createPdf({ fonts, info: { title: book.title, author: book.author, lang: book.lang || 'ru' } });
   const contentWidth = PAGE.width - PAGE.left - PAGE.right;
   let page = null;
@@ -226,7 +227,9 @@ export async function layoutBook(book, fonts) {
     const indent = options.indent ?? 0;
     const words = wordsOf(runs);
     if (!words.length) return null;
-    const lines = breakLines(words, size, width, indent, { hyphens: options.hyphens ?? (options.align == null || options.align === 'justify') });
+    // Переносы по слогам — только если их не выключили (настройка «Переносить слова»).
+    const hyphenate = hyphens && (options.hyphens ?? (options.align == null || options.align === 'justify'));
+    const lines = breakLines(words, size, width, indent, { hyphens: hyphenate });
     const before = pageEmpty ? 0 : (options.before ?? 0);
     // Заголовок не остаётся последней строкой страницы.
     const keep = options.keepWithNext ? leading * 2 : 0;

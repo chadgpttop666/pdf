@@ -145,6 +145,24 @@ describe('вёрстка книги', () => {
     // Переносы: строка кончается дефисом, а слово продолжается со строчной.
     assert.ok(texts.some((text) => /\p{L}-\|\p{Ll}/u.test(text)));
   });
+
+  it('без переносов (настройка «Переносить слова по слогам» выключена): ни одно слово не разорвано, текст тот же', async () => {
+    const withHyphens = (await readPdf(await layoutBook(book, fonts))).pages.map((items) => items.map((item) => item.str).join('|'));
+    const plain = (await readPdf(await layoutBook(book, fonts, { hyphens: false }))).pages.map((items) => items.map((item) => item.str).join('|'));
+    assert.ok(!plain.some((text) => /\p{L}-\|\p{Ll}/u.test(text)), 'строка не кончается переносом');
+    // Те же слова: склеенный текст обеих вёрсток совпадает.
+    // Слова подряд, без номеров страниц; «пом-» + «нит» (и через стык страниц) — одно слово.
+    const words = (texts) => {
+      const tokens = texts.join('|').split(/[|\s]+/).filter((token) => token && !/^\d+$/.test(token));
+      const out = [];
+      for (const token of tokens) {
+        if (out.length && /\p{L}-$/u.test(out.at(-1)) && /^\p{Ll}/u.test(token)) out.push(out.pop().slice(0, -1) + token);
+        else out.push(token);
+      }
+      return out.filter((word) => /\p{L}{3,}/u.test(word));
+    };
+    assert.deepEqual(words(plain), words(withHyphens));
+  });
 });
 
 describe('ZIP и формат книги', () => {

@@ -6,7 +6,7 @@
 
 import * as ort from '../../vendor/ort/ort.wasm.min.mjs';
 import { quantizeModel } from './onnx-quantize.js';
-import { noise } from './tera-noise.js';
+import { NOISE_SEED, noise } from './tera-noise.js';
 import { encodeText, keepSupported, modelText, voicedRange } from './tera-text.js';
 
 ort.env.wasm.wasmPaths = new URL('../../vendor/ort/', import.meta.url).href;
@@ -40,7 +40,7 @@ const ones = (count) => new Float32Array(count).fill(1);
 const output = (result) => Object.values(result)[0];
 
 /** Текст → скрытое представление речи (то, из чего вокодер делает звук). */
-async function latent({ lang, text, ttl, dp, durationScale = 1, maxSeconds = null }) {
+async function latent({ lang, text, ttl, dp, durationScale = 1, maxSeconds = null, seed = NOISE_SEED }) {
   if (!sessions.textEncoder || !table) throw new Error('Модель TeraTTS не загружена');
   const prepared = modelText(lang, keepSupported(text, table));
   const { withStress, plain } = encodeText(prepared, table);
@@ -62,7 +62,8 @@ async function latent({ lang, text, ttl, dp, durationScale = 1, maxSeconds = nul
   const frames = Math.max(1, Math.ceil((seconds * SAMPLE_RATE) / SAMPLES_PER_FRAME));
   const result = output(
     await sessions.sampler.run({
-      initial_latent: tensor('float32', noise(LATENT_CHANNELS * frames), [1, LATENT_CHANNELS, frames]),
+      // Начальный шум: свой у фразы, которую читатель переозвучил (tera-provider.js, revoice).
+      initial_latent: tensor('float32', noise(LATENT_CHANNELS * frames, seed), [1, LATENT_CHANNELS, frames]),
       text_emb: textEmb,
       style_ttl: styleTtl,
       latent_mask: tensor('float32', ones(frames), [1, 1, frames]),

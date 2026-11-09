@@ -65,9 +65,10 @@ async function unzipFb2(bytes) {
 /**
  * @param bytes Uint8Array книги
  * @param name имя файла (по нему и по первым байтам определяется формат)
+ * @param options.hyphens переносить слова по слогам
  * @returns {Promise<{ pdf: Uint8Array, title: string, author: string, format: string }>}
  */
-export async function convertBook(bytes, name, { fonts, images = toJpeg } = {}) {
+export async function convertBook(bytes, name, { fonts, images = toJpeg, hyphens = true } = {}) {
   const format = bookFormat(name, bytes);
   if (!format) throw new Error('это не FB2 и не EPUB');
   const book =
@@ -75,6 +76,6 @@ export async function convertBook(bytes, name, { fonts, images = toJpeg } = {}) 
       ? await parseEpub(bytes, { toJpeg: images })
       : await parseFb2(format === 'fb2zip' ? await unzipFb2(bytes) : bytes, { toJpeg: images });
   if (!book.title) book.title = String(name || 'Книга').replace(BOOK_NAME, '');
-  const pdf = await layoutBook(book, fonts ?? (await loadFonts()));
+  const pdf = await layoutBook(book, fonts ?? (await loadFonts()), { hyphens });
   return { pdf, title: book.title, author: book.author, format, notes: book.notes.length };
 }

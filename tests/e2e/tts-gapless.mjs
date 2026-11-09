@@ -106,11 +106,27 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.addInitScript(recordAudio);
+  // Кнопки гарнитуры приходят через Media Session — запоминаем обработчики, чтобы «нажать» их.
+  await page.addInitScript(() => {
+    window.mediaHandlers = {};
+    const session = navigator.mediaSession;
+    const original = session.setActionHandler.bind(session);
+    session.setActionHandler = (action, handler) => {
+      window.mediaHandlers[action] = handler;
+      try {
+        original(action, handler);
+      } catch {
+        /* действие неизвестно браузеру */
+      }
+    };
+  });
   const teraFiles = dummyTeraFiles();
-  await page.route('https://huggingface.co/**', (route) => {
+  await page.route('https://huggingface.co/**', async (route) => {
     const url = route.request().url();
     const name = Object.keys(teraFiles).find((suffix) => url.endsWith(suffix));
     if (!name) return route.fallback();
+    // Не мгновенно — чтобы увидеть полосу скачивания и значок в углу.
+    await new Promise((resolve) => setTimeout(resolve, 120));
     return route.fulfill({ status: 200, body: teraFiles[name], headers: { 'content-type': 'application/octet-stream', 'access-control-allow-origin': '*' } });
   });
   await page.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
@@ -174,8 +190,25 @@ try {
   await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
   await page.waitForSelector('.tera-voices button');
   await page.click('.tera-voices button');
-  await page.waitForFunction(() => /скачаны|Не скачалось/.test(document.querySelector('.tera-status')?.textContent || ''), null, { timeout: 60000 });
+  // Пока качается — полоса с процентами, объёмом и скоростью; окно закрыли — значок в углу.
+  await page.waitForFunction(() => /\d+ % · .+ из .+/.test(document.querySelector('.tera-voices .dl-text')?.textContent || ''), null, { timeout: 30000 });
+  const downloading = await page.evaluate(() => ({
+    text: document.querySelector('.tera-voices .dl-text').textContent,
+    bar: document.querySelector('.tera-voices .dl-bar')?.getAttribute('aria-valuenow'),
+  }));
   await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
+  await page.waitForTimeout(300);
+  const chipWhile = await page.evaluate(() => ({ hidden: document.getElementById('downloadChip').hidden, text: document.getElementById('downloadChip').textContent }));
+  await page.waitForFunction(() => /^✓ Голоса TeraTTS скачаны/.test(document.getElementById('downloadChip')?.textContent || ''), null, { timeout: 60000 });
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.open());
+  await page.waitForFunction(() => /скачаны/.test(document.querySelector('.tera-status')?.textContent || ''), null, { timeout: 30000 });
+  const settled = await page.evaluate(() => ({ text: document.querySelector('.tera-status').textContent, badge: document.querySelector('.tera-voices .badge')?.textContent }));
+  await page.evaluate(() => window.pdfReaderApp.settingsDialog.close());
+  check(
+    'скачивание голосов: полоса с процентом, объёмом и скоростью; окно закрыли — значок в углу; в конце — «скачаны»',
+    /^\d+ % · .+ из .+ МБ/.test(downloading.text) && downloading.bar !== null && !chipWhile.hidden && /^⬇ Голоса TeraTTS: /.test(chipWhile.text) && /скачаны/.test(settled.text) && settled.badge === 'скачаны',
+    JSON.stringify({ downloading, chipWhile, settled })
+  );
   await page.selectOption('#ttsVoice', 'tera:ru_m5');
   await page.waitForFunction(() => window.pdfReaderApp.tts.engine === 'tera', null, { timeout: 10000 });
   await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 1 }));
@@ -241,6 +274,55 @@ try {
       note.state === 'speaking',
     JSON.stringify({ ...note, beforeSkip: undefined, noteAudio })
   );
+
+  // Кнопки гарнитуры: «следующий трек» и клавиша «громче» во время примечания пропускают его.
+  const skipBy = async (how) => {
+    await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 3 }));
+    await page.waitForTimeout(300);
+    await page.evaluate(async () => {
+      const reader = window.pdfReaderApp.tts;
+      const page3 = await reader.textIndex.page(3);
+      reader.start({ pageNumber: 3, sentenceIndex: page3.sentences.findIndex((sentence) => page3.text.slice(sentence.start, sentence.end).includes('микрофильмов')) });
+    });
+    await page.waitForFunction(() => window.pdfReaderApp.tts.noteSpeaking && !document.getElementById('ttsNote').hidden, null, { timeout: 15000 });
+    const handlers = await page.evaluate(() => Object.keys(window.mediaHandlers).filter((action) => window.mediaHandlers[action]));
+    const known = await page.evaluate(() => window.audioLog.length);
+    if (how === 'nexttrack') await page.evaluate(() => window.mediaHandlers.nexttrack());
+    else {
+      await page.focus('#viewerContainer');
+      await page.keyboard.press('AudioVolumeUp');
+    }
+    await page.waitForFunction((known) => window.audioLog.length > known && !window.pdfReaderApp.tts.noteSpeaking, known, { timeout: 5000 }).catch(() => {});
+    const result = await page.evaluate(() => ({ note: window.pdfReaderApp.tts.noteSpeaking, card: document.getElementById('ttsNote').hidden, state: window.pdfReaderApp.tts.state }));
+    await page.evaluate(() => window.pdfReaderApp.tts.stop());
+    return { handlers, ...result };
+  };
+  const byHeadset = await skipBy('nexttrack');
+  const byVolume = await skipBy('volume');
+  check(
+    'кнопки гарнитуры: во время чтения есть «пауза», «следующий», «предыдущий»; «следующий трек» и клавиша «громче» пропускают примечание',
+    ['play', 'pause', 'nexttrack', 'previoustrack'].every((action) => byHeadset.handlers.includes(action)) &&
+      [byHeadset, byVolume].every((run) => !run.note && run.card && run.state === 'speaking'),
+    JSON.stringify({ byHeadset, byVolume })
+  );
+  const afterStop = await page.evaluate(() => Object.values(window.mediaHandlers).filter(Boolean).length);
+  check('чтение остановлено — кнопки гарнитуры отданы обратно системе', afterStop === 0, `обработчиков: ${afterStop}`);
+
+  // Переозвучить фразу (R): другая выборка шума — и выбор запоминается.
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await startReading('tera');
+  await page.focus('#viewerContainer');
+  await page.keyboard.press('r');
+  await page.waitForTimeout(400);
+  const revoiced = await page.evaluate(() => ({
+    count: window.pdfReaderApp.tts.tera.revoiced,
+    stored: Object.keys(JSON.parse(localStorage.getItem('teraSeeds') || '{}')).length,
+    state: window.pdfReaderApp.tts.state,
+    button: !document.getElementById('ttsRevoice').hidden,
+  }));
+  await page.waitForFunction(() => window.pdfReaderApp.tts.state === 'speaking', null, { timeout: 10000 });
+  check('«Переозвучить фразу» (R): фраза звучит заново с другим шумом, выбор запомнен', revoiced.count === 1 && revoiced.stored === 1 && revoiced.button, JSON.stringify(revoiced));
+  await page.evaluate(() => window.pdfReaderApp.tts.stop());
 
   // Окно в фоне: страницы не рисуются — раньше голос ждал их по 1,5 с на фразу.
   await page.evaluate(() => window.pdfReaderApp.tts.stop());

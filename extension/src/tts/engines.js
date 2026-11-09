@@ -3,7 +3,8 @@
 // нейроголосов начинаются с «tera:» или «piper:», остальное — голоса системы
 // (или внешнего движка по HTTP).
 
-import { el, formatBytes } from '../dom.js';
+import { el } from '../dom.js';
+import { describe, forget, subscribe, track } from '../downloads.js';
 import { get as getSetting } from '../settings.js';
 import { createHttpProvider } from './http-provider.js';
 import { PIPER_PREFIX, createPiperProvider } from './piper-provider.js';
@@ -111,6 +112,40 @@ export function fillVoiceSelect(select, { system, best, neural }, { documentLang
   return { chosen, empty: !sortedSystem.length };
 }
 
+/** Что качается для голоса — id в учёте скачиваний (downloads.js) и подпись. */
+export function downloadKey(engines, voiceId, voiceName = '') {
+  return engines.neuralFor(voiceId) === engines.tera
+    ? { id: 'tera-pack', title: 'Голоса TeraTTS' }
+    : { id: `piper:${voiceId}`, title: voiceName ? `Голос «${voiceName}»` : 'Голос Piper' };
+}
+
+/**
+ * Скачать нейроголос с учётом в downloads.js: полоса в настройках, строка
+ * панели озвучки и значок в углу показывают одно и то же.
+ * @returns {Promise<boolean>} скачан; false — загрузку отменили
+ */
+export async function downloadVoice(engines, voiceId) {
+  const engine = engines.neuralFor(voiceId);
+  const voice = (await engine?.voices())?.find((item) => item.id === voiceId);
+  if (!voice) throw new Error('Такого голоса нет');
+  const { id, title } = downloadKey(engines, voiceId, voice.name);
+  const tracker = track(id, title);
+  try {
+    await engine.downloadVoice(voiceId, (loaded, total, stage) =>
+      tracker.onProgress(loaded, total, stage === 'index' ? 'Скачано. Готовлю словарь ударений — это меньше минуты…' : '')
+    );
+  } catch (error) {
+    if (/отменен/i.test(error?.message ?? '')) {
+      forget(id);
+      return false;
+    }
+    tracker.fail(error);
+    throw error;
+  }
+  tracker.done(engine === engines.tera ? 'Голоса TeraTTS скачаны — выберите один на панели озвучки' : `Голос «${voice.name}» скачан — выберите его на панели озвучки`);
+  return true;
+}
+
 /**
  * Нейроголос ещё не скачан: спросить и скачать с HuggingFace, показывая
  * прогресс в строке состояния.
@@ -124,21 +159,25 @@ export async function downloadWithConsent(engines, voiceId, setStatus) {
     engine === engines.tera
       ? `Скачать голоса TeraTTS (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
         'Это нужно один раз: четыре голоса и словари ударений сохранятся в браузере и дальше будут работать без интернета. ' +
-        'Во время чтения TeraTTS занимает 1,5–2 ГБ памяти; с ускорителем (Настройки → Озвучка) — меньше и в несколько раз быстрее.'
+        'Во время чтения TeraTTS занимает 1,5–2 ГБ памяти; с ускорителем (Настройки → Голоса и модели) — меньше и в несколько раз быстрее.'
       : `Скачать нейроголос «${voice.name}» (≈${voice.sizeMb} МБ) с HuggingFace?\n\n` +
         'Это нужно один раз: голос сохранится в браузере и дальше будет работать без интернета.';
   if (!window.confirm(question)) return false;
+  const { id } = downloadKey(engines, voiceId, voice.name);
+  // Строка панели повторяет полосу из настроек: процент, объём, скорость, сколько осталось.
+  const off = subscribe((changed, item) => {
+    if (changed === id && item?.status === 'active') setStatus(`Скачиваю ${engine === engines.tera ? 'голоса TeraTTS' : `голос «${voice.name}»`}: ${describe(item).line}`);
+  });
   try {
-    await engine.downloadVoice(voiceId, (loaded, total, stage) => {
-      setStatus(
-        stage === 'index'
-          ? 'Готовлю словарь ударений — это меньше минуты…'
-          : `Скачиваю голос «${voice.name}»: ${formatBytes(loaded)} из ${formatBytes(total)}`
-      );
-    });
+    if (!(await downloadVoice(engines, voiceId))) {
+      setStatus('Загрузка отменена');
+      return false;
+    }
   } catch (error) {
-    setStatus(`Голос не скачался: ${error.message}. Его можно загрузить из файла: Настройки → Нейроголоса.`);
+    setStatus(`Голос не скачался: ${error.message}. Попробуйте ещё раз или загрузите его из файла: Настройки → Голоса и модели.`);
     return false;
+  } finally {
+    off();
   }
   setStatus(`Голос «${voice.name}» скачан и работает без интернета`);
   return true;

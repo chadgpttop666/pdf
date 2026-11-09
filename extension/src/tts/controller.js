@@ -9,6 +9,7 @@ import { TextIndex, cleanForSpeech, wordLength } from '../text-index.js';
 import { bufferBudget, bufferedSeconds, formatClock, formatSpoken, prepareAhead } from './buffer.js';
 import { createEngines, downloadWithConsent, fillVoiceSelect } from './engines.js';
 import { createHighlighter } from './highlighter.js';
+import { createMediaKeys } from './media-keys.js';
 import { createNoteCard } from './note-card.js';
 import { createSleepTimer } from './sleep-timer.js';
 import { onUserStressChange } from './user-stress.js';
@@ -67,7 +68,15 @@ export function createTts(app) {
   let pendingNotes = []; // тексты примечаний текущей фразы, которые ещё прозвучат
   let noteSpeaking = false; // сейчас звучит примечание
   let noteSkipped = false;
+  let currentText = ''; // что звучит сейчас: фраза или её примечание — его и переозвучивают
   const noteCard = createNoteCard({ onSkip: () => skipNote(), wordLength });
+  // Кнопки гарнитуры и медиаклавиши: пауза, дальше (во время примечания — пропустить его), назад.
+  const mediaKeys = createMediaKeys({
+    actions: { playPause: () => toggle(), next: () => next(), previous: () => jump(-1), stop: () => finish() },
+    isNote: () => noteSpeaking,
+    enabled: () => getSetting('ttsMediaKeys') !== false,
+  });
+  const bookTitle = () => $('docTitle')?.textContent?.trim() || document.title;
 
   const PICK_HINT = 'Щёлкните по тексту — начну читать с этого места';
 
@@ -129,6 +138,7 @@ export function createTts(app) {
     $('ttsPitchValue').textContent = Number(getSetting('ttsPitch')).toFixed(1);
     showEngine();
     app.el.classList.toggle('speaking', playing);
+    $('ttsRevoice').hidden = !provider?.revoice;
   }
 
   /** Метка «нейро»: синтез в браузере или через ускоритель (программу). */
@@ -481,6 +491,7 @@ export function createTts(app) {
     state = 'speaking';
     syncUi();
     app.wakeLock?.request();
+    mediaKeys.playing(bookTitle());
 
     try {
       while (state !== 'idle' && myGeneration === generation) {
@@ -583,6 +594,7 @@ export function createTts(app) {
           const last = s === segments.length - 1;
           pendingNotes = segments.slice(s + 1).map((item) => item.text);
           noteSpeaking = Boolean(segment.note);
+          currentText = segment.text;
           noteSkipped = false;
           const options = speechOptions();
           const pause = getSetting('ttsSentencePauseMs');
@@ -673,7 +685,9 @@ export function createTts(app) {
     queued = [];
     pendingNotes = [];
     noteSpeaking = false;
+    currentText = '';
     noteCard.hide();
+    mediaKeys.stopped();
     clearInterval(bufferTimer);
     buffer = [];
     $('ttsBuffer').hidden = true;
@@ -851,6 +865,7 @@ export function createTts(app) {
     voiceStarted();
     provider.pause();
     noteCard.paused();
+    mediaKeys.paused();
     state = 'paused';
     syncUi();
     setStatus('Пауза');
@@ -863,6 +878,7 @@ export function createTts(app) {
     if (state !== 'paused') return;
     provider.resume();
     noteCard.resumed();
+    mediaKeys.playing(bookTitle());
     if (heard.started) heard.since = performance.now();
     state = 'speaking';
     if (sentenceStatus) setStatus(sentenceStatus);
@@ -912,6 +928,21 @@ export function createTts(app) {
     if (!skipNote()) jump(1);
   }
 
+  /**
+   * Переозвучить фразу: TeraTTS иногда «дребезжит» на гласной, и многое
+   * решает начальный шум модели. Фраза синтезируется с другим шумом и
+   * звучит заново; выбор запоминается (tera-provider.js, revoice).
+   */
+  function revoice() {
+    if (state === 'idle' || !provider?.revoice || !currentText) {
+      app.hud.show('Переозвучить можно фразу голоса TeraTTS, пока она звучит');
+      return;
+    }
+    provider.revoice(currentText, speechOptions());
+    app.hud.show('Переозвучиваю фразу — прозвучит чуть иначе. Не понравится — нажмите ещё раз');
+    restartAt({ ...position });
+  }
+
   on($('btnSpeak'), 'click', () => {
     if (bar.hidden) showBar(true);
     else toggle();
@@ -919,6 +950,7 @@ export function createTts(app) {
   on($('ttsPlay'), 'click', () => toggle());
   on($('ttsStop'), 'click', () => finish());
   on($('ttsNext'), 'click', () => next());
+  on($('ttsRevoice'), 'click', () => revoice());
   on($('ttsPrev'), 'click', () => jump(-1));
   // Закрыть панель — значит закончить: и чтение, и подсветку на тексте.
   on($('ttsClose'), 'click', () => {
@@ -1081,6 +1113,8 @@ export function createTts(app) {
     stop: finish,
     piper,
     tera,
+    /** Все движки — скачивание голосов из настроек идёт через них (engines.js). */
+    engines,
     /** Какой движок сейчас говорит: web-speech, http, piper или tera. */
     get engine() {
       return provider?.id ?? null;
@@ -1106,6 +1140,7 @@ export function createTts(app) {
     next,
     previous: () => jump(-1),
     skipNote,
+    revoice,
     /** Звучит примечание (окошко на экране). */
     get noteSpeaking() {
       return noteSpeaking;
