@@ -410,7 +410,9 @@ export function createPiperProvider() {
       const keep = new Set(upcoming.map((item) => item.key));
       for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) forget(key);
       // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
-      if (ahead && scheduled && ahead.key !== nextAfter(scheduled)?.key) dropAhead();
+      // По тексту, а не по месту в списке: одинаковые фразы подряд (заголовок и
+      // колонтитул) место не определяют.
+      if (ahead && !keep.has(ahead.key)) dropAhead();
       tryAhead();
     },
 

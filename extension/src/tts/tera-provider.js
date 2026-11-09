@@ -812,7 +812,9 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       const keep = new Set(upcoming);
       for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
       // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
-      if (ahead && scheduled && ahead.key !== nextKeyAfter(scheduled)) dropAhead();
+      // По тексту, а не по месту в списке: одинаковые фразы подряд (заголовок и
+      // колонтитул) место не определяют.
+      if (ahead && !keep.has(ahead.key)) dropAhead();
       tryAhead();
     },
 

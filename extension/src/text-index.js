@@ -713,34 +713,43 @@ export class TextIndex {
           const notesPage = pageNumber === number ? page : await this.page(pageNumber);
           if (!notesPage) break;
           // Номер записи бывает надстрочным — тогда он среди знаков сносок.
-          const starts = new Map(notesPage.refs.filter((ref) => /^\d+$/.test(ref.key)).map((ref) => [ref.offset, ref.key]));
+          const raisedRefs = notesPage.refs.filter((ref) => /^\d+$/.test(ref.key));
           let offset = 0;
           const list = notesPage.text.split('\n');
           list.forEach((paragraph, index) => {
             const at = offset;
             offset += paragraph.length + 1;
             if (stop || (pageNumber === number && index <= heading)) return;
-            const trimmed = paragraph.trim();
-            if (ENDNOTES_END.test(trimmed)) {
+            if (ENDNOTES_END.test(paragraph.trim())) {
               stop = true;
               return;
             }
-            const leading = paragraph.length - paragraph.trimStart().length;
-            const raised = starts.get(at + leading) ?? starts.get(at);
-            // Записи «12. Текст…» — с начала абзаца или после конца фразы:
-            // абзацы в разделе примечаний не всегда разделены.
-            const pieces = trimmed.split(ENDNOTE_ENTRY);
-            if (raised) {
-              current = { key: raised, text: '' };
-              entries.push(current);
+            // Надстрочный номер начинает запись в начале абзаца или после
+            // конца фразы: короткие записи текстовый слой склеивает в одну
+            // строку («…в 1928 году. ³Подсветка…»).
+            const chunks = [{ key: null, from: 0 }];
+            for (const ref of raisedRefs) {
+              const local = ref.offset - at;
+              if (local < 0 || local > paragraph.length) continue;
+              const before = paragraph.slice(0, local);
+              if (before.trim() && !/[.!?…»")\]]\s*$/u.test(before)) continue;
+              if (!before.trim()) chunks[0] = { key: ref.key, from: local };
+              else chunks.push({ key: ref.key, from: local });
             }
-            if (pieces[0].trim()) {
-              if (current) current.text += ` ${pieces[0].trim()}`;
-            }
-            for (let piece = 1; piece < pieces.length; piece += 2) {
-              current = { key: pieces[piece], text: (pieces[piece + 1] ?? '').trim() };
-              entries.push(current);
-            }
+            chunks.forEach((chunk, i) => {
+              if (chunk.key) {
+                current = { key: chunk.key, text: '' };
+                entries.push(current);
+              }
+              // Записи «12. Текст…» — с начала абзаца или после конца фразы:
+              // абзацы в разделе примечаний не всегда разделены.
+              const pieces = paragraph.slice(chunk.from, chunks[i + 1]?.from ?? paragraph.length).trim().split(ENDNOTE_ENTRY);
+              if (pieces[0].trim() && current) current.text += ` ${pieces[0].trim()}`;
+              for (let piece = 1; piece < pieces.length; piece += 2) {
+                current = { key: pieces[piece], text: (pieces[piece + 1] ?? '').trim() };
+                entries.push(current);
+              }
+            });
           });
         }
         if (entries.length) return { fromPage: number, entries };
