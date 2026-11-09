@@ -5,6 +5,7 @@
 //
 //   node scripts/helper-check.mjs --helper native/target/release/pdf-reader-tts \
 //     --models <папка> [--download] [--hoist] [--compare] [--wav out.wav] [--transcribe]
+//     [--voice ru_f1] [--text 'Н+о +это пошл+о на +убыль.']
 //
 // С --transcribe синтезированная фраза уходит обратно в помощник — на
 // расшифровку Whisper (голосовые заметки): модель — <папка>/whisper/, с
@@ -44,6 +45,8 @@ const { values: args } = parseArgs({
     transcribe: { type: 'boolean', default: false },
     // Сети ударений RUAccent в помощнике — те же ответы, что в WebAssembly.
     accent: { type: 'boolean', default: false },
+    // Свои фразы вместо проверочных — с ударениями через «+», как их размечает расширение.
+    text: { type: 'string', multiple: true },
   },
 });
 
@@ -69,7 +72,7 @@ const ACCENT_FILES = {
 };
 
 // Текст уже с ударениями: ударения расставляет расширение, здесь проверяется синтез.
-const TEXTS = [
+const TEXTS = args.text?.length ? args.text : [
   'Прив+ет! Это пр+оверка ускор+ителя озв+учки.',
   'С+егодня мы чит+аем кн+игу о т+ом, как раб+отает с+интез р+ечи, и сл+ушаем, как зв+учит г+олос.',
   'В тр+идцать вт+ором г+оду он п+еревёл дв+е т+ысячи стран+иц.',

@@ -358,6 +358,11 @@ fn request(message: &Value) -> Result<Request, String> {
         dp: floats(message, "dp")?,
         duration_scale: message.get("durationScale").and_then(Value::as_f64).unwrap_or(1.0),
         max_seconds: message.get("maxSeconds").and_then(Value::as_f64),
+        seed: message
+            .get("seed")
+            .and_then(Value::as_u64)
+            .and_then(|seed| u32::try_from(seed).ok())
+            .unwrap_or(crate::noise::SEED),
     })
 }
 
@@ -402,7 +407,7 @@ fn handle(message: &Value, shared: &Arc<Shared>, jobs: &Sender<Job>, asks: &Send
                 "protocol": PROTOCOL,
                 "files": model_files(),
                 "cores": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-                "features": if speech::supported().is_ok() { json!(["transcribe", "accent", "ext-update"]) } else { json!(["accent", "ext-update"]) },
+                "features": if speech::supported().is_ok() { json!(["transcribe", "accent", "ext-update", "seed"]) } else { json!(["accent", "ext-update", "seed"]) },
             }));
         }
         // Голосовая заметка → текст. Отдельным потоком: синтез и отмены
@@ -598,6 +603,15 @@ pub fn run() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synth_seed_is_optional() {
+        let base = json!({ "ids": [1, 2], "plain": [1, 2], "ttl": "AAAAAA==", "dp": "AAAAAA==" });
+        assert_eq!(request(&base).expect("без seed").seed, crate::noise::SEED);
+        let mut custom = base.clone();
+        custom["seed"] = json!(77);
+        assert_eq!(request(&custom).expect("с seed").seed, 77);
+    }
 
     #[test]
     fn accent_inputs_are_parsed_by_name() {

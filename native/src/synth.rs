@@ -3,7 +3,7 @@
 //! Текст в номера символов переводит расширение (tera-text.js), оно же
 //! обрезает тишину по краям.
 
-use crate::noise::{noise, SEED};
+use crate::noise::noise;
 use ort::environment::Environment;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
@@ -38,6 +38,10 @@ pub struct Request {
     pub dp: Vec<f32>,
     pub duration_scale: f64,
     pub max_seconds: Option<f64>,
+    /// Начальный шум сэмплера (noise.rs). Другое число — та же фраза
+    /// звучит чуть иначе: так читатель переозвучивает фразу, где модель
+    /// задребезжала.
+    pub seed: u32,
 }
 
 pub struct Latent {
@@ -130,7 +134,7 @@ impl Latents {
             let outputs = self
                 .sampler
                 .run(ort::inputs![
-                    "initial_latent" => tensor(vec![1, LATENT_CHANNELS as i64, frames as i64], noise(LATENT_CHANNELS * frames, SEED))?,
+                    "initial_latent" => tensor(vec![1, LATENT_CHANNELS as i64, frames as i64], noise(LATENT_CHANNELS * frames, request.seed))?,
                     "text_emb" => tensor(emb_shape, emb)?,
                     "style_ttl" => tensor(vec![1, 50, 256], request.ttl.clone())?,
                     "latent_mask" => tensor(vec![1, 1, frames as i64], vec![1f32; frames])?,
