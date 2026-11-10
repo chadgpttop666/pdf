@@ -165,6 +165,11 @@ export function openUrl(url, options) {
 }
 
 /** Открытие документа из локальной библиотеки: ключ уже известен. */
+/** Книга FB2/EPUB из «Недавних»: верстается заново — по нынешним настройкам (переносы). */
+export function openBookFromLibrary(bytes, name, record) {
+  return openSource(() => app.loader.openBook(bytes, name), record.title || name);
+}
+
 export function openBytesFromLibrary(bytes, record) {
   return openSource(
     () => app.loader.openBytes(bytes, { name: record.name, size: record.size, id: record.id }),
@@ -349,6 +354,7 @@ async function main() {
   app.openFile = openFile;
   app.openUrl = openUrl;
   app.openBytesFromLibrary = openBytesFromLibrary;
+  app.openBookFromLibrary = openBookFromLibrary;
   app.downloadPdf = downloadPdf;
   app.toolbar = createToolbar(app);
   app.wakeLock = createWakeLock();
@@ -444,9 +450,9 @@ async function main() {
     if ('uiTheme' in changed) applyUiTheme();
     // Переносы в книге включили или выключили — переверстать открытую книгу.
     // Ключ документа тот же (по исходнику), место чтения вернёт reading-state.
-    if ('bookHyphens' in changed && app.loader.book) {
+    if ('bookNoHyphens' in changed && app.loader.book) {
       const { bytes, name } = app.loader.book;
-      app.hud.show(changed.bookHyphens === false ? 'Верстаю книгу без переносов…' : 'Верстаю книгу с переносами…');
+      app.hud.show(changed.bookNoHyphens ? 'Верстаю книгу без переносов…' : 'Верстаю книгу с переносами…');
       openSource(() => app.loader.openBook(bytes, name), name);
     }
   });

@@ -53,12 +53,13 @@ export class DocumentLoader {
   /**
    * Книга FB2/EPUB: сверстать в PDF (books/) и открыть его. Ключ документа —
    * по самой книге: открыли её снова — то же место чтения, даже если вёрстка
-   * в новой версии читалки чуть другая. В библиотеку ложится готовый PDF.
+   * в новой версии читалки чуть другая. В библиотеку ложится сама книга:
+   * из «Недавних» она верстается заново, по нынешним настройкам.
    */
   async openBook(bytes, name) {
     this.eventBus.dispatch('bookconverting', { source: this, name });
     const id = await computeDocumentId(bytes, bytes.byteLength);
-    const book = await convertBook(bytes, name, { hyphens: getSetting('bookHyphens') !== false });
+    const book = await convertBook(bytes, name, { hyphens: !getSetting('bookNoHyphens') });
     // Исходник держим, пока книга открыта: поменяли вёрстку (переносы) — переверстать сразу.
     this.book = { bytes, name };
     const pdfFileName = pdfName(name);

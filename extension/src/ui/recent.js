@@ -4,6 +4,8 @@
 
 import { $, clear, el, formatBytes, formatDate } from '../dom.js';
 import * as library from '../library.js';
+import { get as getSetting } from '../settings.js';
+import { OWN_PRODUCER } from '../text-index.js';
 import { icon } from './icons.js';
 
 export function createRecent(app) {
@@ -11,10 +13,21 @@ export function createRecent(app) {
   const welcomeList = $('welcomeRecent');
 
   async function open(record) {
-    const blob = await library.loadFile(record.id);
-    if (blob) {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      await app.openBytesFromLibrary(bytes, record);
+    const stored = await library.loadFileEntry(record.id);
+    if (stored?.blob) {
+      const bytes = new Uint8Array(await stored.blob.arrayBuffer());
+      // Книга FB2/EPUB — верстается заново: по нынешним настройкам (переносы).
+      if (stored.kind === 'book') await app.openBookFromLibrary(bytes, stored.name, record);
+      else {
+        await app.openBytesFromLibrary(bytes, record);
+        // Книга, сохранённая до 0.28.3 уже свёрстанной: переверстать её не из чего.
+        const meta = getSetting('bookNoHyphens') ? await app.loader.pdfDocument?.getMetadata().catch(() => null) : null;
+        if (meta?.info?.Producer === OWN_PRODUCER) {
+          app.hud.show('Эта книга сохранена в «Недавних» прежней версией — уже свёрстанной, с переносами. Откройте её файл FB2/EPUB через «Открыть» один раз — дальше и отсюда она будет без переносов', {
+            duration: 9000,
+          });
+        }
+      }
       return;
     }
     if (record.url) {

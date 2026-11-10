@@ -2020,13 +2020,13 @@ try {
       epubBook.id !== fb2Book.id,
     JSON.stringify(epubBook)
   );
-  // «Переносить слова по слогам» выключили — открытая книга переверстается сразу, без переносов.
+  // «Без переносов слов» поставили — открытая книга переверстается сразу, без переносов.
   const relaidBook = await bookTab.evaluate(async () => {
     const app = window.pdfReaderApp;
     const { updateSettings } = await import('./src/settings.js');
     const relayout = async (hyphens) => {
       const before = app.loader.pdfDocument;
-      await updateSettings({ bookHyphens: hyphens });
+      await updateSettings({ bookNoHyphens: !hyphens });
       for (let i = 0; i < 400 && (app.loader.pdfDocument === before || !app.pdfViewer.pagesCount); i += 1) await new Promise((r) => setTimeout(r, 50));
       await new Promise((r) => setTimeout(r, 600));
       const page = await app.tts.textIndex.page(2);
@@ -2038,9 +2038,42 @@ try {
     return { id, plain, back };
   });
   check(
-    'книга без переносов: галочка выключена — открытая книга переверстана сразу, слова не разорваны, ключ тот же; включили — переносы вернулись',
+    'книга без переносов: галочка «Без переносов слов» — открытая книга переверстана сразу, слова не разорваны, ключ тот же; сняли — переносы вернулись',
     relaidBook.plain.relaid && !relaidBook.plain.hyphenated && relaidBook.plain.word && relaidBook.plain.id === relaidBook.id && relaidBook.back.relaid && relaidBook.back.hyphenated,
     JSON.stringify(relaidBook)
+  );
+  // Книга из «Недавних» — та же, что из проводника: в библиотеке сама книга,
+  // а не свёрстанный PDF, и верстается она по нынешней галочке.
+  const fromRecent = await bookTab.evaluate(async (id) => {
+    const app = window.pdfReaderApp;
+    const { updateSettings } = await import('./src/settings.js');
+    const library = await import('./src/library.js');
+    await updateSettings({ bookNoHyphens: true });
+    const stored = await library.loadFileEntry(id);
+    const record = (await library.listRecent(20)).find((item) => item.id === id);
+    await app.recent.open(record);
+    for (let i = 0; i < 400 && !(app.readingState.documentId === id && app.pdfViewer.pagesCount && app.loader.book); i += 1) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 600));
+    const page = await app.tts.textIndex.page(2);
+    const result = {
+      kind: stored?.kind ?? null,
+      name: stored?.name ?? null,
+      id: app.readingState.documentId,
+      book: Boolean(app.loader.book),
+      hyphenated: /[а-я]- [а-я]/.test(page.text),
+      word: page.text.includes('непрерывность'),
+    };
+    // Галочку обратно — книга переверстается; дальше проверки идут по готовой.
+    const before = app.loader.pdfDocument;
+    await updateSettings({ bookNoHyphens: false });
+    for (let i = 0; i < 400 && (app.loader.pdfDocument === before || !app.pdfViewer.pagesCount); i += 1) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 600));
+    return result;
+  }, fb2Book.id);
+  check(
+    'книга из «Недавних»: в библиотеке сама книга (FB2), верстается заново по галочке «Без переносов слов» — слова не разорваны, ключ тот же',
+    fromRecent.kind === 'book' && fromRecent.name === 'book.fb2' && fromRecent.id === fb2Book.id && fromRecent.book && !fromRecent.hyphenated && fromRecent.word,
+    JSON.stringify(fromRecent)
   );
   // Список «Какие примечания читать» в книге с примечаниями в конце: все три
   // по порядку, без лишних строк из самого раздела «Примечания».

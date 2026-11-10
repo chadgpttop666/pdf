@@ -25,7 +25,7 @@ const ABBREVIATION_END = /(?:^|[\s(«"])(?:\p{Lu}\p{Ll}{0,3}|\p{Ll}{1,3})\.\s*$/
 const ENDNOTES_END = /^(?:список литературы|литература|библиография|указатель|именной указатель|предметный указатель|содержание|оглавление|bibliography|index|contents)\.?$/i;
 const MIN_SENTENCE_LENGTH = 3;
 // Так подписывает PDF вёрстка книг (books/pdf-writer.js).
-const OWN_PRODUCER = 'PDF-chitalka';
+export const OWN_PRODUCER = 'PDF-chitalka';
 
 /**
  * Сборка читаемого текста страницы.

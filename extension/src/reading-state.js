@@ -42,6 +42,17 @@ export function createReadingState(app) {
   async function rememberFile(id, source) {
     if (!getSetting('storeFilesInLibrary')) return;
     const limit = getSetting('maxStoredFileMb') * 1024 * 1024;
+    // Книга FB2/EPUB — в библиотеку ложится сама книга, а не свёрстанный PDF:
+    // из «Недавних» она верстается заново, по нынешним настройкам (переносы).
+    // Прежде (до 0.28.3) там лежал PDF — его заменяем.
+    if (source.book) {
+      const original = app.loader.book;
+      if (!original || original.bytes.byteLength > limit) return;
+      if ((await library.loadFileEntry(id))?.kind === 'book') return;
+      await library.saveFile(id, new Blob([original.bytes]), { kind: 'book', name: original.name });
+      await library.pruneFiles(limit * 10);
+      return;
+    }
     if ((source.size ?? 0) > limit) return;
     if (await library.hasFile(id)) return;
 

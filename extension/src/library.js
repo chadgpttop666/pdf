@@ -145,15 +145,22 @@ export async function listRecent(limit = 20) {
   });
 }
 
-export async function saveFile(id, blob) {
+/**
+ * @param meta { kind: 'book', name } — в библиотеке сама книга FB2/EPUB, а не PDF
+ */
+export async function saveFile(id, blob, meta = {}) {
   return transaction(FILES, 'readwrite', (store) =>
-    request(store.put({ id, blob, size: blob.size, storedAt: Date.now() }))
+    request(store.put({ ...meta, id, blob, size: blob.size, storedAt: Date.now() }))
   );
 }
 
 export async function loadFile(id) {
-  const record = await transaction(FILES, 'readonly', (store) => request(store.get(id)));
-  return record?.blob || null;
+  return (await loadFileEntry(id))?.blob || null;
+}
+
+/** Файл из библиотеки с пометками: { blob, kind?, name? } или null. */
+export async function loadFileEntry(id) {
+  return (await transaction(FILES, 'readonly', (store) => request(store.get(id)))) ?? null;
 }
 
 export async function deleteDocument(id) {

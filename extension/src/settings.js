@@ -316,11 +316,11 @@ export const SETTINGS_SCHEMA = [
   },
   { group: 'Книги FB2 и EPUB' },
   {
-    key: 'bookHyphens',
+    key: 'bookNoHyphens',
     type: 'bool',
-    def: true,
-    label: 'Переносить слова по слогам',
-    hint: 'Как в бумажной книге: длинное слово на краю строки делится дефисом. Выключите — слова не разрываются, но пробелы между словами местами шире. Открытая книга переверстается сразу, место чтения останется',
+    def: false,
+    label: 'Без переносов слов',
+    hint: 'Поставьте галочку — слова на краю строки не разрываются дефисом (пробелы между словами местами шире). Открытая книга переверстается сразу, место чтения останется; книга из «Недавних» тоже верстается по этой настройке'
   },
   { group: 'Обновления' },
   // Версия, состояние и кнопка «Проверить / Обновить сейчас»: updates.js.
@@ -412,6 +412,9 @@ export async function loadSettings() {
   // Был флажок «второй поток» — включённый становится двумя потоками.
   if (saved.teraSecondThread && !saved.teraThreads) current.teraThreads = '2';
   delete current.teraSecondThread;
+  // Был флажок «Переносить слова» (0.28) — снятый становится «Без переносов».
+  if (saved.bookHyphens === false && saved.bookNoHyphens === undefined) current.bookNoHyphens = true;
+  delete current.bookHyphens;
   return current;
 }
 
