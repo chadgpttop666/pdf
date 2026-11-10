@@ -324,6 +324,44 @@ try {
   check('«Переозвучить фразу» (R): фраза звучит заново с другим шумом, выбор запомнен', revoiced.count === 1 && revoiced.stored === 1 && revoiced.button, JSON.stringify(revoiced));
   await page.evaluate(() => window.pdfReaderApp.tts.stop());
 
+  // Остановили — звук не выбрасывается: недоделанные фразы доделываются,
+  // прозвучавшие держатся. Снова «Читать» с того же места или на пару фраз
+  // раньше (с начала экрана) — звук уже готов, синтезировать заново не нужно.
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.pdfReaderApp.pdfViewer.scrollPageIntoView({ pageNumber: 2 }));
+  await startReading('tera');
+  const kept = await page.evaluate(async () => {
+    const reader = window.pdfReaderApp.tts;
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const from = reader.position;
+    for (let i = 0; i < 600 && !(reader.position.pageNumber === from.pageNumber && reader.position.sentenceIndex >= from.sentenceIndex + 4); i += 1) await wait(25);
+    const at = reader.position;
+    reader.stop();
+    await wait(2500); // недоделанное доделывается
+    const prepared = async (sentenceIndex) => reader.preparedAt({ pageNumber: at.pageNumber, sentenceIndex });
+    // Две прозвучавшие фразы перед текущей — со словами («* * *» голос не произносит).
+    const page = await reader.textIndex.page(at.pageNumber);
+    const spokenBefore = page.sentences
+      .map((sentence, i) => ({ i, words: /[\p{L}\p{N}]/u.test(page.text.slice(sentence.start, sentence.end)) }))
+      .filter((item) => item.words && item.i < at.sentenceIndex && item.i >= from.sentenceIndex)
+      .slice(-2)
+      .map((item) => item.i);
+    const result = { at, spokenBefore, before: await Promise.all(spokenBefore.map(prepared)), current: await prepared(at.sentenceIndex), next: await prepared(at.sentenceIndex + 1) };
+    // Снова «Читать» с того же места — звук идёт сразу.
+    const known = window.audioLog.length;
+    const startedAt = performance.now();
+    reader.start(at);
+    for (let i = 0; i < 400 && window.audioLog.length === known; i += 1) await wait(5);
+    result.firstSoundMs = Math.round(performance.now() - startedAt);
+    reader.stop();
+    return result;
+  });
+  check(
+    'остановили чтение — звук не выбрасывается: прозвучавшие фразы, текущая и следующая готовы; снова «Читать» — звук сразу',
+    kept.spokenBefore.length === 2 && kept.before.every(Boolean) && kept.current && kept.next && kept.firstSoundMs < 400,
+    JSON.stringify(kept)
+  );
+
   // Окно в фоне: страницы не рисуются — раньше голос ждал их по 1,5 с на фразу.
   await page.evaluate(() => window.pdfReaderApp.tts.stop());
   await page.waitForTimeout(300);

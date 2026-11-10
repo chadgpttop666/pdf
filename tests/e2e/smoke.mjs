@@ -401,8 +401,8 @@ try {
   );
 
   // «Не читать это»: примечание пропускается сейчас и больше не читается у
-  // этой книги; в списке «Какие примечания читать» у него снята галочка, и
-  // галочка возвращает его.
+  // этой книги — и после того, как книгу открыли заново. В окне «Примечания
+  // книги» оно во вкладке «Не читаются»; «Читать» возвращает его.
   const noteByMute = await noteRun('mute');
   await page.waitForFunction(() => (window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length === 1, null, { timeout: 5000 });
   const sentencesAfterNote = async () =>
@@ -418,35 +418,53 @@ try {
       return spoken;
     });
   const mutedRun = await sentencesAfterNote();
-  await page.evaluate(() => window.pdfReaderApp.tts.pickNotes());
-  await page.waitForFunction(() => document.querySelectorAll('#notePickerDialog .note-picker-list li').length > 0, null, { timeout: 15000 });
-  const picker = await page.evaluate(() => {
-    const dialog = document.getElementById('notePickerDialog');
-    const rows = [...dialog.querySelectorAll('.note-picker-list li')].map((row) => ({
-      mark: row.querySelector('.note-picker-mark').textContent,
-      text: row.querySelector('.note-picker-text').textContent,
-      on: row.querySelector('input').checked,
-    }));
-    return { open: dialog.open, rows, status: dialog.querySelector('.note-picker-status').textContent };
-  });
-  // Галочку обратно — примечание снова читается.
-  await page.evaluate(() => {
-    const row = [...document.querySelectorAll('#notePickerDialog .note-picker-list li')].find((item) => item.textContent.includes('Микрофильм'));
-    row.querySelector('input').click();
-  });
+  // Книгу открыли заново (другая вкладка) — выбор на месте.
+  const reopenTab = await context.newPage();
+  await reopenTab.addInitScript(speechMock);
+  await reopenTab.goto(`${BASE}/viewer.html?file=/fixtures/russian.pdf`);
+  await reopenTab.waitForFunction(() => window.pdfReaderApp?.readingState?.record && window.pdfReaderApp.pdfViewer.pagesCount > 0, null, { timeout: 20000 });
+  const reopened = await reopenTab.evaluate(
+    (text) => ({ stored: window.pdfReaderApp.readingState.record.mutedNotes?.length ?? 0, muted: window.pdfReaderApp.tts.notes.isMuted(text) }),
+    noteText
+  );
+  await reopenTab.close();
+  // Окно примечаний — в любой момент (клавиша N), не только когда звучит примечание.
+  await page.click('#viewerContainer', { position: { x: 5, y: 5 } });
+  await page.keyboard.press('KeyN');
+  await page.waitForFunction(() => document.getElementById('notePickerDialog')?.open && !/Ищу/.test(document.querySelector('#notePickerDialog .note-picker-status').textContent), null, { timeout: 15000 });
+  const tabsOf = () =>
+    page.evaluate(() => {
+      const dialog = document.getElementById('notePickerDialog');
+      return {
+        tabs: [...dialog.querySelectorAll('.note-picker-tab')].map((tab) => tab.textContent),
+        items: [...dialog.querySelectorAll('.note-picker-item')].map((item) => ({
+          meta: item.querySelector('.note-picker-meta').textContent,
+          text: item.querySelector('.note-picker-text').textContent,
+          action: item.querySelector('.note-picker-move').textContent,
+        })),
+      };
+    });
+  const readTab = await tabsOf();
+  await page.click('#notePickerDialog .note-picker-tab[data-tab="muted"]');
+  const mutedTab = await tabsOf();
+  // «Читать» — примечание уходит обратно во вкладку «Читаются».
+  await page.click('#notePickerDialog .note-picker-item .note-picker-move');
   await page.waitForFunction(() => (window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length === 0, null, { timeout: 5000 });
+  const afterReturn = await tabsOf();
   await page.evaluate(() => document.getElementById('notePickerDialog').close());
   const unmutedRun = await sentencesAfterNote();
-  const microRow = picker.rows.find((row) => row.text === noteText);
   check(
-    '«Не читать это» пропускает примечание и выключает его у книги; в списке примечаний оно без галочки, галочка возвращает его',
+    '«Не читать это» пропускает примечание и выключает его у книги — и после повторного открытия; в окне примечаний (клавиша N) оно во вкладке «Не читаются», «Читать» возвращает его',
     noteByMute.spoken[1] === `Примечание: ${noteText}` &&
       noteByMute.spoken[2] && !/Примечание/.test(noteByMute.spoken[2]) &&
       noteByMute.nextAfterMs < 600 &&
       /микрофильмов\.$/.test(mutedRun[0] ?? '') && mutedRun[1] && !/Примечание/.test(mutedRun[1]) &&
-      picker.open && microRow && !microRow.on && /стр\. 3/.test(microRow.mark) && /не читаются: 1/.test(picker.status) &&
+      reopened.stored === 1 && reopened.muted &&
+      readTab.tabs.join('|') === 'Читаются · 0|Не читаются · 1' && readTab.items.length === 0 &&
+      mutedTab.items.length === 1 && mutedTab.items[0].text === noteText && /стр\. 3/.test(mutedTab.items[0].meta) && mutedTab.items[0].action === 'Читать' &&
+      afterReturn.tabs.join('|') === 'Читаются · 1|Не читаются · 0' && afterReturn.items.length === 0 &&
       unmutedRun[1] === `Примечание: ${noteText}`,
-    JSON.stringify({ noteByMute, mutedRun, picker, unmutedRun })
+    JSON.stringify({ noteByMute, mutedRun, reopened, readTab, mutedTab, afterReturn, unmutedRun })
   );
 
   // Таймер сна «до конца главы»: дочитали страницу перед новой главой — тишина
@@ -2037,6 +2055,47 @@ try {
       /проф\. Иванов в 1928 году/.test(bookNotes[1]) &&
       /удерживать внимание/.test(bookNotes[2]),
     JSON.stringify(bookNotes)
+  );
+  // Выбор с помощью нейросети: список выгружается с пометками и кодами;
+  // ответ (вторая пометка снята) применяется, «Вернуть как было» — отменяет.
+  await bookTab.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await bookTab.evaluate(() => window.pdfReaderApp.tts.pickNotes());
+  await bookTab.waitForFunction(() => document.querySelectorAll('#notePickerDialog .note-picker-item').length === 3, null, { timeout: 15000 });
+  const aiRun = await bookTab.evaluate(async () => {
+    const dialog = document.getElementById('notePickerDialog');
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const button = (text) => [...dialog.querySelectorAll('button')].find((item) => item.textContent === text);
+    dialog.querySelector('.note-picker-ai').open = true;
+    button('Скопировать список').click();
+    await wait(300);
+    const exported = await navigator.clipboard.readText().catch(() => dialog.querySelector('.note-picker-answer').value);
+    const lines = exported.split('\n').filter((line) => line.startsWith('['));
+    // «Нейросеть» сняла пометку у второго примечания и ответила в Markdown.
+    const answer = ['Готово:', ...lines.map((line, i) => `- ${i === 1 ? line.replace('[x]', '[ ]') : line}`)].join('\n');
+    dialog.querySelector('.note-picker-answer').value = answer;
+    button('Применить ответ').click();
+    for (let i = 0; i < 100 && !(window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length; i += 1) await wait(20);
+    const applied = {
+      muted: [...window.pdfReaderApp.readingState.record.mutedNotes],
+      tabs: [...dialog.querySelectorAll('.note-picker-tab')].map((tab) => tab.textContent),
+      result: dialog.querySelector('.note-picker-ai-result').textContent,
+    };
+    button('Вернуть как было').click();
+    for (let i = 0; i < 100 && (window.pdfReaderApp.readingState.record?.mutedNotes ?? []).length; i += 1) await wait(20);
+    const undone = (window.pdfReaderApp.readingState.record.mutedNotes ?? []).length;
+    dialog.close();
+    return { head: exported.split('\n')[0], lines, applied, undone };
+  });
+  check(
+    'примечания для нейросети: список с пометками и кодами, ответ применяется (одно выключено), «Вернуть как было» отменяет',
+    /^Примечания книги «Читать с экрана» — всего 3\./.test(aiRun.head) &&
+      aiRun.lines.length === 3 &&
+      aiRun.lines.every((line) => /^\[x\] \d \{[0-9a-z]{5}\} стр\. \d+: /.test(line)) &&
+      aiRun.applied.muted.length === 1 &&
+      aiRun.applied.tabs.join('|') === 'Читаются · 2|Не читаются · 1' &&
+      /Применено: читаются 2, не читаются 1/.test(aiRun.applied.result) &&
+      aiRun.undone === 0,
+    JSON.stringify(aiRun)
   );
 
   // Интернет-ссылки голос пропускает: в тексте, в примечаниях; примечание из

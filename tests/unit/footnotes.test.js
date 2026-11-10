@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { TextIndex, noteText } from '../../extension/src/text-index.js';
+import { TextIndex, endnoteParts, noteText } from '../../extension/src/text-index.js';
 
 function item(str, { x = 72, y = 700, size = 14, width = null, eol = true } = {}) {
   return { str, transform: [size, 0, 0, size, x, y], width: width ?? str.length * size * 0.5, height: size, hasEOL: eol };
@@ -79,5 +79,27 @@ describe('колонтитулы, которые чередуются через
       const { text } = await index.page(number);
       assert.ok(text.startsWith('Длинная строка'), `стр. ${number}: ${text.slice(0, 50)}`);
     }
+  });
+});
+
+describe('раздел «Примечания»: где начинается запись (endnoteParts)', () => {
+  const parts = (text, current) => endnoteParts(text, current).map((part) => [part.key, part.text.trim()]);
+  it('«Т. 2. С. 112» — продолжение записи, а не запись №2; следующий номер и «1.» новой главы — записи', () => {
+    assert.deepEqual(parts('1. Цит. по: Петров П. П. Избранное. Т. 2. С. 112. 2. Там же. С. 45. 1. Новая глава.'), [
+      [null, ''],
+      ['1', 'Цит. по: Петров П. П. Избранное. Т. 2. С. 112.'],
+      ['2', 'Там же. С. 45.'],
+      ['1', 'Новая глава.'],
+    ]);
+    // Строка оборвалась на «Т.» — следующая «2. С. 112» продолжает запись 6.
+    assert.deepEqual(parts('2. С. 112. 7. Новая запись.', { key: '6', text: 'Петров. Т.' }), [
+      [null, '2. С. 112.'],
+      ['7', 'Новая запись.'],
+    ]);
+    // Посреди строки «40.» после 13 — не запись (номер не по счёту).
+    assert.deepEqual(parts('13. Ещё. 40. Не запись.', { key: '12', text: '' }), [
+      [null, ''],
+      ['13', 'Ещё. 40. Не запись.'],
+    ]);
   });
 });

@@ -19,6 +19,9 @@ const HYPHENS = ['-', SOFT_HYPHEN, '\u2010', '\u2011'];
 const HYPHENATED_END = /\p{L}[-\u00ad\u2010\u2011]$/u;
 const ENDNOTES_HEADING = /^(?:примечания|комментарии|примечания и комментарии|комментарии и примечания|notes|endnotes)\.?$/i;
 const ENDNOTE_ENTRY = /(?:^|(?<=[.!?…»")]\s))(\d{1,3})[.)]\s+(?=[\p{Lu}«"(])/u;
+const ENDNOTE_ENTRIES = new RegExp(ENDNOTE_ENTRY.source, 'gu');
+// «Т. 2. С. 45», «Вып. 3», «Изд. 2» — номер после сокращения: это не новая запись.
+const ABBREVIATION_END = /(?:^|[\s(«"])(?:\p{Lu}\p{Ll}{0,3}|\p{Ll}{1,3})\.\s*$/u;
 const ENDNOTES_END = /^(?:список литературы|литература|библиография|указатель|именной указатель|предметный указатель|содержание|оглавление|bibliography|index|contents)\.?$/i;
 const MIN_SENTENCE_LENGTH = 3;
 // Так подписывает PDF вёрстка книг (books/pdf-writer.js).
@@ -365,6 +368,34 @@ function splitLong(range, text) {
 }
 
 /**
+ * Абзац раздела «Примечания» → куски: продолжение текущей записи (key null)
+ * и новые записи «12. Текст…». Номер посреди строки — новая запись, только
+ * если он следующий по счёту (с запасом на пропуск) или «1.» (нумерация по
+ * главам) и стоит не после сокращения: в «Цит. по: … Т. 2. С. 112.» записей «2» нет.
+ * @param current запись, к которой относится начало абзаца ({ key, text } или null)
+ * @returns {Array<{ key: string|null, text: string }>}
+ */
+export function endnoteParts(text, current = null) {
+  const parts = [{ key: null, text: '' }];
+  let cursor = 0;
+  let lastKey = current?.key;
+  for (const match of text.matchAll(ENDNOTE_ENTRIES)) {
+    const before = text.slice(0, match.index);
+    const atStart = !before.trim();
+    if (ABBREVIATION_END.test(atStart ? (current?.text ?? '') : before)) continue;
+    const number = Number(match[1]);
+    // Следующий по счёту (с запасом на пропуск) или «1.» — нумерация заново, с новой главы.
+    if (!atStart && lastKey !== undefined && number !== 1 && !(number > Number(lastKey) && number <= Number(lastKey) + 3)) continue;
+    parts.at(-1).text = text.slice(cursor, match.index);
+    parts.push({ key: match[1], text: '' });
+    cursor = match.index + match[0].length;
+    lastKey = match[1];
+  }
+  parts.at(-1).text = text.slice(cursor);
+  return parts;
+}
+
+/**
  * Текст для синтезатора: переносы строк и слоговые переносы убираем, но
  * храним карту в исходные позиции, чтобы подсветка слов оставалась точной.
  * @returns {{ text: string, map: number[] }}
@@ -645,6 +676,12 @@ export class TextIndex {
    * разделе «Примечания» в конце книги. null — не нашли.
    */
   async noteFor(pageNumber, ref) {
+    const text = await this.rawNoteFor(pageNumber, ref);
+    // Перенос по слогам внутри примечания («называ- лась») — как в основном тексте: слово целиком.
+    return text ? text.replace(/(\p{L})[-\u00ad\u2010\u2011]\s+(?=\p{Ll})/gu, '$1') : text;
+  }
+
+  async rawNoteFor(pageNumber, ref) {
     const page = await this.page(pageNumber);
     const bodies = page?.notes?.bodies ?? [];
     const found = bodies.findIndex((body) => body.key === ref.key);
@@ -747,11 +784,12 @@ export class TextIndex {
               }
               // Записи «12. Текст…» — с начала абзаца или после конца фразы:
               // абзацы в разделе примечаний не всегда разделены.
-              const pieces = paragraph.slice(chunk.from, chunks[i + 1]?.from ?? paragraph.length).trim().split(ENDNOTE_ENTRY);
-              if (pieces[0].trim() && current) current.text += ` ${pieces[0].trim()}`;
-              for (let piece = 1; piece < pieces.length; piece += 2) {
-                current = { key: pieces[piece], text: (pieces[piece + 1] ?? '').trim() };
-                entries.push(current);
+              for (const part of endnoteParts(paragraph.slice(chunk.from, chunks[i + 1]?.from ?? paragraph.length).trim(), current)) {
+                if (part.key) {
+                  current = { key: part.key, text: '' };
+                  entries.push(current);
+                }
+                if (part.text.trim() && current) current.text += ` ${part.text.trim()}`;
               }
             });
           });

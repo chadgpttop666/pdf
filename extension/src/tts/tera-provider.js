@@ -24,6 +24,7 @@ import { applyUserStress, loadUserStress, onUserStressChange } from './user-stre
 import { updateIfOld } from './helper-install.js';
 import { estimateWordTimings } from './piper-math.js';
 import { HELPER_MODELS, HELPER_PROTOCOL, connectHelper, missingModels, syncModels } from './tera-native.js';
+import { createRecent } from './recent.js';
 import { HELPER_ACCENT_MODELS } from './remote-ort.js';
 import { encodeText, keepSupported, modelText, planPieces, voicedRange } from './tera-text.js';
 import { samplerCount } from './tera-threads.js';
@@ -109,6 +110,10 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
   let upcomingSeq = 0; // растёт с каждым новым списком
   let scheduled = null; // { key, token, options, seq } — фраза, все куски которой уже в проигрывателе
   let ahead = null; // { key, entry, handles, token } — следующая фраза, поставленная заранее
+  // Прозвучавшие фразы — ещё немного в памяти: остановили и снова «Читать» — звук готов (recent.js).
+  const recent = createRecent((key) => {
+    if (!upcoming.includes(key) && key !== speakingKey) cache.delete(key);
+  });
 
   function touch() {
     lastUsed = Date.now();
@@ -194,6 +199,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     for (const item of deferred) item.reject(error);
     deferred = [];
     cache.clear();
+    recent.clear();
   }
 
   async function loadSampler(slot) {
@@ -559,6 +565,7 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
     while (seeds.size > MAX_SEEDS) seeds.delete(seeds.keys().next().value);
     seedStore.save(seeds).catch(() => {});
     cache.delete(key);
+    recent.delete(key);
     return seed;
   }
 
@@ -777,8 +784,8 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       const results = await Promise.all(handles.map((handle) => handle.done));
       if (scheduled === mine) scheduled = null;
       if (myToken !== token || results.includes('cancelled')) return 'cancelled';
-      // Прозвучала — заготовка больше не нужна, память освобождаем.
-      if (cache.get(key) === entry) cache.delete(key);
+      // Прозвучала — держим ещё немного (recent.js), потом память освободится.
+      if (cache.get(key) === entry) recent.add(key);
       if (speakingKey === key) speakingKey = null;
       lastEnded = performance.now();
       adjustThreads(); // скорость могли снизить — лишний сэмплер отпускаем
@@ -810,7 +817,8 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       upcoming = texts.map((text) => keyFor(text, options));
       upcomingSeq += 1;
       const keep = new Set(upcoming);
-      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) cache.delete(key);
+      const held = new Set(recent.keys());
+      for (const key of [...cache.keys()]) if (!keep.has(key) && !held.has(key) && key !== speakingKey) cache.delete(key);
       // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
       // По тексту, а не по месту в списке: одинаковые фразы подряд (заголовок и
       // колонтитул) место не определяют.
@@ -916,6 +924,17 @@ export function createTeraProvider({ threads = () => 'auto', rate = () => 1, qua
       ahead = null;
       scheduled = null;
       player.stop('cancelled');
+    },
+    /**
+     * Остановить чтение, не бросая синтез: недоделанные фразы доделываются,
+     * готовые остаются — снова «Читать» с того же места пойдёт сразу.
+     */
+    halt() {
+      this.skip();
+    },
+    /** Звук фразы уже есть или синтезируется (остановили — и с того же места). */
+    prepared(text, options = {}) {
+      return cache.has(keyFor(text, options));
     },
     /** Звук встаёт встык: паузу между фразами (gapMs) ставит сам проигрыватель. */
     gapless: true,

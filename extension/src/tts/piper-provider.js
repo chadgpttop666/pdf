@@ -9,6 +9,7 @@ import * as library from '../library.js';
 import { createAudioPlayer } from './audio-player.js';
 import { normalizeRussian } from './normalize-ru.js';
 import { estimateWordTimings } from './piper-math.js';
+import { createRecent } from './recent.js';
 
 export const PIPER_PREFIX = 'piper:';
 
@@ -60,6 +61,10 @@ export function createPiperProvider() {
   let upcomingSeq = 0;
   let scheduled = null; // { key, token, options, seq } — звучащая фраза уже вся в проигрывателе
   let ahead = null; // { key, handle, token } — следующая фраза, поставленная заранее
+  // Прозвучавшие фразы — ещё немного в памяти: остановили и снова «Читать» — звук готов (recent.js).
+  const recent = createRecent((key) => {
+    if (!upcoming.some((item) => item.key === key) && key !== speakingKey) forget(key);
+  });
 
   // ── Воркеры ──────────────────────────────────────────────────────────
 
@@ -384,7 +389,8 @@ export function createPiperProvider() {
       const result = await handle.done;
       if (scheduled === mine) scheduled = null;
       // Прозвучала — заготовка больше не нужна.
-      if (result === 'ended') forget(key);
+      // Прозвучала — держим ещё немного (recent.js), потом память освободится.
+      if (result === 'ended') recent.add(key);
       if (speakingKey === key) speakingKey = null;
       return myToken !== token ? 'cancelled' : result;
     },
@@ -408,7 +414,8 @@ export function createPiperProvider() {
       upcoming = texts.map((text) => ({ key: keyFor(spokenForm(text, options.voiceId).text, options), text, voiceId: options.voiceId }));
       upcomingSeq += 1;
       const keep = new Set(upcoming.map((item) => item.key));
-      for (const key of [...cache.keys()]) if (!keep.has(key) && key !== speakingKey) forget(key);
+      const held = new Set(recent.keys());
+      for (const key of [...cache.keys()]) if (!keep.has(key) && !held.has(key) && key !== speakingKey) forget(key);
       // Встык уже стоит фраза, которой впереди больше нет (выключили примечание), — снимаем.
       // По тексту, а не по месту в списке: одинаковые фразы подряд (заголовок и
       // колонтитул) место не определяют.
@@ -467,6 +474,14 @@ export function createPiperProvider() {
       ahead = null;
       scheduled = null;
       player.stop('cancelled');
+    },
+    /** Остановить чтение, не бросая синтез: снова «Читать» с того же места пойдёт сразу. */
+    halt() {
+      this.skip();
+    },
+    /** Звук фразы уже есть или синтезируется. */
+    prepared(text, options = {}) {
+      return cache.has(keyFor(spokenForm(text, options.voiceId).text, options));
     },
     /** Звук встаёт встык: паузу между фразами (gapMs) ставит сам проигрыватель. */
     gapless: true,

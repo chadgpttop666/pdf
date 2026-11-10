@@ -393,14 +393,32 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
 .tts-note-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .tts-note-actions button { padding: 3px 9px; font-size: 12.5px; }
 
-/* Окно «Какие примечания читать» (tts/note-picker.js): все примечания книги с галочками. */
-#notePickerDialog { width: min(620px, calc(100vw - 32px)); }
-#notePickerDialog form { display: flex; flex-direction: column; max-height: calc(86vh - 40px); }
-.note-picker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 10px; }
-.note-picker-status { margin-left: auto; }
+/* Окно «Примечания книги» (tts/note-picker.js): вкладки «Читаются» и
+   «Не читаются», поиск, длинный текст раскрывается, выгрузка для нейросети. */
+#notePickerDialog { width: min(680px, calc(100vw - 32px)); padding: 16px 18px; }
+#notePickerDialog[open] { display: flex; flex-direction: column; gap: 10px; }
+.note-picker-head { display: flex; align-items: center; gap: 8px; }
+.note-picker-head h2 { margin: 0; margin-right: auto; }
+.note-picker-warning { margin: 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 13px; }
+.note-picker-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.note-picker-tab {
+  padding: 7px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.note-picker-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.note-picker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.note-picker-search { flex: 1 1 200px; min-width: 0; }
+.note-picker-status { flex-basis: 100%; }
+.note-picker-status:empty { display: none; }
 .note-picker-list {
   flex: 1 1 auto;
-  min-height: 60px;
+  min-height: 80px;
+  max-height: 52vh;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -408,28 +426,40 @@ input[type='range'] { accent-color: var(--accent); width: 130px; vertical-align:
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-.note-picker-list li + li { border-top: 1px solid var(--border); }
-.note-picker-list label {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 10px;
-  padding: 8px 10px;
-  cursor: pointer;
-}
-.note-picker-list label:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
-.note-picker-list input { grid-row: span 2; margin-top: 2px; }
-.note-picker-mark { font-size: 12px; color: var(--fg-muted); }
+.note-picker-list:empty { display: none; }
+.note-picker-item { display: grid; gap: 4px; padding: 9px 12px; }
+.note-picker-item + .note-picker-item { border-top: 1px solid var(--border); }
+.note-picker-meta { display: flex; gap: 8px; font-size: 12px; color: var(--fg-muted); }
 .note-picker-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
-  font-size: 13.5px;
-  line-height: 1.4;
+  font-size: 14px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
+  cursor: pointer;
 }
-/* Выключенное — блёклым: сразу видно, что голос его пропустит. */
-.note-picker-list input:not(:checked) ~ .note-picker-text { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fg-muted) 60%, transparent); }
+.note-picker-text.expanded { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.note-picker-actions { display: flex; align-items: center; gap: 8px; }
+.note-picker-move { margin-left: auto; padding: 3px 12px; font-size: 13px; }
+.note-picker-empty { margin: 4px 2px; }
+button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.note-picker-ai { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.note-picker-ai summary { cursor: pointer; font-weight: 600; }
+.note-picker-ai[open] { display: grid; gap: 8px; }
+.note-picker-ai p { margin: 0; }
+.note-picker-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.note-picker-answer { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px; }
 
 /* Инверсия страницы перекрасила бы и подсветку; обратный фильтр на слое
    возвращает ей обычные цвета. */

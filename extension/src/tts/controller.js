@@ -81,12 +81,18 @@ export function createTts(app) {
   const notePicker = createNotePicker({
     filter: noteFilter,
     textIndex: () => index,
-    available: () => {
-      if (getSetting('ttsFootnotes') !== 'inline') return 'Сейчас голос не читает примечания вовсе: в настройках озвучки «Примечания и сноски» — «не читать».';
-      if (!index?.skipFurniture) return 'Примечания читаются отдельно, только когда колонтитулы и сноски не читаются подряд (настройки озвучки).';
-      return '';
-    },
+    // Примечания отделены от текста, только когда колонтитулы и сноски не читаются подряд.
+    available: () =>
+      index && !index.skipFurniture
+        ? 'Примечания не отделены от текста: в настройках озвучки включено чтение колонтитулов и сносок подряд. Выключите его — и здесь появится список.'
+        : '',
+    warning: () =>
+      getSetting('ttsFootnotes') !== 'inline'
+        ? 'Сейчас голос не читает примечания вовсе («Настройки → Озвучка → Примечания и сноски»). Выбор сохранится и пригодится, когда включите.'
+        : '',
+    title: () => app.readingState?.record?.title || bookTitle(),
     onChange: () => notesChanged(),
+    onJump: (pageNumber) => app.pdfViewer.scrollPageIntoView({ pageNumber }),
   });
   // Кнопки гарнитуры и медиаклавиши: пауза, дальше (во время примечания — пропустить его), назад.
   const mediaKeys = createMediaKeys({
@@ -744,7 +750,10 @@ export function createTts(app) {
     voiceStarted();
     sleepTimer.disarm();
     generation += 1;
-    provider?.cancel();
+    // Нейроголос синтез не бросает: недоделанное доделается, готовое
+    // останется — снова «Читать» с того же места пойдёт без ожидания.
+    if (provider?.halt) provider.halt();
+    else provider?.cancel();
     clearHighlights();
     // Плавная прокрутка за последней фразой не должна доезжать после стопа.
     if (!app.autoScroll?.running) app.scroller?.cancel();
@@ -886,7 +895,27 @@ export function createTts(app) {
     // Обычный старт — документ подряд; кусок — только выделенное.
     range = piece;
     queued = [];
+    if (state === 'idle') await dropStale();
     await loop();
+  }
+
+  /**
+   * После остановки синтез доделывает фразы того места. Чтение пошло с него
+   * же (или чуть раньше — с начала экрана) — звук готов. С другого места —
+   * старое бросаем: первая фраза новой встала бы в очередь за ним.
+   */
+  async function dropStale() {
+    if (!provider?.prepared) return;
+    if (!(await preparedAt(position).catch(() => false))) provider.cancel();
+  }
+
+  /** Звук фразы с этого места уже есть или синтезируется. */
+  async function preparedAt(target) {
+    if (!provider?.prepared || !index) return false;
+    const page = await index.page(target.pageNumber);
+    if (!page || target.sentenceIndex >= page.sentences.length) return false;
+    const utterance = await buildUtterance(page, target.sentenceIndex);
+    return provider.prepared(utterance.main, speechOptions());
   }
 
   /** Перескок во время чтения или паузы: прерываем фразу и читаем с новой позиции. */
@@ -982,7 +1011,7 @@ export function createTts(app) {
     if (!note?.text) return;
     if (currentNote?.text === note.text) skipNote();
     const saved = await noteFilter.set([note.text], true);
-    app.hud.show(saved ? 'Это примечание больше не читается. Вернуть — «Какие примечания читать…»' : 'Не получилось запомнить выбор: документа нет в библиотеке', {
+    app.hud.show(saved ? 'Это примечание больше не читается. Вернуть — «Все примечания…» (N), вкладка «Не читаются»' : 'Не получилось запомнить выбор: документа нет в библиотеке', {
       duration: 4000,
     });
     notesChanged();
@@ -995,7 +1024,7 @@ export function createTts(app) {
     prefetchAhead(upcoming);
   }
 
-  /** Окно «Какие примечания читать»: все примечания книги с галочками. */
+  /** Окно «Примечания книги»: вкладки «Читаются» и «Не читаются», выгрузка для нейросети. */
   function pickNotes() {
     return notePicker.open();
   }
@@ -1028,6 +1057,7 @@ export function createTts(app) {
   on($('ttsStop'), 'click', () => finish());
   on($('ttsNext'), 'click', () => next());
   on($('ttsRevoice'), 'click', () => revoice());
+  on($('ttsNotes'), 'click', () => pickNotes());
   on($('ttsPrev'), 'click', () => jump(-1));
   // Закрыть панель — значит закончить: и чтение, и подсветку на тексте.
   on($('ttsClose'), 'click', () => {
@@ -1242,6 +1272,8 @@ export function createTts(app) {
     get position() {
       return { ...position };
     },
+    /** Звук фразы с этого места уже готов (после остановки он не выбрасывается). */
+    preparedAt,
     /** Восстановление места чтения из библиотеки. */
     setPosition(next) {
       if (next?.pageNumber) position = { pageNumber: next.pageNumber, sentenceIndex: next.sentenceIndex || 0 };

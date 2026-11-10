@@ -140,7 +140,9 @@ export function createTextReader(engines, hooks = {}) {
     clearTimeout(busyTimer);
     generation += 1;
     if (state === 'paused') provider.resume();
-    provider.cancel();
+    // Синтез не бросаем: снова «Читать» — готовое пойдёт сразу (как в читалке).
+    if (provider.halt) provider.halt();
+    else provider.cancel();
     buffer = [];
     setState('idle');
     status(message);
@@ -158,6 +160,8 @@ export function createTextReader(engines, hooks = {}) {
     /** Новый текст: прежнее чтение останавливается. */
     load(list) {
       if (state !== 'idle') finish();
+      // Другой текст — синтез прежнего бросаем: первая фраза нового встала бы за ним в очередь.
+      if (list[0] !== sentences[0]) provider.cancel();
       sentences = list;
       index = 0;
       until = Infinity;

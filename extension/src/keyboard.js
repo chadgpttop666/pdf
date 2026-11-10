@@ -75,6 +75,7 @@ export const BINDINGS = [
   { combos: ['Period'], label: 'Следующее предложение; во время примечания — пропустить его', run: (app) => app.tts?.next() },
   { combos: ['Comma'], label: 'Предыдущее предложение', run: (app) => app.tts?.previous() },
   { combos: ['KeyR'], label: 'Переозвучить фразу (TeraTTS): если голос задребезжал', run: (app) => app.tts?.revoice() },
+  { combos: ['KeyN'], label: 'Примечания книги: какие читать, какие пропускать', run: (app) => app.tts?.pickNotes() },
   { combos: ['Shift+Period'], label: 'Читать быстрее', run: (app) => app.tts?.adjustRate(0.1) },
   { combos: ['Shift+Comma'], label: 'Читать медленнее', run: (app) => app.tts?.adjustRate(-0.1) },
 

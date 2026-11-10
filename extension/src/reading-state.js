@@ -161,7 +161,11 @@ export function createReadingState(app) {
         return;
       }
       const existing = await library.getDocument(id);
+      // Всё, что уже хранится у книги (выключенные примечания и прочее), —
+      // как было: запись перезаписывается целиком, и незнакомое здесь поле
+      // иначе пропало бы при каждом открытии.
       record = {
+        ...existing,
         id,
         name: documentSource.name,
         title,
