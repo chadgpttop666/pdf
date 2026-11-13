@@ -816,6 +816,27 @@ WebAssembly. Piper синтезирует фразу быстрее, чем та
 Можно подключить и свой внешний движок по HTTP —
 [инструкция и пример](docs/tts-http-provider.md).
 
+### Голос TeraTTS для других расширений (Firefox, 0.29+)
+
+Читалка озвучивает фразы и для расширения закадрового перевода YouTube
+(`yt-transcript@yt-skach.local`): оно присылает фразу перевода, читалка
+отдаёт её звук голосом TeraTTS — тем же пакетом голосов, ускорителем и
+словарём ударений. Скачивать голоса второй раз не нужно, а ускоритель
+Firefox пускает только к самой читалке. Другим расширениям и сайтам читалка
+не отвечает ([src/tts/external-api.js](extension/src/tts/external-api.js)).
+
+Сообщения (`runtime.sendMessage("pdf-reader@chadgpttop666.github.io", …)`):
+
+| `type` | Ответ |
+|---|---|
+| `tts-voices` | `{ installed, voices: [{ id, name }] }` |
+| `tts-preload` | загрузить модели заранее — первая фраза без ожидания |
+| `tts-render` + `text`, `voiceId` (`tera:ru_m5` и т. п.) | `{ pcm: Float32Array, sampleRate }` |
+
+Голос создаётся в фоновой странице при первой просьбе, модели выгружаются
+после 10 минут простоя. В Chrome этого нет: там фоновая страница — service
+worker, без AudioContext и `import()`.
+
 ## Разработка
 
 ```bash

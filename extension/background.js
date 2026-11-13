@@ -15,6 +15,7 @@ import './browser-shim.js';
 import { applyWhenIdle, checkForUpdate, isChromeExtension, onFirefoxUpdateAvailable, reopenAfterUpdate } from './src/updates.js';
 import { filenameFromContentDisposition } from './src/file-name.js';
 import { PDF_RULE_IDS, pdfRules } from './src/pdf-rules.js';
+import { createExternalApi } from './src/tts/external-api.js';
 
 const VIEWER_URL = browser.runtime.getURL('viewer.html');
 const SPEAK_URL = browser.runtime.getURL('speak.html');
@@ -338,6 +339,40 @@ if (isChromeExtension()) {
     checkForUpdate().catch(() => {});
   });
   checkForUpdate().catch(() => {});
+}
+
+// ── Озвучка для других расширений (src/tts/external-api.js) ─────────────
+// Голос TeraTTS создаётся при первой просьбе: фоновой странице он нужен
+// только для закадрового перевода, а моделям — гигабайт памяти.
+let externalTera = null;
+async function externalProvider() {
+  externalTera ??= (async () => {
+    const [settings, { createTeraProvider }, { HELPER_STAMP }] = await Promise.all([
+      import('./src/settings.js'),
+      import('./src/tts/tera-provider.js'),
+      import('./src/tts/helper-install.js'),
+    ]);
+    await settings.loadSettings();
+    const tera = createTeraProvider({
+      threads: () => settings.get('teraThreads'),
+      quality: () => settings.get('teraQuality'),
+      useHelper: () => settings.get('teraUseHelper'),
+    });
+    // Настройки и ускоритель меняют во вкладках читалки — подхватываем.
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (changes[SETTINGS_KEY]) settings.loadSettings().catch(() => {});
+      if (changes[HELPER_STAMP]) tera.refreshHelper(changes[HELPER_STAMP].newValue?.installed !== false);
+    });
+    return tera;
+  })().catch((error) => {
+    externalTera = null; // следующая просьба попробует снова
+    throw error;
+  });
+  return externalTera;
+}
+if (!isChromeExtension()) {
+  browser.runtime.onMessageExternal?.addListener(createExternalApi({ getProvider: externalProvider }));
 }
 
 // Для проверок: меню правой кнопки автотестом не нажать.
